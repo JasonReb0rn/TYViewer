@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "SOIL/SOIL2.h"
+#include "SOIL2/SOIL2.h"
 
 #include "loader/archive.h"
 
