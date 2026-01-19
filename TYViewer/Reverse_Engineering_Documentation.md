@@ -30,21 +30,22 @@ File Layout:
 2. Global vertex data block (all vertices from all meshes stored sequentially)
 
 Mesh Header Structure (referenced by ObjectLookupTable in MDL file):
-  +0x00: Unknown/padding (variable)
-  +0x06: Strip count (uint16)
+  +0x00: Base vertex count (uint16)
+  +0x02: Unknown (uint16)
+  +0x04: Duplicate vertex count (uint16, degenerate vertices between strips)
+  +0x06: Strip count (uint16, informational)
   +0x08: Unknown data (likely animation node index: uint16)
   +0x0A: Unknown/padding
   +0x0C: Next mesh pointer (int32, 0 if no next mesh in linked list)
   +0x10: Strip descriptors array (2 bytes each, stripCount entries)
   
 Strip Descriptor Format (uint16):
-  Low byte (bits 0-7):   Vertex count for this strip
+  Low byte (bits 0-7):   Vertex count for this strip (informational only)
   High byte (bits 8-15): Format flags (purpose unclear)
   
-  Examples:
-  - 0x0000: Empty strip (0 vertices)
-  - 0xA009: 9 vertices, flags 0xA0
-  - 0x2006: 6 vertices, flags 0x20
+  Note: PC meshes are stored as a single triangle strip with degenerate
+  vertices between strips. The authoritative vertex count is:
+  BaseVertexCount (+0x00) + DuplicateVertexCount (+0x04).
 
 Global Vertex Data Block (starts after all mesh headers):
   All vertices are stored sequentially in 48-byte interleaved format.
@@ -74,11 +75,11 @@ Global Vertex Data Block (starts after all mesh headers):
 2. **PC Parser (`parseMDGPC`)**:
    - **Step 1**: Locate global vertex data block
      * Searches file for sequences of valid 48-byte stride vertices
-     * **Critical**: Must validate BOTH UV (+0) AND Position (+8) to avoid false positives
-     * Mesh header area can contain valid positions but invalid UVs (NaN values)
+     * Validate Position (+8) and Normal (+32) to avoid false positives
+     * Mesh headers can contain valid positions but invalid normals
      * Validates by checking 4-5 consecutive vertices with reasonable float values
-     * UVs must be < 100, Positions must be < 1000, no NaN or Inf values
-     * Typical location: ~264 bytes into file (after mesh headers)
+     * Positions must be < 1000, normals must be normalized (length ~1)
+     * Typical location: after the last mesh header, aligned to 4 bytes
    
    - **Step 2**: Iterate through ObjectLookupTable from MDL file
      * Table is at MDL offset specified in MDL3Metadata.ObjectLookupTable
@@ -88,20 +89,21 @@ Global Vertex Data Block (starts after all mesh headers):
    
    - **Step 3**: For each mesh:
      * Read mesh header:
-       - Strip count at +0x6 (uint16)
+       - Base vertex count at +0x0 (uint16)
+       - Duplicate vertex count at +0x4 (uint16)
+       - Strip count at +0x6 (uint16, informational)
        - Next mesh pointer at +0xC (int32, for linked list support)
-     * Parse strip descriptors at +0x10:
-       - Each descriptor is uint16
-       - Low byte = vertex count
-       - High byte = flags (meaning unknown)
-     * Calculate total vertices for mesh
+     * Calculate total vertices for mesh:
+       - total = base + duplicate
      * Read vertex data from current offset in sequential vertex block:
        - Each vertex is exactly 48 bytes
        - All vertices are interleaved (not structure-of-arrays)
        - Layout: UV(8) + Position(12) + Weight(4) + BBox(8) + Normal(12) + Padding(4)
      * Advance offset by (totalVertices * 48) for next mesh
-     * Split vertices into individual strips based on descriptor counts
-     * Create MeshData for each strip with texture/component indices
+     * Use the full vertex block as a single triangle strip
+       - Degenerate vertices connect strips inside the block
+     * Create MeshData for each mesh with texture/component indices
+     * Skip collision meshes by texture name prefix `CM_`
 
 3. **MDL3 Metadata Integration**:
    - MDL3 file provides:
@@ -161,11 +163,15 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
    - All attributes are floats (no packed/fixed-point formats)
    
 5. **Vertex data offset search algorithm WORKS**
-   - Must validate BOTH UV (+0) AND Position (+8)
-   - Mesh headers can contain valid positions but garbage UVs
-   - Typical offset: ~264 bytes (after mesh headers)
+   - Validate Position (+8) and Normal (+32)
+   - Mesh headers can contain valid positions but invalid normals
+   - Offset is after the last mesh header, aligned to 4 bytes
    
 6. **Normal data appears correct**
+7. **Mesh vertex counts are stored in the header**
+   - Base count at +0x00, duplicate count at +0x04
+   - Total vertices = base + duplicate
+   - Duplicate vertices are degenerate strip connectors
    - Offset: +32 to +43 (12 bytes, 3 floats: XYZ)
    - Values are normalized (-1 to +1 range)
    - Lighting appears reasonable on models
@@ -205,10 +211,10 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
 
 5. **Strip Descriptor Flags (high byte)**: 0xA0, 0x20, 0xB0, 0x60, etc.
    - May indicate rendering mode, vertex features, or material properties
-   - Currently ignored - only vertex count is used
+   - Not required for vertex counts in PC format
 
 6. **Mesh Header Unknown Fields**:
-   - +0x00-0x05: Unknown
+   - +0x02: Unknown (uint16)
    - +0x08-0x0B: Possibly animation node index + padding
    - May contain material IDs or LOD flags
 
@@ -240,18 +246,18 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
 ## Testing Results
 
 ### Test Model: `P0486_B1FlowerPot.mdl/mdg` (TY 2 PC)
-- **Status**: Positions WORKING, UVs NOT WORKING
+- **Status**: Geometry WORKING, UVs NOT WORKING
 - File sizes: MDL 1,028 bytes, MDG 14,048 bytes
 - Components: 8, Textures: 4, Meshes: 9, Strips: 32
-- Total vertices: 277 across all non-empty meshes
+- Total vertices: 292 across all meshes (base + duplicate)
 - Vertex data starts at offset 264 (0x108)
-- **Result**: Model renders with correct geometry (95% accurate), incorrect texture mapping
+- **Result**: Model renders with correct geometry, incorrect texture mapping
 
 ### What Works:
 - Mesh geometry is correct (positions are accurate)
-- Bounding boxes match the model
 - Normals appear correct (lighting looks reasonable)
 - Model structure and topology is correct
+- Missing faces resolved by treating meshes as a single strip with degenerate connectors
 
 ### What Doesn't Work:
 - UV coordinates produce incorrect texture mapping
@@ -259,7 +265,7 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
 
 ### Performance:
 - Vertex search algorithm finds correct offset (264)
-- All 277 vertices parse successfully
+- All 292 vertices parse successfully
 - No crashes or errors during parsing
 
 ## Methodology
@@ -285,9 +291,9 @@ The PC format is **completely different** from PS2 format:
 - PC format is simpler to parse once the layout is understood!
 
 ### Current Status:
-- **MAJOR BREAKTHROUGH**: Vertex positions are 95%+ correct!
-- Bounding boxes work perfectly
+- **MAJOR BREAKTHROUGH**: Geometry renders correctly with full face coverage
 - 48-byte stride confirmed
-- Search algorithm works reliably
+- Header vertex counts (base + duplicate) are correct for mesh sizing
+- Search algorithm works reliably using position + normal validation
+- Collision meshes use `CM_` textures and should be skipped for rendering
 - **NEXT CHALLENGE**: UV coordinates need investigation
-- **Goal for next session**: Fix UV format to complete the format reverse engineering

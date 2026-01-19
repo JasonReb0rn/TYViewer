@@ -5,7 +5,10 @@
 #include "debug.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <set>
+#include <unordered_set>
 
 // ============================================================================
 // TY 2 MDG Loading (using MDL3 metadata)
@@ -442,21 +445,42 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 	size_t globalVertexDataStart = 0;
 	const size_t VERTEX_STRIDE = 48;
 	
+	// Determine where mesh headers end so we don't mis-detect in header data
+	size_t maxHeaderEnd = 0;
+	std::unordered_set<size_t> visitedMeshes;
+	for (uint16_t ti = 0; ti < mdl3Metadata.TextureCount; ti++)
+	{
+		for (uint16_t ci = 0; ci < mdl3Metadata.ComponentCount; ci++)
+		{
+			size_t lookupOffset = mdlOffset + mdl3Metadata.ObjectLookupTable + (ti * 4 * mdl3Metadata.ComponentCount) + (ci * 4);
+			if (lookupOffset + 4 > mdlOffset + 1000000) continue;
+
+			int32_t meshRef = from_bytes<int32_t>(mdlBuffer, lookupOffset);
+			while (meshRef != 0)
+			{
+				if (meshRef < 0 || (size_t)meshRef >= size) break;
+				if (!visitedMeshes.insert((size_t)meshRef).second) break;
+
+				uint16_t stripCount = from_bytes<uint16_t>(buffer, meshRef + 0x6);
+				size_t headerEnd = meshRef + 0x10 + (stripCount * 2);
+				maxHeaderEnd = std::max(maxHeaderEnd, headerEnd);
+
+				if (meshRef + 0xC + 4 > size) break;
+				meshRef = from_bytes<int32_t>(buffer, meshRef + 0xC);
+			}
+		}
+	}
+
 	// Search for vertex data by looking for a sequence of valid 48-byte vertices
-	// We validate both positions AND UVs to avoid false positives in mesh headers
-	for (size_t searchOffset = 100; searchOffset < std::min(size - 1000, (size_t)5000); searchOffset += 4)
+	// Use position + normal checks (UVs are not reliable in PC format)
+	size_t searchStart = maxHeaderEnd & ~0x3;
+	for (size_t searchOffset = searchStart; searchOffset + (VERTEX_STRIDE * 5) <= size; searchOffset += 4)
 	{
 		// Look for at least 5 consecutive valid vertices with 48-byte stride
 		int validCount = 0;
 		for (int v = 0; v < 5; v++) {
 			size_t vertexOffset = searchOffset + (v * VERTEX_STRIDE);
 			if (vertexOffset + VERTEX_STRIDE > size) break;
-			
-			// Check UV at +0
-			float u = from_bytes<float>(buffer, vertexOffset);
-			float v_coord = from_bytes<float>(buffer, vertexOffset + 4);
-			bool uvValid = !std::isnan(u) && !std::isinf(u) && std::abs(u) < 100.0f &&
-			               !std::isnan(v_coord) && !std::isinf(v_coord) && std::abs(v_coord) < 100.0f;
 			
 			// Check Position at +8
 			float x = from_bytes<float>(buffer, vertexOffset + 8);
@@ -466,9 +490,19 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 			bool posValid = !std::isnan(x) && !std::isinf(x) && std::abs(x) < 1000.0f &&
 			                !std::isnan(y) && !std::isinf(y) && std::abs(y) < 1000.0f &&
 			                !std::isnan(z) && !std::isinf(z) && std::abs(z) < 1000.0f;
+
+			// Check Normal at +32
+			float nx = from_bytes<float>(buffer, vertexOffset + 32);
+			float ny = from_bytes<float>(buffer, vertexOffset + 36);
+			float nz = from_bytes<float>(buffer, vertexOffset + 40);
+			float normalLen = std::sqrt((nx * nx) + (ny * ny) + (nz * nz));
+			bool normalValid = !std::isnan(nx) && !std::isinf(nx) &&
+				!std::isnan(ny) && !std::isinf(ny) &&
+				!std::isnan(nz) && !std::isinf(nz) &&
+				normalLen > 0.2f && normalLen < 1.8f;
 			
-			// Both UV and position must be valid
-			if (uvValid && posValid && hasNonZero) validCount++;
+			// Position and normal must be valid
+			if (posValid && normalValid && hasNonZero) validCount++;
 		}
 		
 		if (validCount >= 4) {
@@ -517,46 +551,34 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 				}
 
 				// Read mesh header
+				uint16_t baseVertexCount = from_bytes<uint16_t>(buffer, meshRef + 0x0);
+				uint16_t duplicateVertexCount = from_bytes<uint16_t>(buffer, meshRef + 0x4);
 				uint16_t stripCount = from_bytes<uint16_t>(buffer, meshRef + 0x6);
 				int32_t nextMesh = from_bytes<int32_t>(buffer, meshRef + 0xC);
 
-				if (stripCount == 0 || stripCount > 1000)
+				if (stripCount > 1000)
 				{
 					Debug::log("MDG PC: Invalid strip count: " + std::to_string(stripCount));
 					break;
 				}
+				
+				size_t totalVertices = static_cast<size_t>(baseVertexCount) + static_cast<size_t>(duplicateVertexCount);
 
 				Debug::log("MDG PC: Parsing mesh at offset " + std::to_string(meshRef) + 
-					" with " + std::to_string(stripCount) + " strips (texture=" + std::to_string(ti) + 
+					" with " + std::to_string(stripCount) + " strips (base=" + std::to_string(baseVertexCount) + 
+					", dup=" + std::to_string(duplicateVertexCount) + ", texture=" + std::to_string(ti) + 
 					", component=" + std::to_string(ci) + ")");
 
-				// Read strip descriptors
-				std::vector<PCStripDescriptor> stripDescriptors(stripCount);
-				size_t descriptorOffset = meshRef + 0x10;
-				
-				for (uint16_t si = 0; si < stripCount; si++)
+				bool isCollisionTexture = false;
+				if (ti < mdl3Metadata.TextureNames.size())
 				{
-					if (descriptorOffset + 2 > size)
+					const std::string& textureName = mdl3Metadata.TextureNames[ti];
+					if (textureName.rfind("CM_", 0) == 0 || textureName.rfind("cm_", 0) == 0)
 					{
-						Debug::log("MDG PC: Not enough data for strip descriptor " + std::to_string(si));
-						break;
+						isCollisionTexture = true;
 					}
-					
-					stripDescriptors[si].format = from_bytes<uint16_t>(buffer, descriptorOffset);
-					descriptorOffset += 2;
-					
-					Debug::log("MDG PC: Strip " + std::to_string(si) + 
-						" - format=0x" + std::to_string(stripDescriptors[si].format) + 
-						" vertices=" + std::to_string(stripDescriptors[si].vertexCount()) +
-						" flags=0x" + std::to_string(stripDescriptors[si].formatFlags()));
 				}
 
-				// Calculate total expected vertices
-				size_t totalVertices = 0;
-				for (const auto& desc : stripDescriptors) {
-					totalVertices += desc.vertexCount();
-				}
-				
 				if (totalVertices == 0) {
 					Debug::log("MDG PC: Mesh has 0 total vertices, skipping");
 					meshRef = nextMesh;
@@ -575,6 +597,14 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 				if (vertexDataOffset + expectedDataSize > size) {
 					Debug::log("MDG PC: Not enough data at offset " + std::to_string(vertexDataOffset) + 
 						" (need " + std::to_string(expectedDataSize) + " bytes, have " + std::to_string(size - vertexDataOffset) + ")");
+					meshRef = nextMesh;
+					continue;
+				}
+
+				if (isCollisionTexture)
+				{
+					Debug::log("MDG PC: Skipping collision material mesh");
+					currentVertexDataOffset = vertexDataOffset + expectedDataSize;
 					meshRef = nextMesh;
 					continue;
 				}
@@ -667,43 +697,51 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 					continue;
 				}
 				
-				// Split vertices into strips and create mesh data
-				size_t vertexIndex = 0;
-				for (uint16_t si = 0; si < stripCount; si++)
-				{
-					uint8_t stripVertexCount = stripDescriptors[si].vertexCount();
-					
-					if (stripVertexCount == 0) {
-						continue;  // Skip silently
-					}
-					
-					if (stripVertexCount < 3) {
-						Debug::log("MDG PC: Strip " + std::to_string(si) + " has only " + std::to_string(stripVertexCount) + " vertices (need 3 minimum for triangle strip), skipping");
-						vertexIndex += stripVertexCount;
-						continue;
-					}
-					
-					if (vertexIndex + stripVertexCount > totalVertices) {
-						Debug::log("MDG PC: Strip " + std::to_string(si) + " exceeds total vertex count");
-						break;
-					}
-					
-					// Extract vertices for this strip
-					std::vector<mdl2::Vertex> stripVertices(stripVertexCount);
-					for (uint8_t vi = 0; vi < stripVertexCount; vi++) {
-						stripVertices[vi] = allVertices[vertexIndex + vi];
-					}
-					vertexIndex += stripVertexCount;
-					
-					// Create mesh data for this strip
-					MeshData meshData;
-					meshData.vertices = stripVertices;
-					meshData.textureIndex = ti;
-					meshData.componentIndex = ci;
-					meshes.push_back(meshData);
-					
-					Debug::log("MDG PC: Created strip " + std::to_string(si) + " with " + std::to_string(stripVertexCount) + " vertices");
+				if (totalVertices < 3) {
+					Debug::log("MDG PC: Mesh has fewer than 3 vertices, skipping");
+					meshRef = nextMesh;
+					continue;
 				}
+
+				// Skip box-like debug meshes (likely bounds visualization)
+				std::set<float> uniqueX;
+				std::set<float> uniqueY;
+				std::set<float> uniqueZ;
+				std::vector<std::array<int, 3>> quantizedPositions;
+				quantizedPositions.reserve(totalVertices);
+
+				for (const auto& vtx : allVertices)
+				{
+					uniqueX.insert(vtx.position[0]);
+					uniqueY.insert(vtx.position[1]);
+					uniqueZ.insert(vtx.position[2]);
+					
+					// Quantize to avoid float jitter when counting unique positions
+					int qx = static_cast<int>(std::round(vtx.position[0] * 1000.0f));
+					int qy = static_cast<int>(std::round(vtx.position[1] * 1000.0f));
+					int qz = static_cast<int>(std::round(vtx.position[2] * 1000.0f));
+					quantizedPositions.push_back({ qx, qy, qz });
+				}
+
+				std::sort(quantizedPositions.begin(), quantizedPositions.end());
+				quantizedPositions.erase(std::unique(quantizedPositions.begin(), quantizedPositions.end()), quantizedPositions.end());
+				bool boxLike = (quantizedPositions.size() <= 8 &&
+				                uniqueX.size() <= 2 && uniqueY.size() <= 2 && uniqueZ.size() <= 2);
+
+				if (boxLike)
+				{
+					Debug::log("MDG PC: Skipping box-like mesh (likely bounds)");
+					meshRef = nextMesh;
+					continue;
+				}
+
+				// PC meshes are stored as a single triangle strip with degenerate vertices
+				// inserted between strips. Use the full vertex block for the mesh.
+				MeshData meshData;
+				meshData.vertices = allVertices;
+				meshData.textureIndex = ti;
+				meshData.componentIndex = ci;
+				meshes.push_back(meshData);
 
 				// Move to next mesh in linked list
 				meshRef = nextMesh;
@@ -711,7 +749,7 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 		}
 	}
 
-	Debug::log("MDG PC: Parsed " + std::to_string(meshes.size()) + " mesh strips");
+	Debug::log("MDG PC: Parsed " + std::to_string(meshes.size()) + " meshes");
 	return !meshes.empty();
 }
 
