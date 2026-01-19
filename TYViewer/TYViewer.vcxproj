@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -161,6 +161,7 @@
     <ClCompile Include="loader\archive.cpp" />
     <ClCompile Include="config.cpp" />
     <ClCompile Include="grid.cpp" />
+    <ClCompile Include="loader\assets\mdg.cpp" />
     <ClCompile Include="loader\assets\mdl2.cpp" />
     <ClCompile Include="loader\assets\wfn.cpp" />
     <ClCompile Include="content.cpp" />
@@ -182,6 +183,7 @@
   <ItemGroup>
     <ClInclude Include="loader\archive.h" />
     <ClInclude Include="grid.h" />
+    <ClInclude Include="loader\assets\mdg.h" />
     <ClInclude Include="loader\assets\mdl2.h" />
     <ClInclude Include="loader\assets\wfn.h" />
     <ClInclude Include="config.h" />

@@ -14,6 +14,7 @@
 #include "loader/assets/wfn.h"
 
 #include "loader/assets/mdl2.h"
+#include "loader/assets/mdg.h"
 
 #include "graphics/texture.h"
 #include "graphics/shader.h"

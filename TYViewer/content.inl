@@ -16,7 +16,7 @@ inline Texture* Content::load(const std::string& name)
 		std::vector<char> data;
 		if (archive->getFileData(name, data))
 		{
-			unsigned int id = SOIL_load_OGL_texture_from_memory(reinterpret_cast<unsigned char*>(&data[0]), data.size(), 0, 0, SOIL_FLAG_INVERT_Y);
+			unsigned int id = SOIL_load_OGL_texture_from_memory(reinterpret_cast<unsigned char*>(&data[0]), static_cast<int>(data.size()), 0, 0, SOIL_FLAG_INVERT_Y);
 			textures[name] = new Texture(id);
 
 			return textures[name];
@@ -41,7 +41,45 @@ inline Shader* Content::load(const std::string& name)
 	else
 	{
 		File file;
-		if (archive->getFile(name, file))
+		bool foundInArchive = archive->getFile(name, file);
+		
+		std::ifstream stream;
+		bool useArchive = false;
+
+		if (foundInArchive)
+		{
+			Debug::log("Loading shader from archive: " + name);
+			stream.open(archive->path, std::ios::binary);
+			if (stream.is_open())
+			{
+				stream.seekg(file.offset, std::ios::beg);
+				if (!stream.fail())
+				{
+					useArchive = true;
+				}
+				else
+				{
+					stream.close();
+				}
+			}
+		}
+
+		// Fallback: Create default shader if file not found
+		if (!useArchive)
+		{
+			Debug::log("Shader file not found, creating default shader: " + name);
+			Shader* defaultShader = Shader::createDefault();
+			if (defaultShader == nullptr)
+			{
+				Debug::log("ERROR: Failed to create default shader");
+				return NULL;
+			}
+			shaders[name] = defaultShader;
+			Debug::log("Successfully created default shader: " + name);
+			return shaders[name];
+		}
+
+		try
 		{
 			std::unordered_map<std::string, int> properties;
 			properties["TEX"] = 1;
@@ -55,16 +93,32 @@ inline Shader* Content::load(const std::string& name)
 			properties["SHADOWNORMS"] = 0;
 			properties["OMNI"] = 0;
 
-			std::ifstream stream(archive->path);
-			stream.seekg(file.offset);
-
 			Shader* shader = new Shader(stream, properties);
-			shaders[name] = shader;
+			
+			if (shader == nullptr)
+			{
+				Debug::log("ERROR: Shader creation returned null");
+				stream.close();
+				return NULL;
+			}
 
+			shaders[name] = shader;
 			stream.close();
 
-
+			Debug::log("Successfully loaded shader: " + name);
 			return shaders[name];
+		}
+		catch (const std::exception& e)
+		{
+			Debug::log("ERROR: Exception while loading shader " + name + ": " + e.what());
+			stream.close();
+			return NULL;
+		}
+		catch (...)
+		{
+			Debug::log("ERROR: Unknown exception while loading shader: " + name);
+			stream.close();
+			return NULL;
 		}
 	}
 
@@ -84,62 +138,256 @@ inline Model* Content::load(const std::string& name)
 	{
 		return models[name];
 	}
-	else
-	{
-		std::vector<char> data;
-		if (archive->getFileData(name, data))
+		else
 		{
+			std::vector<char> data;
+			if (!archive->getFileData(name, data))
+			{
+				Debug::log("Model file not found in archive: " + name);
+				return NULL;
+			}
+
+			// Check if this is TY 2 format (has corresponding .mdg file) BEFORE parsing MDL
+			std::string baseName = name;
+			size_t dotPos = baseName.find_last_of('.');
+			if (dotPos != std::string::npos)
+			{
+				baseName = baseName.substr(0, dotPos);
+			}
+			std::string mdgName = baseName + ".mdg";
+
+			std::vector<char> mdgData;
+			bool isTY2 = archive->getFileData(mdgName, mdgData);
+
 			mdl2 mdl;
-			mdl.load(data.data(), 0);
+			bool loaded = false;
+			
+			if (isTY2)
+			{
+				// Try TY 2 format first (relaxed signature check)
+				Debug::log("Attempting to load as TY 2 format...");
+				Debug::log("MDL file size: " + std::to_string(data.size()) + " bytes");
+				try
+				{
+					loaded = mdl.loadTY2(data.data(), 0);
+					if (loaded)
+					{
+						Debug::log("Successfully loaded TY 2 MDL file");
+					}
+					else
+					{
+						Debug::log("TY 2 format failed, trying TY 1 format...");
+						loaded = mdl.load(data.data(), 0);
+					}
+				}
+				catch (const std::exception& e)
+				{
+					Debug::log("ERROR: Exception in loadTY2: " + std::string(e.what()));
+					loaded = false;
+				}
+				catch (...)
+				{
+					Debug::log("ERROR: Unknown exception in loadTY2");
+					loaded = false;
+				}
+			}
+			else
+			{
+				// Try TY 1 format
+				loaded = mdl.load(data.data(), 0);
+			}
+
+			if (!loaded)
+			{
+				uint32_t signature = from_bytes<uint32_t>(data.data(), 0);
+				Debug::log("Failed to parse MDL file (invalid format or signature): " + name);
+				Debug::log("MDL signature: " + std::to_string(signature) + " (expected TY 1: " + std::to_string(843859021) + ")");
+				return NULL;
+			}
+
+			if (mdl.subobjects.empty())
+			{
+				Debug::log("Warning: MDL file has no subobjects: " + name);
+			}
 
 			std::vector<Mesh*> meshes;
 
 			std::vector<Collider> colliders;
 			std::vector<Bounds> bounds;
 			std::vector<Bone> bones;
-			
-			for (auto& subobj : mdl.subobjects)
+
+			if (isTY2)
 			{
-				for (auto& mesh : subobj.meshes)
+				Debug::log("Detected TY 2 format, loading MDG file: " + mdgName);
+				// TY 2 format: Load mesh data from .mdg file
+				mdg mdgParser;
+				bool mdgLoaded = false;
+				
+				// Try loading with MDL3 metadata if available
+				if (mdl.isMDL3Format)
 				{
-					std::vector<Vertex> vertices;
-					std::vector<unsigned int> indices;
+					Debug::log("Using MDL3 metadata to parse MDG file");
+					mdgLoaded = mdgParser.loadWithMDL3Metadata(mdgData.data(), mdgData.size(), mdl.mdl3Metadata, data.data(), 0);
+				}
+				else
+				{
+					// Fallback to generic MDG parsing
+					mdgLoaded = mdgParser.load(mdgData.data(), mdgData.size());
+				}
+				
+				if (mdgLoaded)
+				{
+					Debug::log("Successfully loaded MDG file with " + std::to_string(mdgParser.meshes.size()) + " meshes");
 
-					int triangleIndex = 0;
-					for (auto& segment : mesh.segments)
+					// Use MDG meshes directly - they already have texture/component info if loaded with MDL3 metadata
+					if (mdl.isMDL3Format)
 					{
-						for (auto& vertex : segment.vertices)
+						// MDG meshes are already organized by texture/component
+						Debug::log("Using MDG meshes with MDL3 metadata");
+						for (size_t i = 0; i < mdgParser.meshes.size(); i++)
 						{
-							Vertex v =
+							std::vector<Vertex> vertices;
+							std::vector<unsigned int> indices;
+
+							// Get vertices from MDG
+							auto& mdgMesh = mdgParser.meshes[i];
+							int triangleIndex = 0;
+
+							for (auto& vertex : mdgMesh.vertices)
 							{
-								glm::vec4(vertex.position[0], vertex.position[1],vertex.position[2], 1.0f),
-								glm::vec4(vertex.normal[0], vertex.normal[1],vertex.normal[2], 1.0f),
-								glm::vec4(vertex.colour[0], vertex.colour[1],vertex.colour[2], vertex.colour[3]),
-								glm::vec2(vertex.texcoord[0], vertex.texcoord[1]),
-								glm::vec3(vertex.skin[0], vertex.skin[1], vertex.skin[2])
-							};
+								Vertex v =
+								{
+									glm::vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0f),
+									glm::vec4(vertex.normal[0], vertex.normal[1], vertex.normal[2], 1.0f),
+									glm::vec4(vertex.colour[0], vertex.colour[1], vertex.colour[2], vertex.colour[3]),
+									glm::vec2(vertex.texcoord[0], vertex.texcoord[1]),
+									glm::vec3(vertex.skin[0], vertex.skin[1], vertex.skin[2])
+								};
 
-							vertices.push_back(v);
+								vertices.push_back(v);
+							}
+
+							// Generate triangle strip indices
+							for (unsigned int j = 0; j < mdgMesh.vertices.size() - 2; j++)
+							{
+								indices.push_back(0 + triangleIndex);
+								indices.push_back(2 + triangleIndex);
+								indices.push_back(1 + triangleIndex);
+
+								triangleIndex++;
+							}
+
+							// Use texture name from MDL3 metadata
+							std::string textureName = "";
+							if (mdgMesh.textureIndex < mdl.mdl3Metadata.TextureNames.size())
+							{
+								textureName = mdl.mdl3Metadata.TextureNames[mdgMesh.textureIndex];
+							}
+							
+							Texture* texture = load<Texture>(textureName + ".dds");
+							if (texture == defaultTexture && !textureName.empty())
+							{
+								std::cout << "Failed to load texture: '" + textureName + "' !" << std::endl
+									<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;
+							}
+							meshes.push_back(new Mesh(vertices, indices, texture));
 						}
-
-						for (unsigned int i = 0; i < segment.vertices.size() - 2; i++)
-						{
-							indices.push_back(0 + triangleIndex);
-							indices.push_back(2 + triangleIndex);
-							indices.push_back(1 + triangleIndex);
-
-							triangleIndex++;
-						}
-						triangleIndex += 2;
 					}
-
-					Texture* texture = load<Texture>(mesh.material + ".dds");
-					if (texture == defaultTexture)
+					else
 					{
-						std::cout << "Failed to load texture: '" + mesh.material + "' !" << std::endl
-							<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;
+						// Fallback: Use MDG meshes directly without MDL3 metadata
+						Debug::log("Using MDG meshes without MDL3 metadata (fallback)");
+						for (size_t i = 0; i < mdgParser.meshes.size(); i++)
+						{
+							std::vector<Vertex> vertices;
+							std::vector<unsigned int> indices;
+
+							// Get vertices from MDG
+							auto& mdgMesh = mdgParser.meshes[i];
+							int triangleIndex = 0;
+
+							for (auto& vertex : mdgMesh.vertices)
+							{
+								Vertex v =
+								{
+									glm::vec4(vertex.position[0], vertex.position[1], vertex.position[2], 1.0f),
+									glm::vec4(vertex.normal[0], vertex.normal[1], vertex.normal[2], 1.0f),
+									glm::vec4(vertex.colour[0], vertex.colour[1], vertex.colour[2], vertex.colour[3]),
+									glm::vec2(vertex.texcoord[0], vertex.texcoord[1]),
+									glm::vec3(vertex.skin[0], vertex.skin[1], vertex.skin[2])
+								};
+
+								vertices.push_back(v);
+							}
+
+							// Generate triangle strip indices
+							for (unsigned int j = 0; j < mdgMesh.vertices.size() - 2; j++)
+							{
+								indices.push_back(0 + triangleIndex);
+								indices.push_back(2 + triangleIndex);
+								indices.push_back(1 + triangleIndex);
+
+								triangleIndex++;
+							}
+
+							// Use default texture since we don't have material info
+							meshes.push_back(new Mesh(vertices, indices, defaultTexture));
+						}
 					}
-					meshes.push_back(new Mesh(vertices, indices, texture));
+				}
+				else
+				{
+					Debug::log("Failed to parse MDG file (no valid mesh data found): " + mdgName);
+					return NULL;
+				}
+			}
+			else
+			{
+				Debug::log("Detected TY 1 format (no MDG file found), using embedded vertex data");
+				// TY 1 format: Use embedded vertex data from .mdl file
+				for (auto& subobj : mdl.subobjects)
+				{
+					for (auto& mesh : subobj.meshes)
+					{
+						std::vector<Vertex> vertices;
+						std::vector<unsigned int> indices;
+
+						int triangleIndex = 0;
+						for (auto& segment : mesh.segments)
+						{
+							for (auto& vertex : segment.vertices)
+							{
+								Vertex v =
+								{
+									glm::vec4(vertex.position[0], vertex.position[1],vertex.position[2], 1.0f),
+									glm::vec4(vertex.normal[0], vertex.normal[1],vertex.normal[2], 1.0f),
+									glm::vec4(vertex.colour[0], vertex.colour[1],vertex.colour[2], vertex.colour[3]),
+									glm::vec2(vertex.texcoord[0], vertex.texcoord[1]),
+									glm::vec3(vertex.skin[0], vertex.skin[1], vertex.skin[2])
+								};
+
+								vertices.push_back(v);
+							}
+
+							for (unsigned int i = 0; i < segment.vertices.size() - 2; i++)
+							{
+								indices.push_back(0 + triangleIndex);
+								indices.push_back(2 + triangleIndex);
+								indices.push_back(1 + triangleIndex);
+
+								triangleIndex++;
+							}
+							triangleIndex += 2;
+						}
+
+						Texture* texture = load<Texture>(mesh.material + ".dds");
+						if (texture == defaultTexture)
+						{
+							std::cout << "Failed to load texture: '" + mesh.material + "' !" << std::endl
+								<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;
+						}
+						meshes.push_back(new Mesh(vertices, indices, texture));
+					}
 				}
 			}
 			
@@ -301,6 +549,65 @@ inline Model* Content::load(const std::string& name)
 			}
 			*/
 
+			// Parse colliders and bones from .mdl file (same for both TY 1 and TY 2)
+			unsigned int collider_count = from_bytes<uint16_t>(data.data(), 8);
+			unsigned int bone_count = from_bytes<uint16_t>(data.data(), 10);
+			size_t collider_offset = from_bytes<uint32_t>(data.data(), 16);
+			size_t bone_offset = from_bytes<uint32_t>(data.data(), 20);
+
+			// Parse colliders
+			for (unsigned int i = 0; i < collider_count; i++)
+			{
+				size_t offset = collider_offset + (i * 32);
+				if (offset + 32 <= data.size())
+				{
+					glm::vec3 position(
+						from_bytes<float>(data.data(), offset),
+						from_bytes<float>(data.data(), offset + 4),
+						from_bytes<float>(data.data(), offset + 8));
+
+					float size = from_bytes<float>(data.data(), offset + 12);
+
+					colliders.push_back({ position, size });
+				}
+			}
+
+			// Parse bones
+			for (unsigned int i = 0; i < bone_count; i++)
+			{
+				size_t offset = bone_offset + (i * 16);
+				if (offset + 16 <= data.size())
+				{
+					bones.push_back(
+						{
+							glm::vec3(
+								from_bytes<float>(data.data(), offset),
+								from_bytes<float>(data.data(), offset + 4),
+								from_bytes<float>(data.data(), offset + 8)
+							)
+						}
+					);
+				}
+			}
+
+			// Parse subobject bounds
+			for (auto& subobj : mdl.subobjects)
+			{
+				bounds.push_back({
+					glm::vec3(subobj.bounds.x, subobj.bounds.y, subobj.bounds.z),
+					glm::vec3(subobj.bounds.sx, subobj.bounds.sy, subobj.bounds.sz)
+				});
+			}
+
+			if (meshes.empty())
+			{
+				Debug::log("Warning: No meshes created for model: " + name);
+			}
+			else
+			{
+				Debug::log("Successfully created model: " + name + " with " + std::to_string(meshes.size()) + " meshes");
+			}
+
 			models[name] = new Model(meshes);
 			models[name]->bounds_crn = glm::vec3(mdl.bounds.x, mdl.bounds.y, mdl.bounds.z);
 			models[name]->bounds_size = glm::vec3(mdl.bounds.sx, mdl.bounds.sy, mdl.bounds.sz);
@@ -311,7 +618,6 @@ inline Model* Content::load(const std::string& name)
 
 			return models[name];
 		}
-	}
 
 	return NULL;
 }

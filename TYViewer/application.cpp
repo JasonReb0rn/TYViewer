@@ -22,7 +22,7 @@ void Application::resize(int width, int height)
 Application::Application(GLFWwindow* window) :
 	window(window),
 	renderer(),
-	camera(glm::vec3(0.0f, 20.0f, -100.0f), glm::vec3(90.0f, 0.0f, 0.0f), 70.0f, (float)Config::windowResolutionX / (float)Config::windowResolutionY, 0.2, 30000.0f),
+	camera(glm::vec3(0.0f, 20.0f, -100.0f), glm::vec3(90.0f, 0.0f, 0.0f), 70.0f, (float)Config::windowResolutionX / (float)Config::windowResolutionY, 0.2f, 30000.0f),
 	mesh(NULL),
 	grid(NULL),
 	shader(NULL)
@@ -31,15 +31,29 @@ Application::Application(GLFWwindow* window) :
 
 void Application::initialize()
 {
+	Debug::log("Initializing application...");
 	content.initialize();
-	if (!content.loadRKV(Config::archive))
+	
+	if (Config::archive.empty())
 	{
-		std::cout << "Have you entered correct path in 'config.cfg'?" << std::endl;
+		Debug::log("ERROR: No archive path specified in config!");
+		std::cout << "ERROR: No archive path specified in config.cfg!" << std::endl;
 		std::cin.get();
-
 		terminate();
 		return;
 	}
+
+	Debug::log("Loading archive: " + Config::archive);
+	if (!content.loadRKV(Config::archive))
+	{
+		Debug::log("ERROR: Failed to load archive: " + Config::archive);
+		std::cout << "ERROR: Failed to load archive: " + Config::archive << std::endl;
+		std::cout << "Have you entered correct path in 'config.cfg'?" << std::endl;
+		std::cin.get();
+		terminate();
+		return;
+	}
+	Debug::log("Archive loaded successfully");
 
 	Mouse::initialize(window);
 	Keyboard::initialize(window);
@@ -54,18 +68,52 @@ void Application::initialize()
 	//labels.push_back(new Text("This is a longer sentence with spaces!", font, glm::vec3(0,0,0)));
 
 	shader = content.load<Shader>("standard.shader");
+	if (shader == nullptr)
+	{
+		Debug::log("ERROR: Failed to load shader: standard.shader");
+		std::cout << "Failed to load shader file!" << std::endl;
+		std::cin.get();
+		terminate();
+		return;
+	}
 	shader->bind();
 	shader->setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
 	shader->setUniform1i("diffuseTexture", 0);
 
 	basic = content.load<Shader>("standard.shader");
+	if (basic == nullptr)
+	{
+		Debug::log("ERROR: Failed to load basic shader: standard.shader");
+		std::cout << "Failed to load shader file!" << std::endl;
+		std::cin.get();
+		terminate();
+		return;
+	}
 	basic->bind();
 	basic->setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
 
+	Model* loadedModel = nullptr;
 	if(Config::model != "")
-		models.push_back(content.load<Model>(Config::model));
+	{
+		Debug::log("Loading model from config: " + Config::model);
+		loadedModel = content.load<Model>(Config::model);
+	}
 	else
-		models.push_back(content.load<Model>("act_01_ty.mdl"));
+	{
+		Debug::log("Loading default model: act_01_ty.mdl");
+		loadedModel = content.load<Model>("act_01_ty.mdl");
+	}
+
+	if (loadedModel == nullptr)
+	{
+		Debug::log("ERROR: Failed to load model! The program will exit.");
+		std::cout << "Failed to load model file!" << std::endl;
+		std::cin.get();
+		terminate();
+		return;
+	}
+
+	models.push_back(loadedModel);
 }
 void Application::run()
 {
@@ -76,7 +124,7 @@ void Application::run()
 
 	while (!glfwWindowShouldClose(window))
 	{
-		elapsed = glfwGetTime();
+		elapsed = static_cast<float>(glfwGetTime());
 		dt = elapsed - previous;
 		previous = elapsed;
 

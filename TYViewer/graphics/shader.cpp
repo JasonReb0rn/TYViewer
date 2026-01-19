@@ -28,6 +28,12 @@ Shader::Shader(std::ifstream& stream, const std::unordered_map<std::string, int>
 
 	m_id = create(source.first, source.second);
 }
+
+Shader::Shader(const std::string& vertexSource, const std::string& fragmentSource)
+	: m_id(0)
+{
+	m_id = create(vertexSource, fragmentSource);
+}
 Shader::~Shader()
 {
 	glDeleteProgram(m_id);
@@ -106,4 +112,50 @@ int Shader::getUniformLocation(const std::string& name)
 		std::cout << "Warning: uniform " << name << " doesnt't exist!" << std::endl;
 	m_uniformLocationCache[name] = location;
 	return location;
+}
+
+Shader* Shader::createDefault()
+{
+	// Basic vertex shader
+	const std::string vertexShader = R"(
+		#version 330 core
+		layout(location = 0) in vec4 position;
+		layout(location = 1) in vec4 normal;
+		layout(location = 2) in vec4 colour;
+		layout(location = 3) in vec2 texcoord;
+		layout(location = 4) in vec3 skin;
+
+		uniform mat4 VPMatrix;
+		uniform mat4 modelMatrix;
+
+		out vec4 v_colour;
+		out vec2 v_texcoord;
+
+		void main()
+		{
+			gl_Position = VPMatrix * modelMatrix * position;
+			v_colour = colour;
+			v_texcoord = texcoord;
+		}
+	)";
+
+	// Basic fragment shader with texture support
+	const std::string fragmentShader = R"(
+		#version 330 core
+		in vec4 v_colour;
+		in vec2 v_texcoord;
+
+		uniform sampler2D diffuseTexture;
+		uniform vec4 tintColour;
+
+		out vec4 color;
+
+		void main()
+		{
+			vec4 texColor = texture(diffuseTexture, v_texcoord);
+			color = texColor * v_colour * tintColour;
+		}
+	)";
+
+	return new Shader(vertexShader, fragmentShader);
 }

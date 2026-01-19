@@ -20,6 +20,7 @@ class Shader
 {
 public:
 	Shader(std::ifstream& stream, const std::unordered_map<std::string, int>& properties);
+	Shader(const std::string& vertexSource, const std::string& fragmentSource);
 	~Shader();
 
 	void bind() const;
@@ -28,6 +29,8 @@ public:
 	void setUniform1i(const std::string& name, int v);
 	void setUniform4f(const std::string& name, glm::vec4 v);
 	void setUniformMat4(const std::string& name, glm::mat4 mat);
+
+	static Shader* createDefault();
 
 private:
 	unsigned int m_id;
