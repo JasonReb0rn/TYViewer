@@ -11,6 +11,7 @@ public:
 	struct MeshData
 	{
 		std::vector<mdl2::Vertex> vertices;
+		std::vector<uint16_t> stripVertexCounts;
 		uint32_t textureIndex; // Texture index from MDL3
 		uint32_t componentIndex; // Component index from MDL3
 	};

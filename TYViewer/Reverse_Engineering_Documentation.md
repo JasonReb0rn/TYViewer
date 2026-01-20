@@ -52,58 +52,30 @@ Global Vertex Data Block (starts after all mesh headers):
   Vertices for each mesh are contiguous, following the order meshes appear
   in the ObjectLookupTable traversal.
   
-  Per-Vertex Layout (48 bytes):
-    +0-7:   UV coordinates (FORMAT UNKNOWN - currently reading as 2 floats but INCORRECT)
-    +8-19:  Position (3 floats, XYZ - CONFIRMED WORKING)
-    +20-23: Weight/Modifier (1 float, typically 1.0 - purpose unclear)
-    +24-31: Unknown field (2 floats, often constant per mesh like 27.0, 27.0)
-    +32-43: Normal (3 floats, XYZ normalized - appears correct)
-    +44-47: Padding/sentinel (4 bytes, often 0xFFFFFFFF)
+Per-Vertex Layout (48 bytes):
+    +0-3:   Unknown/flag (often 0xFFFFFFFF)
+    +4-11:  UV coordinates (2 floats) - this is the real UV location
+    +12-23: Position (3 floats, XYZ - confirmed)
+    +24-27: Weight/Modifier (1 float, typically 1.0 - purpose unclear)
+    +28-35: Unknown field (2 floats, often constant per mesh like 27.0, 27.0)
+    +36-47: Normal (3 floats, XYZ normalized - confirmed)
     
   Note: The vertex data offset must be found by searching for valid vertex
   patterns, as it doesn't have a fixed location after the mesh headers.
 ```
 
-## Implementation Details
-
-### Key Changes to `mdg.cpp`:
+## Notes
 
 1. **Format Detection**: Checks for PS2 VIF packet markers (`0x00 0x80 0x02 0x6C`) to determine format
-   - If markers found → Use PS2 parser (existing `parseStrip`)
-   - If no markers → Use PC parser (new `parseMDGPC`)
+   - If markers found → Use PS2 parser (`parseStrip`)
+   - If no markers → Use PC parser (`parseMDGPC`)
 
 2. **PC Parser (`parseMDGPC`)**:
-   - **Step 1**: Locate global vertex data block
-     * Searches file for sequences of valid 48-byte stride vertices
-     * Validate Position (+8) and Normal (+32) to avoid false positives
-     * Mesh headers can contain valid positions but invalid normals
-     * Validates by checking 4-5 consecutive vertices with reasonable float values
-     * Positions must be < 1000, normals must be normalized (length ~1)
-     * Typical location: after the last mesh header, aligned to 4 bytes
-   
-   - **Step 2**: Iterate through ObjectLookupTable from MDL file
-     * Table is at MDL offset specified in MDL3Metadata.ObjectLookupTable
-     * Organized as [TextureCount][ComponentCount] grid of int32 mesh offsets
-     * 0 = no mesh for that texture/component combination
-     * Non-zero = offset into MDG file for mesh header
-   
-   - **Step 3**: For each mesh:
-     * Read mesh header:
-       - Base vertex count at +0x0 (uint16)
-       - Duplicate vertex count at +0x4 (uint16)
-       - Strip count at +0x6 (uint16, informational)
-       - Next mesh pointer at +0xC (int32, for linked list support)
-     * Calculate total vertices for mesh:
-       - total = base + duplicate
-     * Read vertex data from current offset in sequential vertex block:
-       - Each vertex is exactly 48 bytes
-       - All vertices are interleaved (not structure-of-arrays)
-       - Layout: UV(8) + Position(12) + Weight(4) + BBox(8) + Normal(12) + Padding(4)
-     * Advance offset by (totalVertices * 48) for next mesh
-     * Use the full vertex block as a single triangle strip
-       - Degenerate vertices connect strips inside the block
-     * Create MeshData for each mesh with texture/component indices
-     * Skip collision meshes by texture name prefix `CM_`
+   - Finds the vertex block by validating Position (+12) and Normal (+36)
+   - Uses the ObjectLookupTable in the MDL3 file to walk meshes
+   - Uses base+duplicate counts from the mesh header to size each mesh
+   - Vertex data is interleaved; no separate UV buffer found
+   - Collision materials (`CM_`) are skipped for rendering for now (future render layer)
 
 3. **MDL3 Metadata Integration**:
    - MDL3 file provides:
@@ -146,8 +118,8 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
    - Tested with multiple models
    - All vertices parse correctly with this stride
    
-2. **Position data at offset +8 is 100% CORRECT**
-   - Offset: +8 to +19 (12 bytes, 3 floats: XYZ)
+2. **Position data at offset +12 is 100% CORRECT**
+   - Offset: +12 to +23 (12 bytes, 3 floats: XYZ)
    - Models render with correct geometry
    - Bounding boxes match perfectly
    - This is the most critical finding!
@@ -160,10 +132,10 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
    - All mesh headers come first
    - Followed by one continuous vertex data block
    - Vertices are interleaved (NOT structure-of-arrays)
-   - All attributes are floats (no packed/fixed-point formats)
+   - Position/normal are floats; UVs are floats too (with V flipped)
    
 5. **Vertex data offset search algorithm WORKS**
-   - Validate Position (+8) and Normal (+32)
+   - Validate Position (+12) and Normal (+36)
    - Mesh headers can contain valid positions but invalid normals
    - Offset is after the last mesh header, aligned to 4 bytes
    
@@ -172,21 +144,19 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
    - Base count at +0x00, duplicate count at +0x04
    - Total vertices = base + duplicate
    - Duplicate vertices are degenerate strip connectors
-   - Offset: +32 to +43 (12 bytes, 3 floats: XYZ)
+   - Offset: +36 to +47 (12 bytes, 3 floats: XYZ)
    - Values are normalized (-1 to +1 range)
    - Lighting appears reasonable on models
 
 ### PARTIALLY WORKING (Needs Investigation):
 
-1. **UV Coordinates at offset +0 are INCORRECT**
-   - Offset: +0 to +7 (8 bytes, 2 floats)
-   - Currently reading as floats, but texture mapping is wrong
-   - The UV data might be:
-     * In a different format (packed shorts? normalized bytes?)
-     * At a different offset within the 48-byte structure
-     * Stored elsewhere in the file (separate UV buffer?)
-     * Using a different coordinate system/scale
-   - UVs pass validation (non-NaN, reasonable range) but produce incorrect texture mapping
+1. **UVs are at +4/+8 as floats, but still not 100% correct**
+   - Breakthrough: UVs now land in the correct regions ~50% of the time
+   - Formula in code right now:
+     * `u = float at +4`
+     * `v = 1.0 - float at +8`
+   - Stretching/warping still happens on some faces (often “every other face”)
+   - This looks like strip/degenerate handling rather than UV storage
 
 ### UNKNOWN/UNCLEAR:
 1. **Vertex Colors**: Not found in the 48-byte vertex data
@@ -194,12 +164,12 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
    - May be stored separately, derived from textures, or not used
    - Models render fine without them
 
-2. **Weight/Modifier Field (+20-23)**: Always 1.0 in static meshes
+2. **Weight/Modifier Field (+24-27)**: Always 1.0 in static meshes
    - 4 bytes (1 float)
    - Purpose unclear - skinning weight? LOD factor? scale?
    - Currently stored in skin[0]
 
-3. **BBox/Unknown Field (+24-31)**: Two floats, often constant per mesh (27.0, 27.0)
+3. **BBox/Unknown Field (+28-35)**: Two floats, often constant per mesh (27.0, 27.0)
    - 8 bytes (2 floats)
    - May be bounding box max, scale factors, or UV-related
    - Values are mesh-specific but constant across vertices in same mesh
@@ -220,18 +190,12 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
 
 ## Next Steps (Priority Order)
 
-### CRITICAL - Fix UVs:
-1. **Investigate UV format** (offset +0 to +7):
-   - Try reading as int16/uint16 and dividing by scale factor
-   - Check if UVs are packed differently (4 bytes total instead of 8?)
-   - Test if they need coordinate transformation (flip V, different origin, etc.)
-   - Examine working PS2 format for comparison
-   - **Look at actual hex values** at +0 offset for several vertices
-   
-2. **Test UV theories**:
-   - Scale/normalization: Try dividing by 4096, 256, etc.
-   - Format: Try reading as shorts, bytes, or half-floats
-   - Location: Check if UVs might be at different offset (+4, +12, etc.)
+### CRITICAL - Fix remaining UV stretching:
+1. **Degenerate/strip handling**
+   - UVs are mostly right now, but some faces stretch badly
+   - Feels like strip boundaries or degenerate handling is wrong
+   - Need to verify how strip descriptors are meant to be used (low-byte counts don’t sum to total vertices in some files)
+   - Consider deriving strip boundaries from degenerate runs instead of descriptor counts
 
 ### MEDIUM Priority:
 3. **Understand BBox field (+24-31)**: May be related to UV coordinate space
@@ -246,12 +210,12 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
 ## Testing Results
 
 ### Test Model: `P0486_B1FlowerPot.mdl/mdg` (TY 2 PC)
-- **Status**: Geometry WORKING, UVs NOT WORKING
+- **Status**: Geometry WORKING, UVs ~50% correct
 - File sizes: MDL 1,028 bytes, MDG 14,048 bytes
 - Components: 8, Textures: 4, Meshes: 9, Strips: 32
 - Total vertices: 292 across all meshes (base + duplicate)
 - Vertex data starts at offset 264 (0x108)
-- **Result**: Model renders with correct geometry, incorrect texture mapping
+- **Result**: Lots of faces now land in the right texture regions, but some faces are stretched/warped
 
 ### What Works:
 - Mesh geometry is correct (positions are accurate)
@@ -260,8 +224,13 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
 - Missing faces resolved by treating meshes as a single strip with degenerate connectors
 
 ### What Doesn't Work:
-- UV coordinates produce incorrect texture mapping
-- Textures appear stretched/misaligned on the model
+- Some faces are still stretched or rotated unexpectedly
+- The “every other face” warp pattern points at strip/degenerate handling
+
+### Test Model: `P0623_MovieLight.mdl/mdg` (TY 2 PC)
+- **Status**: UVs almost correct, still stretched or warped
+- Mesh has 610 vertices, strip descriptors present but sum doesn’t match base+dup
+- Same symptoms: correct regions, wrong stretching on alternating faces
 
 ### Performance:
 - Vertex search algorithm finds correct offset (264)

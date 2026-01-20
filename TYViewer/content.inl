@@ -238,6 +238,66 @@ inline Model* Content::load(const std::string& name)
 				if (mdgLoaded)
 				{
 					Debug::log("Successfully loaded MDG file with " + std::to_string(mdgParser.meshes.size()) + " meshes");
+					auto appendTriangleStripIndices = [](const std::vector<Vertex>& vertices, std::vector<unsigned int>& indices, size_t startIndex, size_t count, size_t& degenerateCount, size_t& totalTriangleCount, size_t& degenerateUvMismatch, size_t& stripBreaks)
+					{
+						const auto isSamePosition = [](const Vertex& a, const Vertex& b)
+						{
+							return std::abs(a.position.x - b.position.x) < 0.00001f &&
+								std::abs(a.position.y - b.position.y) < 0.00001f &&
+								std::abs(a.position.z - b.position.z) < 0.00001f;
+						};
+						const auto isSameUv = [](const Vertex& a, const Vertex& b)
+						{
+							return std::abs(a.texcoord.x - b.texcoord.x) < 0.00001f &&
+								std::abs(a.texcoord.y - b.texcoord.y) < 0.00001f;
+						};
+
+						if (count < 3 || startIndex + count > vertices.size())
+						{
+							return;
+						}
+
+						totalTriangleCount += (count - 2);
+						size_t parity = 0;
+						for (size_t i = 0; i + 2 < count; i++)
+						{
+							unsigned int i0 = static_cast<unsigned int>(startIndex + i);
+							unsigned int i1 = static_cast<unsigned int>(startIndex + i + 1);
+							unsigned int i2 = static_cast<unsigned int>(startIndex + i + 2);
+
+							// Skip degenerate triangles (strip connectors)
+							bool deg01 = isSamePosition(vertices[i0], vertices[i1]);
+							bool deg12 = isSamePosition(vertices[i1], vertices[i2]);
+							bool deg02 = isSamePosition(vertices[i0], vertices[i2]);
+							if (deg01 || deg12 || deg02)
+							{
+								degenerateCount++;
+								if ((deg01 && !isSameUv(vertices[i0], vertices[i1])) ||
+									(deg12 && !isSameUv(vertices[i1], vertices[i2])) ||
+									(deg02 && !isSameUv(vertices[i0], vertices[i2])))
+								{
+									degenerateUvMismatch++;
+									stripBreaks++;
+									parity = 0;
+								}
+								continue;
+							}
+
+							if ((parity & 1) == 0)
+							{
+								indices.push_back(i0);
+								indices.push_back(i1);
+								indices.push_back(i2);
+							}
+							else
+							{
+								indices.push_back(i1);
+								indices.push_back(i0);
+								indices.push_back(i2);
+							}
+							parity++;
+						}
+					};
 
 					// Use MDG meshes directly - they already have texture/component info if loaded with MDL3 metadata
 					if (mdl.isMDL3Format)
@@ -251,7 +311,6 @@ inline Model* Content::load(const std::string& name)
 
 							// Get vertices from MDG
 							auto& mdgMesh = mdgParser.meshes[i];
-							int triangleIndex = 0;
 
 							for (auto& vertex : mdgMesh.vertices)
 							{
@@ -267,15 +326,31 @@ inline Model* Content::load(const std::string& name)
 								vertices.push_back(v);
 							}
 
-							// Generate triangle strip indices
-							for (unsigned int j = 0; j < mdgMesh.vertices.size() - 2; j++)
+							// Generate triangle strip indices with degenerate handling
+							size_t degenerateCount = 0;
+							size_t totalTriangleCount = 0;
+							size_t degenerateUvMismatch = 0;
+							size_t stripBreaks = 0;
+							if (!mdgMesh.stripVertexCounts.empty())
 							{
-								indices.push_back(0 + triangleIndex);
-								indices.push_back(2 + triangleIndex);
-								indices.push_back(1 + triangleIndex);
-
-								triangleIndex++;
+								size_t startIndex = 0;
+								for (auto stripVertexCount : mdgMesh.stripVertexCounts)
+								{
+									if (stripVertexCount >= 3)
+									{
+										appendTriangleStripIndices(vertices, indices, startIndex, stripVertexCount, degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
+									}
+									startIndex += stripVertexCount;
+								}
 							}
+							else
+							{
+								appendTriangleStripIndices(vertices, indices, 0, vertices.size(), degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
+							}
+							Debug::log("MDG PC: Degenerate triangles skipped: " + std::to_string(degenerateCount) +
+								" of " + std::to_string(totalTriangleCount) +
+								" (uv mismatch: " + std::to_string(degenerateUvMismatch) +
+								", strip breaks: " + std::to_string(stripBreaks) + ")");
 
 							// Use texture name from MDL3 metadata
 							std::string textureName = "";
@@ -304,7 +379,6 @@ inline Model* Content::load(const std::string& name)
 
 							// Get vertices from MDG
 							auto& mdgMesh = mdgParser.meshes[i];
-							int triangleIndex = 0;
 
 							for (auto& vertex : mdgMesh.vertices)
 							{
@@ -320,15 +394,31 @@ inline Model* Content::load(const std::string& name)
 								vertices.push_back(v);
 							}
 
-							// Generate triangle strip indices
-							for (unsigned int j = 0; j < mdgMesh.vertices.size() - 2; j++)
+							// Generate triangle strip indices with degenerate handling
+							size_t degenerateCount = 0;
+							size_t totalTriangleCount = 0;
+							size_t degenerateUvMismatch = 0;
+							size_t stripBreaks = 0;
+							if (!mdgMesh.stripVertexCounts.empty())
 							{
-								indices.push_back(0 + triangleIndex);
-								indices.push_back(2 + triangleIndex);
-								indices.push_back(1 + triangleIndex);
-
-								triangleIndex++;
+								size_t startIndex = 0;
+								for (auto stripVertexCount : mdgMesh.stripVertexCounts)
+								{
+									if (stripVertexCount >= 3)
+									{
+										appendTriangleStripIndices(vertices, indices, startIndex, stripVertexCount, degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
+									}
+									startIndex += stripVertexCount;
+								}
 							}
+							else
+							{
+								appendTriangleStripIndices(vertices, indices, 0, vertices.size(), degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
+							}
+							Debug::log("MDG PC: Degenerate triangles skipped: " + std::to_string(degenerateCount) +
+								" of " + std::to_string(totalTriangleCount) +
+								" (uv mismatch: " + std::to_string(degenerateUvMismatch) +
+								", strip breaks: " + std::to_string(stripBreaks) + ")");
 
 							// Use default texture since we don't have material info
 							meshes.push_back(new Mesh(vertices, indices, defaultTexture));

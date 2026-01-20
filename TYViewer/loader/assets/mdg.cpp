@@ -435,12 +435,12 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 	
 	// Find where vertex data actually starts (after all mesh headers)
 	// PC MDG format uses 48-byte stride per vertex with specific layout:
-	//   +0-7:   UV (2 floats)
-	//   +8-19:  Position (3 floats)
-	//   +20-23: Weight (1 float)
-	//   +24-31: BBox max (2 floats, constant)
-	//   +32-43: Normal (3 floats)
-	//   +44-47: Padding (often NaN/0xFFFFFFFF)
+	//   +0-3:   Unknown/flag (often 0xFFFFFFFF)
+	//   +4-11:  UV (2 floats)
+	//   +12-23: Position (3 floats)
+	//   +24-27: Weight (1 float)
+	//   +28-35: Unknown (2 floats, often constant per mesh like 27.0, 27.0)
+	//   +36-47: Normal (3 floats)
 	
 	size_t globalVertexDataStart = 0;
 	const size_t VERTEX_STRIDE = 48;
@@ -482,19 +482,19 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 			size_t vertexOffset = searchOffset + (v * VERTEX_STRIDE);
 			if (vertexOffset + VERTEX_STRIDE > size) break;
 			
-			// Check Position at +8
-			float x = from_bytes<float>(buffer, vertexOffset + 8);
-			float y = from_bytes<float>(buffer, vertexOffset + 12);
-			float z = from_bytes<float>(buffer, vertexOffset + 16);
+			// Check Position at +12
+			float x = from_bytes<float>(buffer, vertexOffset + 12);
+			float y = from_bytes<float>(buffer, vertexOffset + 16);
+			float z = from_bytes<float>(buffer, vertexOffset + 20);
 			bool hasNonZero = (std::abs(x) > 0.0001f || std::abs(y) > 0.0001f || std::abs(z) > 0.0001f);
 			bool posValid = !std::isnan(x) && !std::isinf(x) && std::abs(x) < 1000.0f &&
 			                !std::isnan(y) && !std::isinf(y) && std::abs(y) < 1000.0f &&
 			                !std::isnan(z) && !std::isinf(z) && std::abs(z) < 1000.0f;
 
-			// Check Normal at +32
-			float nx = from_bytes<float>(buffer, vertexOffset + 32);
-			float ny = from_bytes<float>(buffer, vertexOffset + 36);
-			float nz = from_bytes<float>(buffer, vertexOffset + 40);
+			// Check Normal at +36
+			float nx = from_bytes<float>(buffer, vertexOffset + 36);
+			float ny = from_bytes<float>(buffer, vertexOffset + 40);
+			float nz = from_bytes<float>(buffer, vertexOffset + 44);
 			float normalLen = std::sqrt((nx * nx) + (ny * ny) + (nz * nz));
 			bool normalValid = !std::isnan(nx) && !std::isinf(nx) &&
 				!std::isnan(ny) && !std::isinf(ny) &&
@@ -555,6 +555,31 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 				uint16_t duplicateVertexCount = from_bytes<uint16_t>(buffer, meshRef + 0x4);
 				uint16_t stripCount = from_bytes<uint16_t>(buffer, meshRef + 0x6);
 				int32_t nextMesh = from_bytes<int32_t>(buffer, meshRef + 0xC);
+				
+				std::vector<uint16_t> stripVertexCounts;
+				if (stripCount > 0 && meshRef + 0x10 + (stripCount * 2) <= size)
+				{
+					stripVertexCounts.reserve(stripCount);
+					for (uint16_t si = 0; si < stripCount; si++)
+					{
+						uint16_t descriptor = from_bytes<uint16_t>(buffer, meshRef + 0x10 + (si * 2));
+						uint16_t vertCount = static_cast<uint16_t>(descriptor & 0xFF);
+						stripVertexCounts.push_back(vertCount);
+					}
+					std::string stripCountsLog = "MDG PC: Strip vertex counts (low byte) = [";
+					for (size_t i = 0; i < stripVertexCounts.size(); i++)
+					{
+						stripCountsLog += std::to_string(stripVertexCounts[i]);
+						if (i + 1 < stripVertexCounts.size())
+						{
+							stripCountsLog += ", ";
+						}
+					}
+					stripCountsLog += "]";
+					Debug::log(stripCountsLog);
+				}
+				
+				// Strip descriptors exist but are not reliable for vertex counts in PC format.
 
 				if (stripCount > 1000)
 				{
@@ -608,13 +633,16 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 					meshRef = nextMesh;
 					continue;
 				}
+
+				Debug::log("MDG PC: UV format = Float2@+4");
 				
-				// Log first vertex for debugging (position is at +8, not +0!)
-				float u = from_bytes<float>(buffer, vertexDataOffset);
-				float v = from_bytes<float>(buffer, vertexDataOffset + 4);
-				float x = from_bytes<float>(buffer, vertexDataOffset + 8);
-				float y = from_bytes<float>(buffer, vertexDataOffset + 12);
-				float z = from_bytes<float>(buffer, vertexDataOffset + 16);
+				// Log first vertex for debugging (position is at +12)
+				float u = from_bytes<float>(buffer, vertexDataOffset + 4);
+				float v = from_bytes<float>(buffer, vertexDataOffset + 8);
+				v = 1.0f - v;
+				float x = from_bytes<float>(buffer, vertexDataOffset + 12);
+				float y = from_bytes<float>(buffer, vertexDataOffset + 16);
+				float z = from_bytes<float>(buffer, vertexDataOffset + 20);
 				Debug::log("MDG PC: Reading vertex data at offset " + std::to_string(vertexDataOffset) + 
 					" (" + std::to_string(expectedDataSize) + " bytes needed)");
 				Debug::log("MDG PC: First vertex UV: (" + std::to_string(u) + ", " + std::to_string(v) + ")");
@@ -622,12 +650,12 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 
 				// PC Format: Interleaved vertex data with 48-byte stride
 				// Layout per vertex:
-				//   +0-7:   UV (2 floats)
-				//   +8-19:  Position (3 floats)
-				//   +20-23: Weight (1 float)
-				//   +24-31: BBox (2 floats)
-				//   +32-43: Normal (3 floats)
-				//   +44-47: Padding
+				//   +0-3:   Unknown/flag (often 0xFFFFFFFF)
+				//   +4-11:  UV (2 floats)
+				//   +12-23: Position (3 floats)
+				//   +24-27: Weight (1 float)
+				//   +28-35: Unknown (2 floats, often constant per mesh)
+				//   +36-47: Normal (3 floats)
 				std::vector<mdl2::Vertex> allVertices(totalVertices);
 				size_t currentOffset = vertexDataOffset;
 				
@@ -645,24 +673,24 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 				for (size_t i = 0; i < totalVertices; i++) {
 					size_t vertexOffset = currentOffset + (i * VERTEX_STRIDE);
 					
-					// UV at +0
-					allVertices[i].texcoord[0] = from_bytes<float>(buffer, vertexOffset);
-					allVertices[i].texcoord[1] = from_bytes<float>(buffer, vertexOffset + 4);
+					// UV at +4
+					allVertices[i].texcoord[0] = from_bytes<float>(buffer, vertexOffset + 4);
+					allVertices[i].texcoord[1] = 1.0f - from_bytes<float>(buffer, vertexOffset + 8);
 					
-					// Position at +8
-					allVertices[i].position[0] = from_bytes<float>(buffer, vertexOffset + 8);
-					allVertices[i].position[1] = from_bytes<float>(buffer, vertexOffset + 12);
-					allVertices[i].position[2] = from_bytes<float>(buffer, vertexOffset + 16);
+					// Position at +12
+					allVertices[i].position[0] = from_bytes<float>(buffer, vertexOffset + 12);
+					allVertices[i].position[1] = from_bytes<float>(buffer, vertexOffset + 16);
+					allVertices[i].position[2] = from_bytes<float>(buffer, vertexOffset + 20);
 					
-					// Weight at +20 (store in skin[0] for now)
-					allVertices[i].skin[0] = from_bytes<float>(buffer, vertexOffset + 20);
+					// Weight at +24 (store in skin[0] for now)
+					allVertices[i].skin[0] = from_bytes<float>(buffer, vertexOffset + 24);
 					allVertices[i].skin[1] = 0.0f;
 					allVertices[i].skin[2] = 0.0f;
 					
-					// Normal at +32
-					allVertices[i].normal[0] = from_bytes<float>(buffer, vertexOffset + 32);
-					allVertices[i].normal[1] = from_bytes<float>(buffer, vertexOffset + 36);
-					allVertices[i].normal[2] = from_bytes<float>(buffer, vertexOffset + 40);
+					// Normal at +36
+					allVertices[i].normal[0] = from_bytes<float>(buffer, vertexOffset + 36);
+					allVertices[i].normal[1] = from_bytes<float>(buffer, vertexOffset + 40);
+					allVertices[i].normal[2] = from_bytes<float>(buffer, vertexOffset + 44);
 					
 					// Default color (white) - colors may be stored elsewhere or not present
 					allVertices[i].colour[0] = 1.0f;
@@ -739,6 +767,25 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 				// inserted between strips. Use the full vertex block for the mesh.
 				MeshData meshData;
 				meshData.vertices = allVertices;
+				if (!stripVertexCounts.empty())
+				{
+					size_t stripSum = 0;
+					for (auto count : stripVertexCounts)
+					{
+						stripSum += count;
+					}
+					Debug::log("MDG PC: Strip vertex count sum=" + std::to_string(stripSum) + " totalVertices=" + std::to_string(totalVertices));
+					if (stripSum == totalVertices)
+					{
+						meshData.stripVertexCounts = stripVertexCounts;
+						Debug::log("MDG PC: Using per-strip index generation");
+					}
+					else
+					{
+						Debug::log("MDG PC: Strip vertex count sum mismatch (sum=" + std::to_string(stripSum) +
+							", total=" + std::to_string(totalVertices) + "), using single strip");
+					}
+				}
 				meshData.textureIndex = ti;
 				meshData.componentIndex = ci;
 				meshes.push_back(meshData);
