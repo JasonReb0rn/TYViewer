@@ -12,8 +12,8 @@ void Renderer::initialize()
 {
 	glEnable(GL_DEPTH_TEST);
 
-	//glEnable(GL_BLEND);
-	//glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
 void Renderer::drawHollowBox(const glm::vec3& min, const glm::vec3& max, const glm::vec4& colour)

@@ -154,6 +154,10 @@ Shader* Shader::createDefault()
 		{
 			vec4 texColor = texture(diffuseTexture, v_texcoord);
 			color = texColor * v_colour * tintColour;
+			if (color.a <= 0.01)
+			{
+				discard;
+			}
 		}
 	)";
 
