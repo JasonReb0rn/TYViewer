@@ -72,6 +72,7 @@ private:
 	bool hovering;
 	bool submenuOpen;
 	int hoveredCategory; // 0 = none, 1 = TY1, 2 = TY2
+	int hoveredSubmenuItem; // Index of hovered item in submenu, -1 if none
 	
 	float mouseX, mouseY; // Track current mouse position
 	

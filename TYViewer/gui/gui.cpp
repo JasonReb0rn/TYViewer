@@ -61,6 +61,7 @@ Gui::Gui() :
 	hovering(false),
 	submenuOpen(false),
 	hoveredCategory(0),
+	hoveredSubmenuItem(-1),
 	mouseX(0.0f),
 	mouseY(0.0f),
 	scrollOffset(0.0f),
@@ -462,7 +463,7 @@ void Gui::renderDropdown()
 	// TY1 category
 	if (!ty1Models.empty())
 	{
-		glm::vec4 bgColor = (hoveredCategory == 1) ? glm::vec4(0.3f, 0.3f, 0.45f, 1.0f) : glm::vec4(0.25f, 0.25f, 0.4f, 1.0f);
+		glm::vec4 bgColor = (hoveredCategory == 1) ? glm::vec4(0.2f, 0.4f, 0.7f, 1.0f) : glm::vec4(0.15f, 0.3f, 0.55f, 1.0f);
 		drawRect(dropdownRect.x + 5.0f, yOffset, dropdownRect.width - 10.0f, 25.0f, bgColor);
 		
 		std::string categoryText = "TY 1 Models (" + std::to_string(ty1Models.size()) + ") >";
@@ -473,7 +474,7 @@ void Gui::renderDropdown()
 	// TY2 category
 	if (!ty2Models.empty())
 	{
-		glm::vec4 bgColor = (hoveredCategory == 2) ? glm::vec4(0.45f, 0.3f, 0.3f, 1.0f) : glm::vec4(0.4f, 0.25f, 0.25f, 1.0f);
+		glm::vec4 bgColor = (hoveredCategory == 2) ? glm::vec4(0.7f, 0.35f, 0.2f, 1.0f) : glm::vec4(0.55f, 0.25f, 0.15f, 1.0f);
 		drawRect(dropdownRect.x + 5.0f, yOffset, dropdownRect.width - 10.0f, 25.0f, bgColor);
 		
 		std::string categoryText = "TY 2 Models (" + std::to_string(ty2Models.size()) + ") >";
@@ -507,9 +508,21 @@ void Gui::renderSubmenu()
 			glm::vec4 itemColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
 			glm::vec4 textColor = glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);
 			
-			if (currentModelName == (*modelList)[i].name)
+			// Check if this is the currently selected model
+			bool isSelected = (currentModelName == (*modelList)[i].name);
+			// Check if this item is being hovered
+			bool isHovered = (hoveredSubmenuItem == (int)i);
+			
+			if (isSelected)
 			{
-				itemColor = glm::vec4(0.3f, 0.5f, 0.3f, 1.0f);
+				// Selected item gets green color
+				itemColor = glm::vec4(0.3f, 0.6f, 0.3f, 1.0f);
+				textColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+			}
+			else if (isHovered)
+			{
+				// Hovered item gets lighter background
+				itemColor = glm::vec4(0.28f, 0.28f, 0.28f, 1.0f);
 				textColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
 			}
 			
@@ -559,6 +572,7 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				submenuOpen = false;
 				scrollOffset = 0.0f;
 				hoveredCategory = 0;
+				hoveredSubmenuItem = -1;
 			}
 			else if (submenuOpen && submenuRect.contains(x, y))
 			{
@@ -587,6 +601,7 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 					dropdownOpen = false;
 					submenuOpen = false;
 					hoveredCategory = 0;
+					hoveredSubmenuItem = -1;
 				}
 			}
 			else if (dropdownOpen && dropdownRect.contains(x, y))
@@ -600,6 +615,7 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				dropdownOpen = false;
 				submenuOpen = false;
 				hoveredCategory = 0;
+				hoveredSubmenuItem = -1;
 			}
 		}
 	}
@@ -611,6 +627,21 @@ void Gui::onMouseMove(float x, float y)
 	mouseY = y;
 	
 	hovering = buttonRect.contains(x, y) || (dropdownOpen && dropdownRect.contains(x, y)) || (submenuOpen && submenuRect.contains(x, y));
+	
+	// Track hovered submenu item
+	hoveredSubmenuItem = -1;
+	if (submenuOpen && submenuRect.contains(x, y))
+	{
+		float relativeY = y - submenuRect.y + scrollOffset - 5.0f; // -5.0f accounts for top padding
+		int itemIndex = (int)(relativeY / 25.0f);
+		
+		const std::vector<ModelEntry>* modelList = (hoveredCategory == 1) ? &ty1Models : &ty2Models;
+		
+		if (itemIndex >= 0 && itemIndex < (int)modelList->size())
+		{
+			hoveredSubmenuItem = itemIndex;
+		}
+	}
 	
 	if (dropdownOpen && dropdownRect.contains(x, y))
 	{
@@ -632,7 +663,8 @@ void Gui::onMouseMove(float x, float y)
 					scrollOffset = 0.0f;
 					
 					// Calculate submenu position and size
-					float ty1YPos = dropdownRect.y + yPos;
+					// Always align submenu with the top of the dropdown for easier mouse access
+					float submenuYPos = dropdownRect.y;
 					
 					// Use 70% of window height for submenu
 					float maxSubmenuHeight = windowHeight * 0.7f;
@@ -644,7 +676,7 @@ void Gui::onMouseMove(float x, float y)
 					else
 						maxScroll = 0.0f;
 					
-					submenuRect = {dropdownRect.x + dropdownRect.width + 2.0f, ty1YPos, 350.0f, submenuHeight};
+					submenuRect = {dropdownRect.x + dropdownRect.width + 2.0f, submenuYPos, 350.0f, submenuHeight};
 					
 					// Auto-scroll to selected model if one exists in this category
 					if (!currentModelName.empty())
@@ -655,11 +687,11 @@ void Gui::onMouseMove(float x, float y)
 						{
 							if (ty1Models[i].name == currentModelName)
 							{
-								// Center the selected item in the submenu view
+								// Place the selected item at the TOP of the visible area
 								float itemPosition = i * 25.0f;
-								float targetScroll = itemPosition - (submenuHeight / 2.0f) + 12.5f; // 12.5f = half item height
+								scrollOffset = itemPosition;
 								
-								scrollOffset = targetScroll;
+								// Clamp to valid scroll range
 								if (scrollOffset < 0.0f) scrollOffset = 0.0f;
 								if (scrollOffset > maxScroll) scrollOffset = maxScroll;
 								
@@ -686,7 +718,8 @@ void Gui::onMouseMove(float x, float y)
 					scrollOffset = 0.0f;
 					
 					// Calculate submenu position and size
-					float ty2YPos = dropdownRect.y + yPos;
+					// Always align submenu with the top of the dropdown for easier mouse access
+					float submenuYPos = dropdownRect.y;
 					
 					// Use 70% of window height for submenu
 					float maxSubmenuHeight = windowHeight * 0.7f;
@@ -698,7 +731,7 @@ void Gui::onMouseMove(float x, float y)
 					else
 						maxScroll = 0.0f;
 					
-					submenuRect = {dropdownRect.x + dropdownRect.width + 2.0f, ty2YPos, 350.0f, submenuHeight};
+					submenuRect = {dropdownRect.x + dropdownRect.width + 2.0f, submenuYPos, 350.0f, submenuHeight};
 					
 					// Auto-scroll to selected model if one exists in this category
 					if (!currentModelName.empty())
@@ -709,11 +742,11 @@ void Gui::onMouseMove(float x, float y)
 						{
 							if (ty2Models[i].name == currentModelName)
 							{
-								// Center the selected item in the submenu view
+								// Place the selected item at the TOP of the visible area
 								float itemPosition = i * 25.0f;
-								float targetScroll = itemPosition - (submenuHeight / 2.0f) + 12.5f; // 12.5f = half item height
+								scrollOffset = itemPosition;
 								
-								scrollOffset = targetScroll;
+								// Clamp to valid scroll range
 								if (scrollOffset < 0.0f) scrollOffset = 0.0f;
 								if (scrollOffset > maxScroll) scrollOffset = maxScroll;
 								
@@ -737,6 +770,7 @@ void Gui::onMouseMove(float x, float y)
 			{
 				submenuOpen = false;
 				hoveredCategory = 0;
+				hoveredSubmenuItem = -1;
 			}
 		}
 	}
