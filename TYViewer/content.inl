@@ -474,13 +474,13 @@ inline Model* Content::load(const std::string& name)
 								textureName = mdl.mdl3Metadata.TextureNames[mdgMesh.textureIndex];
 							}
 							
-							Texture* texture = load<Texture>(textureName + ".dds");
-							if (texture == defaultTexture && !textureName.empty())
-							{
-								std::cout << "Failed to load texture: '" + textureName + "' !" << std::endl
-									<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;
-							}
-							meshes.push_back(new Mesh(vertices, indices, texture));
+						Texture* texture = load<Texture>(textureName + ".dds");
+						if (texture == defaultTexture && !textureName.empty())
+						{
+							std::cout << "Failed to load texture: '" + textureName + "' !" << std::endl
+								<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;
+						}
+						meshes.push_back(new Mesh(vertices, indices, texture, textureName));
 						}
 					}
 					else
@@ -597,13 +597,13 @@ inline Model* Content::load(const std::string& name)
 									appendTriangleStripIndices(vertices, indices, 0, vertices.size(), degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
 								}
 							}
-							Debug::log("MDG PC: Degenerate triangles skipped: " + std::to_string(degenerateCount) +
-								" of " + std::to_string(totalTriangleCount) +
-								" (uv mismatch: " + std::to_string(degenerateUvMismatch) +
-								", strip breaks: " + std::to_string(stripBreaks) + ")");
+						Debug::log("MDG PC: Degenerate triangles skipped: " + std::to_string(degenerateCount) +
+							" of " + std::to_string(totalTriangleCount) +
+							" (uv mismatch: " + std::to_string(degenerateUvMismatch) +
+							", strip breaks: " + std::to_string(stripBreaks) + ")");
 
-							// Use default texture since we don't have material info
-							meshes.push_back(new Mesh(vertices, indices, defaultTexture));
+						// Use default texture since we don't have material info
+						meshes.push_back(new Mesh(vertices, indices, defaultTexture, "unknown"));
 						}
 					}
 				}
@@ -652,13 +652,13 @@ inline Model* Content::load(const std::string& name)
 							triangleIndex += 2;
 						}
 
-						Texture* texture = load<Texture>(mesh.material + ".dds");
-						if (texture == defaultTexture)
-						{
-							std::cout << "Failed to load texture: '" + mesh.material + "' !" << std::endl
-								<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;
-						}
-						meshes.push_back(new Mesh(vertices, indices, texture));
+					Texture* texture = load<Texture>(mesh.material + ".dds");
+					if (texture == defaultTexture)
+					{
+						std::cout << "Failed to load texture: '" + mesh.material + "' !" << std::endl
+							<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;
+					}
+					meshes.push_back(new Mesh(vertices, indices, texture, mesh.material));
 					}
 				}
 			}
@@ -790,7 +790,7 @@ inline Model* Content::load(const std::string& name)
 						}
 					}
 
-					meshes.push_back(new Mesh(vertices, indices, load<Texture>(submesh_ident + ".dds")));
+					meshes.push_back(new Mesh(vertices, indices, load<Texture>(submesh_ident + ".dds"), submesh_ident));
 				}
 			}
 

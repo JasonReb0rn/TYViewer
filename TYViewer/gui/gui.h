@@ -6,6 +6,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+// Forward declarations
+class Model;
+
 struct GuiRect
 {
 	float x, y, width, height;
@@ -37,6 +40,10 @@ public:
 	void setModelList(const std::vector<ModelEntry>& models);
 	void setOnModelSelected(std::function<void(const ModelEntry&)> callback);
 	
+	// Model debugging
+	void setCurrentModel(class Model* model, const std::string& modelName);
+	void clearCurrentModel();
+	
 	// Input handling
 	void onMouseButton(int button, int action, float x, float y);
 	void onMouseMove(float x, float y);
@@ -50,6 +57,8 @@ private:
 	void renderSubmenu();
 	void renderButton();
 	void renderScrollbar();
+	void renderModelInfo();
+	void renderMaterialList();
 	
 	void drawRect(float x, float y, float width, float height, const glm::vec4& color);
 	void drawText(const std::string& text, float x, float y, const glm::vec4& color);
@@ -60,6 +69,8 @@ private:
 	GuiRect buttonRect;
 	GuiRect dropdownRect;
 	GuiRect submenuRect;
+	GuiRect modelInfoRect;
+	GuiRect materialListRect;
 	
 	std::vector<ModelEntry> models;
 	std::vector<ModelEntry> ty1Models;
@@ -67,6 +78,12 @@ private:
 	
 	ModelEntry* selectedModel;
 	std::string currentModelName;
+	
+	// Current model for debugging
+	class Model* currentModel;
+	float materialListScroll;
+	float maxMaterialListScroll;
+	int hoveredMaterialItem;
 	
 	bool dropdownOpen;
 	bool hovering;

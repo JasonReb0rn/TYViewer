@@ -31,6 +31,13 @@ public:
 	~Model();
 
 	virtual void draw(Shader& shader) const override;
+	
+	// For GUI access
+	const std::vector<Mesh*>& getMeshes() const { return meshes; }
+	std::vector<Mesh*>& getMeshes() { return meshes; }
+	int getMeshCount() const { return meshes.size(); }
+	int getTotalVertexCount() const;
+	int getTotalTriangleCount() const;
 
 	glm::vec3 bounds_crn;
 	glm::vec3 bounds_size;

@@ -19,3 +19,23 @@ void Model::draw(Shader& shader) const
 		mesh->draw(shader);
 	}
 }
+
+int Model::getTotalVertexCount() const
+{
+	int total = 0;
+	for (const auto& mesh : meshes)
+	{
+		total += mesh->getVertexCount();
+	}
+	return total;
+}
+
+int Model::getTotalTriangleCount() const
+{
+	int total = 0;
+	for (const auto& mesh : meshes)
+	{
+		total += mesh->getTriangleCount();
+	}
+	return total;
+}

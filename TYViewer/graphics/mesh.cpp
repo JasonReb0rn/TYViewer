@@ -9,15 +9,17 @@ Mesh::Mesh() :
 	m_vertices(),
 	m_indices(),
 	m_texture(NULL),
+	m_materialName(""),
+	m_enabled(true),
 	vao(0),
 	vbo(0),
 	ebo(0)
 {}
 
-Mesh::Mesh(const std::vector<Vertex>& vertices, const std::vector<unsigned int>& indices, Texture* texture) :
+Mesh::Mesh(const std::vector<Vertex>& vertices, const std::vector<unsigned int>& indices, Texture* texture, const std::string& materialName) :
 	Drawable(),
 	Transformable({ 0.0f, 0.0f, 0.0f }),
-	m_vertices(vertices), m_indices(indices), m_texture(texture),
+	m_vertices(vertices), m_indices(indices), m_texture(texture), m_materialName(materialName), m_enabled(true),
 	vao(0),
 	vbo(0),
 	ebo(0)
@@ -67,6 +69,17 @@ void Mesh::setup()
 void Mesh::draw(Shader& shader) const
 {
 	shader.bind();
+	
+	// If material is disabled, override with pink/magenta color to indicate missing/disabled texture
+	if (!m_enabled)
+	{
+		shader.setUniform4f("tintColour", glm::vec4(1.0f, 0.0f, 1.0f, 1.0f)); // Magenta/Pink
+	}
+	else
+	{
+		shader.setUniform4f("tintColour", glm::vec4(1.0f, 1.0f, 1.0f, 1.0f)); // Normal white tint
+	}
+	
 	m_texture->bind();
 
 	shader.setUniformMat4("modelMatrix", getMatrix());

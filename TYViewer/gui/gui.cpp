@@ -3,6 +3,8 @@
 #include <GLFW/glfw3.h>
 #include <glm/gtc/type_ptr.hpp>
 #include "../debug.h"
+#include "../model.h"
+#include "../graphics/mesh.h"
 
 // Simple vertex shader for GUI rendering
 const char* guiVertexShaderSource = R"(
@@ -68,6 +70,10 @@ Gui::Gui() :
 	maxScroll(0.0f),
 	selectedModel(nullptr),
 	currentModelName(""),
+	currentModel(nullptr),
+	materialListScroll(0.0f),
+	maxMaterialListScroll(0.0f),
+	hoveredMaterialItem(-1),
 	shaderProgram(0),
 	textShaderProgram(0),
 	VAO(0),
@@ -90,6 +96,12 @@ void Gui::initialize(int width, int height)
 	
 	// Button at top of screen
 	buttonRect = {10.0f, 10.0f, 200.0f, 30.0f};
+	
+	// Model info panel on the right
+	modelInfoRect = {(float)width - 310.0f, 10.0f, 300.0f, 150.0f};
+	
+	// Material list panel below model info (default size, will resize when model is loaded)
+	materialListRect = {(float)width - 310.0f, 170.0f, 300.0f, 200.0f};
 	
 	initializeGL();
 }
@@ -365,7 +377,8 @@ void Gui::setModelList(const std::vector<ModelEntry>& modelList)
 	if (!ty1Models.empty()) categoryCount++;
 	if (!ty2Models.empty()) categoryCount++;
 	
-	float dropdownHeight = categoryCount * 30.0f; // 30px per category
+	// Calculate height: tight padding + items
+	float dropdownHeight = (categoryCount * 30.0f) + 6.0f; // 3px top + 3px bottom padding
 	dropdownRect = {buttonRect.x, buttonRect.y + buttonRect.height + 2.0f, 200.0f, dropdownHeight};
 	
 	// Submenu will be calculated dynamically when hovering
@@ -380,6 +393,26 @@ void Gui::resize(int width, int height)
 {
 	windowWidth = width;
 	windowHeight = height;
+	
+	// Update panel positions
+	modelInfoRect = {(float)width - 310.0f, 10.0f, 300.0f, 150.0f};
+	
+	// Recalculate material list size if we have a model
+	if (currentModel)
+	{
+		int materialCount = currentModel->getMeshCount();
+		float contentHeight = 40.0f + (materialCount * 25.0f) + 10.0f;
+		float maxHeight = height * 0.7f;
+		float panelHeight = (contentHeight < maxHeight) ? contentHeight : maxHeight;
+		
+		materialListRect = {(float)width - 310.0f, 170.0f, 300.0f, panelHeight};
+		maxMaterialListScroll = (contentHeight > panelHeight) ? (contentHeight - panelHeight + 40.0f) : 0.0f;
+	}
+	else
+	{
+		// Default size when no model
+		materialListRect = {(float)width - 310.0f, 170.0f, 300.0f, 200.0f};
+	}
 }
 
 void Gui::render()
@@ -408,6 +441,13 @@ void Gui::render()
 		{
 			renderSubmenu();
 		}
+	}
+	
+	// Render model info and material list panels
+	if (currentModel)
+	{
+		renderModelInfo();
+		renderMaterialList();
 	}
 	
 	// Restore OpenGL state
@@ -458,12 +498,13 @@ void Gui::renderDropdown()
 	drawRect(dropdownRect.x, dropdownRect.y, 2.0f, dropdownRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
 	drawRect(dropdownRect.x + dropdownRect.width - 2.0f, dropdownRect.y, 2.0f, dropdownRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
 	
-	float yOffset = dropdownRect.y + 5.0f;
+	float yOffset = dropdownRect.y + 3.0f;
 	
 	// TY1 category
 	if (!ty1Models.empty())
 	{
-		glm::vec4 bgColor = (hoveredCategory == 1) ? glm::vec4(0.2f, 0.4f, 0.7f, 1.0f) : glm::vec4(0.15f, 0.3f, 0.55f, 1.0f);
+		// Blue when hovered, gray when not
+		glm::vec4 bgColor = (hoveredCategory == 1) ? glm::vec4(0.2f, 0.4f, 0.7f, 1.0f) : glm::vec4(0.3f, 0.3f, 0.3f, 1.0f);
 		drawRect(dropdownRect.x + 5.0f, yOffset, dropdownRect.width - 10.0f, 25.0f, bgColor);
 		
 		std::string categoryText = "TY 1 Models (" + std::to_string(ty1Models.size()) + ") >";
@@ -471,10 +512,15 @@ void Gui::renderDropdown()
 		yOffset += 30.0f;
 	}
 	
+	// CRITICAL: Rebind the shader for rectangles after drawText switched to text shader
+	glUseProgram(shaderProgram);
+	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+	
 	// TY2 category
 	if (!ty2Models.empty())
 	{
-		glm::vec4 bgColor = (hoveredCategory == 2) ? glm::vec4(0.7f, 0.35f, 0.2f, 1.0f) : glm::vec4(0.55f, 0.25f, 0.15f, 1.0f);
+		// Orange when hovered, gray when not
+		glm::vec4 bgColor = (hoveredCategory == 2) ? glm::vec4(0.7f, 0.35f, 0.2f, 1.0f) : glm::vec4(0.3f, 0.3f, 0.3f, 1.0f);
 		drawRect(dropdownRect.x + 5.0f, yOffset, dropdownRect.width - 10.0f, 25.0f, bgColor);
 		
 		std::string categoryText = "TY 2 Models (" + std::to_string(ty2Models.size()) + ") >";
@@ -609,6 +655,20 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				// Clicking on category doesn't do anything - must hover to open submenu
 				// Just ignore the click
 			}
+			else if (currentModel && materialListRect.contains(x, y))
+			{
+				// Handle material list clicks - toggle material enabled/disabled
+				float relativeY = y - (materialListRect.y + 45.0f) + materialListScroll;
+				int itemIndex = (int)(relativeY / 25.0f);
+				
+				if (itemIndex >= 0 && itemIndex < currentModel->getMeshCount())
+				{
+					auto& meshes = currentModel->getMeshes();
+					Mesh* mesh = meshes[itemIndex];
+					mesh->setEnabled(!mesh->isEnabled());
+					Debug::log("Toggled material " + std::to_string(itemIndex) + ": " + mesh->getMaterialName() + " -> " + (mesh->isEnabled() ? "ON" : "OFF"));
+				}
+			}
 			else
 			{
 				// Clicked outside, close everything
@@ -632,6 +692,9 @@ void Gui::onMouseMove(float x, float y)
 	hoveredSubmenuItem = -1;
 	if (submenuOpen && submenuRect.contains(x, y))
 	{
+		// Mouse is in submenu - keep hoveredCategory as is (don't reset it)
+		// This ensures the dropdown category stays highlighted
+		
 		float relativeY = y - submenuRect.y + scrollOffset - 5.0f; // -5.0f accounts for top padding
 		int itemIndex = (int)(relativeY / 25.0f);
 		
@@ -640,6 +703,21 @@ void Gui::onMouseMove(float x, float y)
 		if (itemIndex >= 0 && itemIndex < (int)modelList->size())
 		{
 			hoveredSubmenuItem = itemIndex;
+		}
+		// Don't process dropdown hover detection when in submenu
+		return;
+	}
+	
+	// Track hovered material item
+	hoveredMaterialItem = -1;
+	if (currentModel && materialListRect.contains(x, y))
+	{
+		float relativeY = y - (materialListRect.y + 45.0f) + materialListScroll;
+		int itemIndex = (int)(relativeY / 25.0f);
+		
+		if (itemIndex >= 0 && itemIndex < currentModel->getMeshCount())
+		{
+			hoveredMaterialItem = itemIndex;
 		}
 	}
 	
@@ -656,6 +734,8 @@ void Gui::onMouseMove(float x, float y)
 		{
 			if (relativeY >= yPos && relativeY < yPos + 25.0f)
 			{
+				// Always set hoveredCategory to 1 when hovering over TY1
+				// Only recalculate submenu if we just started hovering
 				if (hoveredCategory != 1)
 				{
 					hoveredCategory = 1;
@@ -701,6 +781,11 @@ void Gui::onMouseMove(float x, float y)
 						}
 					}
 				}
+				else
+				{
+					// Already hovering over TY1, just make sure it stays set
+					hoveredCategory = 1;
+				}
 				return;
 			}
 			yPos += 30.0f;
@@ -711,6 +796,8 @@ void Gui::onMouseMove(float x, float y)
 		{
 			if (relativeY >= yPos && relativeY < yPos + 25.0f)
 			{
+				// Always set hoveredCategory to 2 when hovering over TY2
+				// Only recalculate submenu if we just started hovering
 				if (hoveredCategory != 2)
 				{
 					hoveredCategory = 2;
@@ -756,23 +843,21 @@ void Gui::onMouseMove(float x, float y)
 						}
 					}
 				}
+				else
+				{
+					// Already hovering over TY2, just make sure it stays set
+					hoveredCategory = 2;
+				}
 				return;
 			}
 		}
 	}
-	else if (!submenuOpen || (submenuOpen && !submenuRect.contains(x, y)))
+	else if (dropdownOpen && !dropdownRect.contains(x, y) && (!submenuOpen || !submenuRect.contains(x, y)))
 	{
-		// Mouse left dropdown area without entering submenu
-		if (!submenuRect.contains(x, y))
-		{
-			// Only close submenu if mouse is not in submenu or dropdown
-			if (!dropdownRect.contains(x, y))
-			{
-				submenuOpen = false;
-				hoveredCategory = 0;
-				hoveredSubmenuItem = -1;
-			}
-		}
+		// Mouse is outside both dropdown and submenu - close everything
+		submenuOpen = false;
+		hoveredCategory = 0;
+		hoveredSubmenuItem = -1;
 	}
 }
 
@@ -791,7 +876,16 @@ void Gui::onScroll(float yoffset)
 			scrollOffset -= yoffset * 25.0f; // Scroll one item at a time
 			if (scrollOffset < 0.0f) scrollOffset = 0.0f;
 			if (scrollOffset > maxScroll) scrollOffset = maxScroll;
+			return; // Don't process other scroll targets
 		}
+	}
+	
+	// Scroll the material list when mouse is over it
+	if (currentModel && materialListRect.contains(mouseX, mouseY))
+	{
+		materialListScroll -= yoffset * 25.0f;
+		if (materialListScroll < 0.0f) materialListScroll = 0.0f;
+		if (materialListScroll > maxMaterialListScroll) materialListScroll = maxMaterialListScroll;
 	}
 }
 
@@ -827,6 +921,167 @@ void Gui::onKeyPress(int key)
 	else if (key == 269) // End
 	{
 		scrollOffset = maxScroll;
+	}
+}
+
+void Gui::setCurrentModel(Model* model, const std::string& modelName)
+{
+	currentModel = model;
+	currentModelName = modelName;
+	materialListScroll = 0.0f;
+	hoveredMaterialItem = -1;
+	
+	// Calculate material list panel size based on content
+	if (currentModel)
+	{
+		int materialCount = currentModel->getMeshCount();
+		// Header (title + instructions) = 40px, each material = 25px, padding = 10px
+		float contentHeight = 40.0f + (materialCount * 25.0f) + 10.0f;
+		
+		// Cap at a reasonable maximum height (70% of window height)
+		float maxHeight = windowHeight * 0.7f;
+		float panelHeight = (contentHeight < maxHeight) ? contentHeight : maxHeight;
+		
+		// Update material list rect
+		materialListRect = {(float)windowWidth - 310.0f, 170.0f, 300.0f, panelHeight};
+		
+		// Calculate scroll
+		maxMaterialListScroll = (contentHeight > panelHeight) ? (contentHeight - panelHeight + 40.0f) : 0.0f;
+	}
+}
+
+void Gui::clearCurrentModel()
+{
+	currentModel = nullptr;
+	materialListScroll = 0.0f;
+	hoveredMaterialItem = -1;
+	
+	// Reset material list to default size
+	materialListRect = {(float)windowWidth - 310.0f, 170.0f, 300.0f, 200.0f};
+}
+
+void Gui::renderModelInfo()
+{
+	if (!currentModel) return;
+	
+	glUseProgram(shaderProgram);
+	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
+	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+	
+	// Draw background
+	drawRect(modelInfoRect.x, modelInfoRect.y, modelInfoRect.width, modelInfoRect.height, glm::vec4(0.15f, 0.15f, 0.15f, 0.95f));
+	
+	// Draw border
+	drawRect(modelInfoRect.x, modelInfoRect.y, modelInfoRect.width, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(modelInfoRect.x, modelInfoRect.y + modelInfoRect.height - 2.0f, modelInfoRect.width, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(modelInfoRect.x, modelInfoRect.y, 2.0f, modelInfoRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(modelInfoRect.x + modelInfoRect.width - 2.0f, modelInfoRect.y, 2.0f, modelInfoRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	
+	float yOffset = modelInfoRect.y + 10.0f;
+	
+	// Title
+	drawText("MODEL INFO", modelInfoRect.x + 10.0f, yOffset, glm::vec4(1.0f, 1.0f, 0.5f, 1.0f));
+	yOffset += 15.0f;
+	
+	// Model name (truncated if too long)
+	std::string displayName = currentModelName;
+	if (displayName.length() > 32)
+		displayName = displayName.substr(0, 29) + "...";
+	drawText("Name: " + displayName, modelInfoRect.x + 10.0f, yOffset, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
+	yOffset += 15.0f;
+	
+	// Mesh count
+	drawText("Meshes: " + std::to_string(currentModel->getMeshCount()), modelInfoRect.x + 10.0f, yOffset, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
+	yOffset += 15.0f;
+	
+	// Vertex count
+	drawText("Vertices: " + std::to_string(currentModel->getTotalVertexCount()), modelInfoRect.x + 10.0f, yOffset, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
+	yOffset += 15.0f;
+	
+	// Triangle count
+	drawText("Triangles: " + std::to_string(currentModel->getTotalTriangleCount()), modelInfoRect.x + 10.0f, yOffset, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
+	yOffset += 15.0f;
+	
+	// Bounds info
+	std::string boundsStr = "Bounds: " + 
+		std::to_string((int)currentModel->bounds_size.x) + "x" + 
+		std::to_string((int)currentModel->bounds_size.y) + "x" + 
+		std::to_string((int)currentModel->bounds_size.z);
+	drawText(boundsStr, modelInfoRect.x + 10.0f, yOffset, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
+	yOffset += 15.0f;
+	
+	// Collider count
+	drawText("Colliders: " + std::to_string(currentModel->colliders.size()), modelInfoRect.x + 10.0f, yOffset, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
+}
+
+void Gui::renderMaterialList()
+{
+	if (!currentModel) return;
+	
+	glUseProgram(shaderProgram);
+	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
+	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+	
+	// Draw background
+	drawRect(materialListRect.x, materialListRect.y, materialListRect.width, materialListRect.height, glm::vec4(0.12f, 0.12f, 0.12f, 0.95f));
+	
+	// Draw border
+	drawRect(materialListRect.x, materialListRect.y, materialListRect.width, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(materialListRect.x, materialListRect.y + materialListRect.height - 2.0f, materialListRect.width, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(materialListRect.x, materialListRect.y, 2.0f, materialListRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(materialListRect.x + materialListRect.width - 2.0f, materialListRect.y, 2.0f, materialListRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	
+	// Title
+	drawText("MATERIALS", materialListRect.x + 10.0f, materialListRect.y + 10.0f, glm::vec4(1.0f, 1.0f, 0.5f, 1.0f));
+	
+	// Instructions
+	drawText("Click to toggle", materialListRect.x + 10.0f, materialListRect.y + 25.0f, glm::vec4(0.7f, 0.7f, 0.7f, 1.0f));
+	
+	float yOffset = materialListRect.y + 45.0f - materialListScroll;
+	
+	auto& meshes = currentModel->getMeshes();
+	
+	for (size_t i = 0; i < meshes.size(); i++)
+	{
+		if (yOffset >= materialListRect.y + 40.0f && yOffset < materialListRect.y + materialListRect.height - 5.0f)
+		{
+			Mesh* mesh = meshes[i];
+			bool isEnabled = mesh->isEnabled();
+			bool isHovered = (hoveredMaterialItem == (int)i);
+			
+			// Background color
+			glm::vec4 bgColor;
+			if (isHovered)
+				bgColor = glm::vec4(0.25f, 0.25f, 0.25f, 1.0f);
+			else
+				bgColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
+			
+			drawRect(materialListRect.x + 5.0f, yOffset, materialListRect.width - 10.0f, 20.0f, bgColor);
+			
+			// Checkbox
+			glm::vec4 checkboxColor = isEnabled ? glm::vec4(0.3f, 0.7f, 0.3f, 1.0f) : glm::vec4(0.7f, 0.3f, 0.3f, 1.0f);
+			drawRect(materialListRect.x + 10.0f, yOffset + 4.0f, 12.0f, 12.0f, checkboxColor);
+			
+			// Checkbox check mark (if enabled)
+			if (isEnabled)
+			{
+				drawText("X", materialListRect.x + 11.0f, yOffset + 6.0f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+			}
+			
+			// Material name (truncated if too long)
+			std::string matName = mesh->getMaterialName();
+			if (matName.empty()) matName = "unnamed_" + std::to_string(i);
+			if (matName.length() > 30)
+				matName = matName.substr(0, 27) + "...";
+			
+			glm::vec4 textColor = isEnabled ? glm::vec4(0.9f, 0.9f, 0.9f, 1.0f) : glm::vec4(0.6f, 0.6f, 0.6f, 1.0f);
+			drawText(matName, materialListRect.x + 28.0f, yOffset + 6.0f, textColor);
+			
+			// Show triangle count
+			std::string triCount = "(" + std::to_string(mesh->getTriangleCount()) + " tri)";
+			drawText(triCount, materialListRect.x + materialListRect.width - 80.0f, yOffset + 6.0f, glm::vec4(0.7f, 0.7f, 0.7f, 1.0f));
+		}
+		yOffset += 25.0f;
 	}
 }
 

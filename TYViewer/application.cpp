@@ -190,6 +190,12 @@ void Application::loadModel(const std::string& modelName, int archiveIndex)
 	{
 		models.push_back(loadedModel);
 		Debug::log("Successfully loaded model: " + modelName);
+		
+		// Update GUI with current model info
+		if (gui)
+		{
+			gui->setCurrentModel(loadedModel, modelName);
+		}
 	}
 	else
 	{
@@ -201,6 +207,12 @@ void Application::clearModels()
 {
 	models.clear();
 	// Note: Models are managed by the Content system, so we don't delete them here
+	
+	// Clear GUI model info
+	if (gui)
+	{
+		gui->clearCurrentModel();
+	}
 }
 void Application::run()
 {
@@ -382,6 +394,10 @@ void Application::render(Shader& shader)
 	{
 		renderer.draw(*model, shader);
 	}
+	
+	// Reset tint color to white after drawing models (in case last mesh had pink tint from being disabled)
+	shader.bind();
+	shader.setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
 
 	for (auto& label : labels)
 	{
@@ -391,6 +407,8 @@ void Application::render(Shader& shader)
 	basic->bind();
 	basic->setUniformMat4("VPMatrix", vpmatrix);
 	basic->setUniformMat4("modelMatrix", glm::mat4(1.0f));
+	// Also reset tint for basic shader (they might share the same shader program)
+	basic->setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
 
 	if (drawGrid)
 	{
