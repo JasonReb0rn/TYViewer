@@ -43,7 +43,14 @@ public:
 	Texture* defaultTexture = NULL;
 
 	void initialize();
-	bool loadRKV(const std::string& path);
+	bool loadRKV(const std::string& path, int archiveIndex = 0);
+	
+	// Get list of all .mdl files from a specific archive
+	std::vector<std::string> getModelList(int archiveIndex);
+	
+	// Set active archive for loading
+	void setActiveArchive(int archiveIndex);
+	int getActiveArchive() const { return activeArchiveIndex; }
 
 	template<typename T>
 	T* load(const std::string& name)
@@ -64,7 +71,8 @@ public:
 private:
 	void createDefaultTexture();
 
-	Archive* archive;
+	Archive* archives[2]; // 0 = TY1, 1 = TY2
+	int activeArchiveIndex;
 
 	std::unordered_map<std::string, Texture*> textures;
 	std::unordered_map<std::string, Shader*> shaders;

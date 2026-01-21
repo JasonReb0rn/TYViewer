@@ -17,6 +17,11 @@ void Application::resize(int width, int height)
 	camera.setAspectRatio((float)width / (float)height);
 
 	glViewport(0, 0, width, height);
+	
+	if (gui)
+	{
+		gui->resize(width, height);
+	}
 }
 
 Application::Application(GLFWwindow* window) :
@@ -25,7 +30,8 @@ Application::Application(GLFWwindow* window) :
 	camera(glm::vec3(0.0f, 20.0f, -100.0f), glm::vec3(90.0f, 0.0f, 0.0f), 70.0f, (float)Config::windowResolutionX / (float)Config::windowResolutionY, 0.2f, 30000.0f),
 	mesh(NULL),
 	grid(NULL),
-	shader(NULL)
+	shader(NULL),
+	gui(NULL)
 {}
 
 
@@ -34,26 +40,47 @@ void Application::initialize()
 	Debug::log("Initializing application...");
 	content.initialize();
 	
-	if (Config::archive.empty())
+	// Load archives (optional - can start without any)
+	bool ty1Loaded = false;
+	bool ty2Loaded = false;
+	
+	if (!Config::ty1_archive.empty())
 	{
-		Debug::log("ERROR: No archive path specified in config!");
-		std::cout << "ERROR: No archive path specified in config.cfg!" << std::endl;
-		std::cin.get();
-		terminate();
-		return;
+		Debug::log("Loading TY1 archive: " + Config::ty1_archive);
+		if (content.loadRKV(Config::ty1_archive, 0))
+		{
+			Debug::log("TY1 archive loaded successfully");
+			ty1Loaded = true;
+		}
+		else
+		{
+			Debug::log("Warning: Failed to load TY1 archive: " + Config::ty1_archive);
+		}
 	}
-
-	Debug::log("Loading archive: " + Config::archive);
-	if (!content.loadRKV(Config::archive))
+	
+	if (!Config::ty2_archive.empty())
 	{
-		Debug::log("ERROR: Failed to load archive: " + Config::archive);
-		std::cout << "ERROR: Failed to load archive: " + Config::archive << std::endl;
-		std::cout << "Have you entered correct path in 'config.cfg'?" << std::endl;
-		std::cin.get();
-		terminate();
-		return;
+		Debug::log("Loading TY2 archive: " + Config::ty2_archive);
+		if (content.loadRKV(Config::ty2_archive, 1))
+		{
+			Debug::log("TY2 archive loaded successfully");
+			ty2Loaded = true;
+		}
+		else
+		{
+			Debug::log("Warning: Failed to load TY2 archive: " + Config::ty2_archive);
+		}
 	}
-	Debug::log("Archive loaded successfully");
+	
+	// Set active archive to first loaded one
+	if (ty1Loaded)
+	{
+		content.setActiveArchive(0);
+	}
+	else if (ty2Loaded)
+	{
+		content.setActiveArchive(1);
+	}
 
 	Mouse::initialize(window);
 	Keyboard::initialize(window);
@@ -92,28 +119,88 @@ void Application::initialize()
 	basic->bind();
 	basic->setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
 
-	Model* loadedModel = nullptr;
-	if(Config::model != "")
+	// Initialize GUI
+	gui = new Gui();
+	gui->initialize(Config::windowResolutionX, Config::windowResolutionY);
+	
+	// Scan archives for models and populate GUI
+	std::vector<ModelEntry> modelEntries;
+	
+	if (ty1Loaded)
+	{
+		std::vector<std::string> ty1Models = content.getModelList(0);
+		Debug::log("Found " + std::to_string(ty1Models.size()) + " models in TY1 archive");
+		for (const auto& modelName : ty1Models)
+		{
+			ModelEntry entry;
+			entry.name = modelName;
+			entry.archiveName = "TY1";
+			entry.archiveIndex = 0;
+			modelEntries.push_back(entry);
+		}
+	}
+	
+	if (ty2Loaded)
+	{
+		std::vector<std::string> ty2Models = content.getModelList(1);
+		Debug::log("Found " + std::to_string(ty2Models.size()) + " models in TY2 archive");
+		for (const auto& modelName : ty2Models)
+		{
+			ModelEntry entry;
+			entry.name = modelName;
+			entry.archiveName = "TY2";
+			entry.archiveIndex = 1;
+			modelEntries.push_back(entry);
+		}
+	}
+	
+	gui->setModelList(modelEntries);
+	
+	// Set callback for model selection
+	gui->setOnModelSelected([this](const ModelEntry& entry) {
+		Debug::log("Model selected: " + entry.name + " from " + entry.archiveName);
+		loadModel(entry.name, entry.archiveIndex);
+	});
+	
+	// Load initial model if specified in config
+	if (!Config::model.empty() && (ty1Loaded || ty2Loaded))
 	{
 		Debug::log("Loading model from config: " + Config::model);
-		loadedModel = content.load<Model>(Config::model);
+		// Try to load from active archive
+		loadModel(Config::model, content.getActiveArchive());
 	}
 	else
 	{
-		Debug::log("Loading default model: act_01_ty.mdl");
-		loadedModel = content.load<Model>("act_01_ty.mdl");
+		Debug::log("No initial model specified, starting with empty viewport");
 	}
+}
 
-	if (loadedModel == nullptr)
+void Application::loadModel(const std::string& modelName, int archiveIndex)
+{
+	// Clear existing models
+	clearModels();
+	
+	// Set active archive
+	content.setActiveArchive(archiveIndex);
+	
+	// Load the model
+	Model* loadedModel = content.load<Model>(modelName);
+	
+	if (loadedModel != nullptr)
 	{
-		Debug::log("ERROR: Failed to load model! The program will exit.");
-		std::cout << "Failed to load model file!" << std::endl;
-		std::cin.get();
-		terminate();
-		return;
+		models.push_back(loadedModel);
+		Debug::log("Successfully loaded model: " + modelName);
 	}
+	else
+	{
+		Debug::log("Failed to load model: " + modelName);
+	}
+}
 
-	models.push_back(loadedModel);
+void Application::clearModels()
+{
+	models.clear();
+	// Note: Models are managed by the Content system, so we don't delete them here
 }
 void Application::run()
 {
@@ -145,6 +232,40 @@ void Application::terminate()
 	glfwTerminate();
 }
 
+void Application::onMouseButton(int button, int action, double x, double y)
+{
+	if (gui)
+	{
+		gui->onMouseButton(button, action, (float)x, (float)y);
+	}
+}
+
+void Application::onMouseMove(double x, double y)
+{
+	if (gui)
+	{
+		gui->onMouseMove((float)x, (float)y);
+	}
+}
+
+void Application::onScroll(double xoffset, double yoffset)
+{
+	if (gui)
+	{
+		// Always forward scroll to GUI first
+		gui->onScroll((float)yoffset);
+	}
+	// Note: We don't use scroll for camera in this app, only GUI
+}
+
+void Application::onKeyPress(int key)
+{
+	if (gui)
+	{
+		gui->onKeyPress(key);
+	}
+}
+
 void Application::update(float dt)
 {
 	float mouseInputX = Mouse::getMouseDelta().x;
@@ -159,7 +280,10 @@ void Application::update(float dt)
 		(Keyboard::isKeyHeld(GLFW_KEY_S)) ? -1.0f : 
 		0.0f;
 
-	if (Mouse::isButtonHeld(GLFW_MOUSE_BUTTON_MIDDLE))
+	// Only allow camera control if GUI is not being interacted with
+	bool guiInteracting = gui && gui->isInteracting();
+	
+	if (Mouse::isButtonHeld(GLFW_MOUSE_BUTTON_MIDDLE) && !guiInteracting)
 	{
 		camera.localRotate(glm::vec3(mouseInputX, -mouseInputY, 0.0f) * 0.1f);
 	}
@@ -300,6 +424,12 @@ void Application::render(Shader& shader)
 				renderer.drawSphere(bone.defaultPosition, 2.0f, glm::vec4(1, 1, 1, 1));
 			}
 		}
+	}
+
+	// Render GUI on top
+	if (gui)
+	{
+		gui->render();
 	}
 
 	renderer.render(window);

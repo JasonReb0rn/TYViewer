@@ -22,6 +22,7 @@
 #include "grid.h"
 
 #include "config.h"
+#include "gui/gui.h"
 
 class Application
 {
@@ -40,6 +41,16 @@ public:
 	void render(Shader& shader);
 
 	void resize(int width, int height);
+	
+	// Model management
+	void loadModel(const std::string& modelName, int archiveIndex);
+	void clearModels();
+	
+	// Input forwarding to GUI
+	void onMouseButton(int button, int action, double x, double y);
+	void onMouseMove(double x, double y);
+	void onScroll(double xoffset, double yoffset);
+	void onKeyPress(int key);
 
 private:
 	bool drawGrid = true;
@@ -64,4 +75,6 @@ private:
 	std::vector<Model*> models;
 	std::vector<Text*> labels;
 	Mesh* mesh;
+	
+	Gui* gui;
 };

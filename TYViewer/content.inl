@@ -1,6 +1,7 @@
 template<>
 inline Texture* Content::load(const std::string& name)
 {
+	Archive* archive = archives[activeArchiveIndex];
 	if (archive == NULL)
 	{
 		Debug::log("Failed to load asset because no archive is loaded!");
@@ -28,6 +29,7 @@ inline Texture* Content::load(const std::string& name)
 template<>
 inline Shader* Content::load(const std::string& name)
 {
+	Archive* archive = archives[activeArchiveIndex];
 	if (archive == NULL)
 	{
 		Debug::log("Failed to load asset because no archive is loaded!");
@@ -128,6 +130,7 @@ inline Shader* Content::load(const std::string& name)
 template<>
 inline Model* Content::load(const std::string& name)
 {
+	Archive* archive = archives[activeArchiveIndex];
 	if (archive == NULL)
 	{
 		Debug::log("Failed to load asset because no archive is loaded!");
@@ -894,6 +897,7 @@ inline Model* Content::load(const std::string& name)
 template<>
 inline Font* Content::load(const std::string& name)
 {
+	Archive* archive = archives[activeArchiveIndex];
 	if (archive == NULL)
 	{
 		Debug::log("Failed to load asset because no archive is loaded!");

@@ -7,7 +7,8 @@ class Config
 {
 public:
 	static std::string model;
-	static std::string archive;
+	static std::string ty1_archive;
+	static std::string ty2_archive;
 
 	static unsigned int windowResolutionX;
 	static unsigned int windowResolutionY;

@@ -18,7 +18,10 @@ void Mouse::initialize(GLFWwindow* window)
 {
 	instance = new Mouse();
 
-	glfwSetScrollCallback(window, onMouseScrolled);
+	// NOTE: We do NOT set the scroll callback here anymore!
+	// The scroll callback is set in main.cpp and forwarded to the GUI.
+	// The Mouse class stores scroll values via getMouseScrollDelta() method if needed.
+	// glfwSetScrollCallback(window, onMouseScrolled);  // REMOVED - was overwriting main callback!
 
 	for (int i = 0; i < GLFW_MOUSE_BUTTON_LAST; i++)
 	{

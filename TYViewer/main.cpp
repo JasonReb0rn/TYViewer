@@ -15,6 +15,40 @@ void onWindowResized(GLFWwindow* window, int width, int height)
 	application->resize(width, height);
 }
 
+void onMouseButton(GLFWwindow* window, int button, int action, int mods)
+{
+	double xpos, ypos;
+	glfwGetCursorPos(window, &xpos, &ypos);
+	application->onMouseButton(button, action, xpos, ypos);
+}
+
+void onCursorPos(GLFWwindow* window, double xpos, double ypos)
+{
+	// Debug: Uncomment to verify callbacks are working
+	// std::cout << "Mouse moved: " << xpos << ", " << ypos << std::endl;
+	
+	if (application)
+	{
+		application->onMouseMove(xpos, ypos);
+	}
+}
+
+void onScroll(GLFWwindow* window, double xoffset, double yoffset)
+{
+	if (application)
+	{
+		application->onScroll(xoffset, yoffset);
+	}
+}
+
+void onKeyPress(GLFWwindow* window, int key, int scancode, int action, int mods)
+{
+	if (action == GLFW_PRESS || action == GLFW_REPEAT)
+	{
+		application->onKeyPress(key);
+	}
+}
+
 int main(int argc, char* argv[])
 {
 	Debug::log("TYViewer starting...");
@@ -80,6 +114,10 @@ int main(int argc, char* argv[])
 
 	Debug::log("OpenGL initialized successfully");
 	glfwSetWindowSizeCallback(window, onWindowResized);
+	glfwSetMouseButtonCallback(window, onMouseButton);
+	glfwSetCursorPosCallback(window, onCursorPos);
+	glfwSetScrollCallback(window, onScroll);
+	glfwSetKeyCallback(window, onKeyPress);
 
 	Debug::log("Creating application instance...");
 	application = new Application(window);

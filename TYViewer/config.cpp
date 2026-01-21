@@ -6,7 +6,8 @@
 #include <iostream>
 
 std::string Config::model = "";
-std::string Config::archive = "";
+std::string Config::ty1_archive = "";
+std::string Config::ty2_archive = "";
 
 unsigned int Config::windowResolutionX = 1280;
 unsigned int Config::windowResolutionY = 720;
@@ -25,7 +26,8 @@ bool Config::save(const std::string& path)
 		return false;
 
 	stream << "Model" << "=" << model << std::endl;
-	stream << "Archive" << "=" << archive << std::endl;
+	stream << "TY1_Archive" << "=" << ty1_archive << std::endl;
+	stream << "TY2_Archive" << "=" << ty2_archive << std::endl;
 
 	stream << "WindowResolutionX" << "=" << std::to_string(windowResolutionX) << std::endl;
 	stream << "WindowResolutionY" << "=" << std::to_string(windowResolutionY) << std::endl;
@@ -65,9 +67,13 @@ bool Config::load(const std::string& path)
 		{
 			model = value;
 		}
-		else if (name == "Archive")
+		else if (name == "TY1_Archive")
 		{
-			archive = value;
+			ty1_archive = value;
+		}
+		else if (name == "TY2_Archive")
+		{
+			ty2_archive = value;
 		}
 
 		else if (name == "WindowResolutionX")
@@ -95,4 +101,7 @@ bool Config::load(const std::string& path)
 			backgroundB = rgb[2];
 		}
 	}
+	
+	stream.close();
+	return true;
 }

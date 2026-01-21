@@ -1,14 +1,41 @@
 #include "content.h"
+#include <algorithm>
 
 void Content::initialize()
 {
 	createDefaultTexture();
+	archives[0] = nullptr;
+	archives[1] = nullptr;
+	activeArchiveIndex = 0;
 }
 
-bool Content::loadRKV(const std::string& path)
+bool Content::loadRKV(const std::string& path, int archiveIndex)
 {
-	archive = new Archive();
-	return archive->load(path);
+	if (archiveIndex < 0 || archiveIndex > 1)
+		return false;
+	
+	archives[archiveIndex] = new Archive();
+	return archives[archiveIndex]->load(path);
+}
+
+std::vector<std::string> Content::getModelList(int archiveIndex)
+{
+	std::vector<std::string> modelList;
+	
+	if (archiveIndex < 0 || archiveIndex > 1 || archives[archiveIndex] == nullptr)
+		return modelList;
+	
+	// Get all .mdl files from archive
+	Archive* arc = archives[archiveIndex];
+	modelList = arc->getFilesByExtension("mdl");
+	
+	return modelList;
+}
+
+void Content::setActiveArchive(int archiveIndex)
+{
+	if (archiveIndex >= 0 && archiveIndex <= 1)
+		activeArchiveIndex = archiveIndex;
 }
 
 void Content::createDefaultTexture()

@@ -158,6 +158,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="glad\src\glad.c" />
+    <ClCompile Include="gui\gui.cpp" />
     <ClCompile Include="loader\archive.cpp" />
     <ClCompile Include="config.cpp" />
     <ClCompile Include="grid.cpp" />
@@ -181,6 +182,7 @@
     <ClCompile Include="util\parser.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="gui\gui.h" />
     <ClInclude Include="loader\archive.h" />
     <ClInclude Include="grid.h" />
     <ClInclude Include="loader\assets\mdg.h" />

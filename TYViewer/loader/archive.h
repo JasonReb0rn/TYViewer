@@ -46,6 +46,8 @@ public:
 
 	bool getFile(const std::string& name, File& file);
 	bool getFileData(const std::string& name, std::vector<char>& data);
+	std::vector<std::string> getAllFiles() const;
+	std::vector<std::string> getFilesByExtension(const std::string& ext) const;
 
 	std::string path;
 private:

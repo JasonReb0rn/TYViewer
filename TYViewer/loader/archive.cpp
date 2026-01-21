@@ -93,6 +93,32 @@ bool Archive::getFileData(const std::string& name, std::vector<char>& data)
 	return false;
 }
 
+std::vector<std::string> Archive::getAllFiles() const
+{
+	std::vector<std::string> fileList;
+	for (const auto& pair : files)
+	{
+		fileList.push_back(pair.second.name);
+	}
+	return fileList;
+}
+
+std::vector<std::string> Archive::getFilesByExtension(const std::string& ext) const
+{
+	std::vector<std::string> fileList;
+	std::string lowerExt = ext;
+	std::transform(lowerExt.begin(), lowerExt.end(), lowerExt.begin(), ::tolower);
+	
+	for (const auto& pair : files)
+	{
+		if (pair.second.extension() == lowerExt)
+		{
+			fileList.push_back(pair.second.name);
+		}
+	}
+	return fileList;
+}
+
 void Archive::identify()
 {
 	std::ifstream stream(path, std::ios::binary | std::ios::beg);
