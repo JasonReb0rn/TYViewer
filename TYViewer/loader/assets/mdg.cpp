@@ -657,6 +657,7 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 				//   +28-35: Unknown (2 floats, often constant per mesh)
 				//   +36-47: Normal (3 floats)
 				std::vector<mdl2::Vertex> allVertices(totalVertices);
+				std::vector<std::array<float, 2>> rawUvs(totalVertices);
 				size_t currentOffset = vertexDataOffset;
 				
 				// Verify we have enough data
@@ -674,8 +675,8 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 					size_t vertexOffset = currentOffset + (i * VERTEX_STRIDE);
 					
 					// UV at +4
-					allVertices[i].texcoord[0] = from_bytes<float>(buffer, vertexOffset + 4);
-					allVertices[i].texcoord[1] = 1.0f - from_bytes<float>(buffer, vertexOffset + 8);
+					rawUvs[i][0] = from_bytes<float>(buffer, vertexOffset + 4);
+					rawUvs[i][1] = 1.0f - from_bytes<float>(buffer, vertexOffset + 8);
 					
 					// Position at +12
 					allVertices[i].position[0] = from_bytes<float>(buffer, vertexOffset + 12);
@@ -697,6 +698,56 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 					allVertices[i].colour[1] = 1.0f;
 					allVertices[i].colour[2] = 1.0f;
 					allVertices[i].colour[3] = 1.0f;
+				}
+
+				// Heuristic: if adjacent duplicate positions have mismatched UVs, UVs may be shifted by +1.
+				size_t adjacentPairs = 0;
+				size_t matchesShift0 = 0;
+				size_t matchesShift1 = 0;
+				for (size_t i = 0; i + 1 < totalVertices; i++)
+				{
+					bool samePos = std::abs(allVertices[i].position[0] - allVertices[i + 1].position[0]) < 0.00001f &&
+						std::abs(allVertices[i].position[1] - allVertices[i + 1].position[1]) < 0.00001f &&
+						std::abs(allVertices[i].position[2] - allVertices[i + 1].position[2]) < 0.00001f;
+					if (!samePos)
+					{
+						continue;
+					}
+
+					adjacentPairs++;
+					bool sameUv0 = std::abs(rawUvs[i][0] - rawUvs[i + 1][0]) < 0.00001f &&
+						std::abs(rawUvs[i][1] - rawUvs[i + 1][1]) < 0.00001f;
+					if (sameUv0)
+					{
+						matchesShift0++;
+					}
+
+					if (i + 2 < totalVertices)
+					{
+						bool sameUv1 = std::abs(rawUvs[i + 1][0] - rawUvs[i + 2][0]) < 0.00001f &&
+							std::abs(rawUvs[i + 1][1] - rawUvs[i + 2][1]) < 0.00001f;
+						if (sameUv1)
+						{
+							matchesShift1++;
+						}
+					}
+				}
+
+				bool useShiftedUvs = (adjacentPairs > 0 && matchesShift1 > matchesShift0);
+				if (useShiftedUvs)
+				{
+					Debug::log("MDG PC: Using +1 UV shift based on duplicate matches");
+				}
+
+				for (size_t i = 0; i < totalVertices; i++)
+				{
+					size_t uvIndex = i;
+					if (useShiftedUvs && i + 1 < totalVertices)
+					{
+						uvIndex = i + 1;
+					}
+					allVertices[i].texcoord[0] = rawUvs[uvIndex][0];
+					allVertices[i].texcoord[1] = rawUvs[uvIndex][1];
 				}
 				currentOffset += totalVertices * VERTEX_STRIDE;
 				
@@ -774,16 +825,22 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 					{
 						stripSum += count;
 					}
+					const size_t stripCount = stripVertexCounts.size();
+					const size_t stripDegenerate2Sum = stripSum + (stripCount > 0 ? (stripCount - 1) * 2 : 0);
+					const size_t stripDegenerate1Sum = stripSum + (stripCount > 0 ? (stripCount - 1) : 0);
+					const bool countsIncludeDegenerates = (stripSum == totalVertices);
+					const bool countsExcludeDegenerates2 = (stripDegenerate2Sum == totalVertices);
+					const bool countsExcludeDegenerates1 = (!countsExcludeDegenerates2 && stripDegenerate1Sum == totalVertices);
+
 					Debug::log("MDG PC: Strip vertex count sum=" + std::to_string(stripSum) + " totalVertices=" + std::to_string(totalVertices));
-					if (stripSum == totalVertices)
+					if (countsIncludeDegenerates || countsExcludeDegenerates2 || countsExcludeDegenerates1)
 					{
 						meshData.stripVertexCounts = stripVertexCounts;
-						Debug::log("MDG PC: Using per-strip index generation");
+						Debug::log("MDG PC: Using per-strip index generation (counts align)");
 					}
 					else
 					{
-						Debug::log("MDG PC: Strip vertex count sum mismatch (sum=" + std::to_string(stripSum) +
-							", total=" + std::to_string(totalVertices) + "), using single strip");
+						Debug::log("MDG PC: Strip counts don't align, using single strip");
 					}
 				}
 				meshData.textureIndex = ti;

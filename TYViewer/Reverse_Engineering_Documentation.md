@@ -111,52 +111,36 @@ MDG PC: Parsed Z vertices
 Successfully created model: P0486_B1FlowerPot.mdl with N meshes
 ```
 
-## Reverse Engineering Findings - CONFIRMED WORKING
+## Reverse Engineering Findings
 
-### FULLY CONFIRMED (95%+ accuracy):
-1. **Vertex stride is EXACTLY 48 bytes**
-   - Tested with multiple models
-   - All vertices parse correctly with this stride
-   
-2. **Position data at offset +12 is 100% CORRECT**
-   - Offset: +12 to +23 (12 bytes, 3 floats: XYZ)
-   - Models render with correct geometry
-   - Bounding boxes match perfectly
-   - This is the most critical finding!
+### CONFIRMED
+1. **Vertex stride is 48 bytes**
+   - Verified across multiple models.
 
-3. **Bounding boxes are CORRECT**
-   - Parsed from MDL3 component descriptions
-   - Match the actual rendered geometry
-   
-4. **File structure is CONFIRMED**
-   - All mesh headers come first
-   - Followed by one continuous vertex data block
-   - Vertices are interleaved (NOT structure-of-arrays)
-   - Position/normal are floats; UVs are floats too (with V flipped)
-   
-5. **Vertex data offset search algorithm WORKS**
-   - Validate Position (+12) and Normal (+36)
-   - Mesh headers can contain valid positions but invalid normals
-   - Offset is after the last mesh header, aligned to 4 bytes
-   
-6. **Normal data appears correct**
-7. **Mesh vertex counts are stored in the header**
-   - Base count at +0x00, duplicate count at +0x04
-   - Total vertices = base + duplicate
-   - Duplicate vertices are degenerate strip connectors
-   - Offset: +36 to +47 (12 bytes, 3 floats: XYZ)
-   - Values are normalized (-1 to +1 range)
-   - Lighting appears reasonable on models
+2. **Position data at offset +12 is correct**
+   - Offset: +12 to +23 (3 floats, XYZ).
+   - Geometry renders correctly; bounds line up.
 
-### PARTIALLY WORKING (Needs Investigation):
+3. **Normals at offset +36 are correct**
+   - Offset: +36 to +47 (3 floats, XYZ).
+   - Values are normalized; lighting looks reasonable.
 
-1. **UVs are at +4/+8 as floats, but still not 100% correct**
-   - Breakthrough: UVs now land in the correct regions ~50% of the time
-   - Formula in code right now:
-     * `u = float at +4`
-     * `v = 1.0 - float at +8`
-   - Stretching/warping still happens on some faces (often “every other face”)
-   - This looks like strip/degenerate handling rather than UV storage
+4. **File layout is consistent**
+   - Mesh headers first, then one contiguous vertex block.
+   - Vertices are interleaved (array-of-structs), not split by attribute.
+
+5. **Mesh vertex counts come from the header**
+   - Base count (+0x00) + duplicate count (+0x04) = total vertices.
+   - Duplicates act as strip connectors.
+
+6. **Vertex block offset search works**
+   - Validate Position (+12) and Normal (+36).
+   - Skip header regions that can contain false positives.
+
+7. **UVs are float32 at +4/+8 with a +1 vertex shift**
+   - Raw UVs are stored one vertex ahead of their positions.
+   - Applying a +1 shift fixes the “every other face” UV warping.
+   - V still needs flipping (`v = 1.0 - rawV`).
 
 ### UNKNOWN/UNCLEAR:
 1. **Vertex Colors**: Not found in the 48-byte vertex data
@@ -188,54 +172,33 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
    - +0x08-0x0B: Possibly animation node index + padding
    - May contain material IDs or LOD flags
 
-## Next Steps (Priority Order)
+## Next Steps
 
-### CRITICAL - Fix remaining UV stretching:
-1. **Degenerate/strip handling**
-   - UVs are mostly right now, but some faces stretch badly
-   - Feels like strip boundaries or degenerate handling is wrong
-   - Need to verify how strip descriptors are meant to be used (low-byte counts don’t sum to total vertices in some files)
-   - Consider deriving strip boundaries from degenerate runs instead of descriptor counts
+### HIGH PRIORITY
+1. **Validate +1 UV shift across more TY 2 PC models**
+   - Confirm it holds when connector duplicates are sparse or absent.
 
-### MEDIUM Priority:
-3. **Understand BBox field (+24-31)**: May be related to UV coordinate space
-4. **Test with more models**: Verify 48-byte format is universal
-5. **Investigate vertex colors**: Find where they're stored (if anywhere)
+### MEDIUM PRIORITY
+2. **Understand the +28..+35 floats**
+   - Often constant per mesh; may be scale or bounds data.
+3. **Investigate vertex colors**
+   - Not found in the 48-byte vertex stream yet.
 
-### LOW Priority:
-6. **Optimize vertex search**: Cache offset for faster loading
-7. **Clarify weight field**: Test with animated/skinned meshes
-8. **Understand strip flags**: Analyze flag patterns across models
+### LOW PRIORITY
+4. **Clarify the +24 weight/modifier field**
+   - Always 1.0 in static meshes; likely skinning-related.
+5. **Analyze strip descriptor flags (high byte)**
+   - 0xA0, 0x20, 0xB0, 0x60 appear; purpose unknown.
+6. **Cache vertex data offset**
+   - Avoid repeated searches during load.
 
 ## Testing Results
 
-### Test Model: `P0486_B1FlowerPot.mdl/mdg` (TY 2 PC)
-- **Status**: Geometry WORKING, UVs ~50% correct
-- File sizes: MDL 1,028 bytes, MDG 14,048 bytes
-- Components: 8, Textures: 4, Meshes: 9, Strips: 32
-- Total vertices: 292 across all meshes (base + duplicate)
-- Vertex data starts at offset 264 (0x108)
-- **Result**: Lots of faces now land in the right texture regions, but some faces are stretched/warped
-
-### What Works:
-- Mesh geometry is correct (positions are accurate)
-- Normals appear correct (lighting looks reasonable)
-- Model structure and topology is correct
-- Missing faces resolved by treating meshes as a single strip with degenerate connectors
-
-### What Doesn't Work:
-- Some faces are still stretched or rotated unexpectedly
-- The “every other face” warp pattern points at strip/degenerate handling
-
 ### Test Model: `P0623_MovieLight.mdl/mdg` (TY 2 PC)
-- **Status**: UVs almost correct, still stretched or warped
-- Mesh has 610 vertices, strip descriptors present but sum doesn’t match base+dup
-- Same symptoms: correct regions, wrong stretching on alternating faces
-
-### Performance:
-- Vertex search algorithm finds correct offset (264)
-- All 292 vertices parse successfully
-- No crashes or errors during parsing
+- **Status**: UVs fully correct with +1 UV shift
+- Mesh has 610 vertices; strip descriptors do not sum to base+dup
+- Adjacent duplicate positions are connector vertices; UVs align after +1 shift
+- Vertex data starts at offset 244
 
 ## Methodology
 
@@ -256,13 +219,12 @@ The PC format is **completely different** from PS2 format:
 - PS2 uses VIF packets and complex per-strip parsing
 - PC uses simple interleaved 48-byte vertices in a single data block
 - PS2 has packed/fixed-point data, PC uses floats for positions/normals
-- **BUT**: UVs might still use packed format (needs investigation)
 - PC format is simpler to parse once the layout is understood!
 
 ### Current Status:
-- **MAJOR BREAKTHROUGH**: Geometry renders correctly with full face coverage
+- Geometry renders correctly with full face coverage
 - 48-byte stride confirmed
 - Header vertex counts (base + duplicate) are correct for mesh sizing
 - Search algorithm works reliably using position + normal validation
-- Collision meshes use `CM_` textures and should be skipped for rendering
-- **NEXT CHALLENGE**: UV coordinates need investigation
+- Collision meshes use `CM_` textures and are skipped for rendering
+- **UVs resolved**: float32 UVs require +1 vertex shift (plus V flip)

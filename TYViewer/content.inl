@@ -238,6 +238,55 @@ inline Model* Content::load(const std::string& name)
 				if (mdgLoaded)
 				{
 					Debug::log("Successfully loaded MDG file with " + std::to_string(mdgParser.meshes.size()) + " meshes");
+					auto deriveStripRanges = [](const std::vector<Vertex>& vertices)
+					{
+						std::vector<std::pair<size_t, size_t>> ranges;
+						const auto isSamePosition = [](const Vertex& a, const Vertex& b)
+						{
+							return std::abs(a.position.x - b.position.x) < 0.00001f &&
+								std::abs(a.position.y - b.position.y) < 0.00001f &&
+								std::abs(a.position.z - b.position.z) < 0.00001f;
+						};
+
+						const size_t count = vertices.size();
+						size_t startIndex = 0;
+						size_t i = 0;
+						while (i + 1 < count)
+						{
+							if (isSamePosition(vertices[i], vertices[i + 1]))
+							{
+								if (i + 1 > startIndex)
+								{
+									ranges.push_back({ startIndex, (i - startIndex) + 1 });
+								}
+
+								// If we have two duplicate pairs back-to-back, treat them as one connector.
+								if (i + 3 < count && isSamePosition(vertices[i + 2], vertices[i + 3]))
+								{
+									startIndex = i + 2;
+									if (startIndex + 1 < count && isSamePosition(vertices[startIndex], vertices[startIndex + 1]))
+									{
+										startIndex += 1;
+									}
+									i = startIndex;
+									continue;
+								}
+
+								startIndex = i + 1;
+								i = startIndex;
+								continue;
+							}
+							i++;
+						}
+
+						if (startIndex < count)
+						{
+							ranges.push_back({ startIndex, count - startIndex });
+						}
+
+						return ranges;
+					};
+
 					auto appendTriangleStripIndices = [](const std::vector<Vertex>& vertices, std::vector<unsigned int>& indices, size_t startIndex, size_t count, size_t& degenerateCount, size_t& totalTriangleCount, size_t& degenerateUvMismatch, size_t& stripBreaks)
 					{
 						const auto isSamePosition = [](const Vertex& a, const Vertex& b)
@@ -258,7 +307,6 @@ inline Model* Content::load(const std::string& name)
 						}
 
 						totalTriangleCount += (count - 2);
-						size_t parity = 0;
 						for (size_t i = 0; i + 2 < count; i++)
 						{
 							unsigned int i0 = static_cast<unsigned int>(startIndex + i);
@@ -278,12 +326,10 @@ inline Model* Content::load(const std::string& name)
 								{
 									degenerateUvMismatch++;
 									stripBreaks++;
-									parity = 0;
 								}
-								continue;
 							}
 
-							if ((parity & 1) == 0)
+							if ((i & 1) == 0)
 							{
 								indices.push_back(i0);
 								indices.push_back(i1);
@@ -295,7 +341,6 @@ inline Model* Content::load(const std::string& name)
 								indices.push_back(i0);
 								indices.push_back(i2);
 							}
-							parity++;
 						}
 					};
 
@@ -331,21 +376,88 @@ inline Model* Content::load(const std::string& name)
 							size_t totalTriangleCount = 0;
 							size_t degenerateUvMismatch = 0;
 							size_t stripBreaks = 0;
+							bool usedDerivedRanges = false;
 							if (!mdgMesh.stripVertexCounts.empty())
 							{
 								size_t startIndex = 0;
+								size_t stripSum = 0;
+								for (auto stripVertexCount : mdgMesh.stripVertexCounts)
+								{
+									stripSum += stripVertexCount;
+								}
+								const size_t stripCount = mdgMesh.stripVertexCounts.size();
+								const size_t stripDegenerate2Sum = stripSum + (stripCount > 0 ? (stripCount - 1) * 2 : 0);
+								const size_t stripDegenerate1Sum = stripSum + (stripCount > 0 ? (stripCount - 1) : 0);
+								const bool countsIncludeDegenerates = (stripSum == vertices.size());
+								const bool countsExcludeDegenerates2 = (stripDegenerate2Sum == vertices.size());
+								const bool countsExcludeDegenerates1 = (!countsExcludeDegenerates2 && stripDegenerate1Sum == vertices.size());
+								const bool countsAlign = countsIncludeDegenerates || countsExcludeDegenerates2 || countsExcludeDegenerates1;
+
+								if (!countsAlign)
+								{
+									auto ranges = deriveStripRanges(vertices);
+									if (!ranges.empty())
+									{
+										for (const auto& range : ranges)
+										{
+											if (range.second >= 3)
+											{
+												appendTriangleStripIndices(vertices, indices, range.first, range.second, degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
+											}
+										}
+										usedDerivedRanges = true;
+									}
+								}
+
+								if (usedDerivedRanges)
+								{
+									Debug::log("MDG PC: Derived strips from degenerate connectors");
+								}
+								else
+								{
 								for (auto stripVertexCount : mdgMesh.stripVertexCounts)
 								{
 									if (stripVertexCount >= 3)
 									{
 										appendTriangleStripIndices(vertices, indices, startIndex, stripVertexCount, degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
 									}
-									startIndex += stripVertexCount;
+									if (countsIncludeDegenerates)
+									{
+										startIndex += stripVertexCount;
+									}
+									else if (countsExcludeDegenerates2)
+									{
+										startIndex += stripVertexCount + 2;
+									}
+									else if (countsExcludeDegenerates1)
+									{
+										startIndex += stripVertexCount + 1;
+									}
+									else
+									{
+										startIndex += stripVertexCount;
+									}
+								}
 								}
 							}
 							else
 							{
-								appendTriangleStripIndices(vertices, indices, 0, vertices.size(), degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
+								auto ranges = deriveStripRanges(vertices);
+								if (!ranges.empty())
+								{
+									for (const auto& range : ranges)
+									{
+										if (range.second >= 3)
+										{
+											appendTriangleStripIndices(vertices, indices, range.first, range.second, degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
+										}
+									}
+									Debug::log("MDG PC: Derived strips from degenerate connectors");
+								}
+								else
+								{
+									appendTriangleStripIndices(vertices, indices, 0, vertices.size(), degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
+								}
 							}
 							Debug::log("MDG PC: Degenerate triangles skipped: " + std::to_string(degenerateCount) +
 								" of " + std::to_string(totalTriangleCount) +
@@ -399,21 +511,88 @@ inline Model* Content::load(const std::string& name)
 							size_t totalTriangleCount = 0;
 							size_t degenerateUvMismatch = 0;
 							size_t stripBreaks = 0;
+							bool usedDerivedRanges = false;
 							if (!mdgMesh.stripVertexCounts.empty())
 							{
 								size_t startIndex = 0;
+								size_t stripSum = 0;
+								for (auto stripVertexCount : mdgMesh.stripVertexCounts)
+								{
+									stripSum += stripVertexCount;
+								}
+								const size_t stripCount = mdgMesh.stripVertexCounts.size();
+								const size_t stripDegenerate2Sum = stripSum + (stripCount > 0 ? (stripCount - 1) * 2 : 0);
+								const size_t stripDegenerate1Sum = stripSum + (stripCount > 0 ? (stripCount - 1) : 0);
+								const bool countsIncludeDegenerates = (stripSum == vertices.size());
+								const bool countsExcludeDegenerates2 = (stripDegenerate2Sum == vertices.size());
+								const bool countsExcludeDegenerates1 = (!countsExcludeDegenerates2 && stripDegenerate1Sum == vertices.size());
+								const bool countsAlign = countsIncludeDegenerates || countsExcludeDegenerates2 || countsExcludeDegenerates1;
+
+								if (!countsAlign)
+								{
+									auto ranges = deriveStripRanges(vertices);
+									if (!ranges.empty())
+									{
+										for (const auto& range : ranges)
+										{
+											if (range.second >= 3)
+											{
+												appendTriangleStripIndices(vertices, indices, range.first, range.second, degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
+											}
+										}
+										usedDerivedRanges = true;
+									}
+								}
+
+								if (usedDerivedRanges)
+								{
+									Debug::log("MDG PC: Derived strips from degenerate connectors");
+								}
+								else
+								{
 								for (auto stripVertexCount : mdgMesh.stripVertexCounts)
 								{
 									if (stripVertexCount >= 3)
 									{
 										appendTriangleStripIndices(vertices, indices, startIndex, stripVertexCount, degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
 									}
-									startIndex += stripVertexCount;
+									if (countsIncludeDegenerates)
+									{
+										startIndex += stripVertexCount;
+									}
+									else if (countsExcludeDegenerates2)
+									{
+										startIndex += stripVertexCount + 2;
+									}
+									else if (countsExcludeDegenerates1)
+									{
+										startIndex += stripVertexCount + 1;
+									}
+									else
+									{
+										startIndex += stripVertexCount;
+									}
+								}
 								}
 							}
 							else
 							{
-								appendTriangleStripIndices(vertices, indices, 0, vertices.size(), degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
+								auto ranges = deriveStripRanges(vertices);
+								if (!ranges.empty())
+								{
+									for (const auto& range : ranges)
+									{
+										if (range.second >= 3)
+										{
+											appendTriangleStripIndices(vertices, indices, range.first, range.second, degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
+										}
+									}
+									Debug::log("MDG PC: Derived strips from degenerate connectors");
+								}
+								else
+								{
+									appendTriangleStripIndices(vertices, indices, 0, vertices.size(), degenerateCount, totalTriangleCount, degenerateUvMismatch, stripBreaks);
+								}
 							}
 							Debug::log("MDG PC: Degenerate triangles skipped: " + std::to_string(degenerateCount) +
 								" of " + std::to_string(totalTriangleCount) +
