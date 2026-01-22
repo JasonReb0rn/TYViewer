@@ -52,6 +52,8 @@ public:
 	void onChar(unsigned int codepoint);
 
 	bool isInteracting() const { return dropdownOpen || hovering || activeSearchCategory != 0; }
+	// True when the GUI expects typed characters (e.g., search box focused)
+	bool isTextInputActive() const { return activeSearchCategory != 0; }
 
 private:
 	// ---------------------------------------------------------------------
@@ -62,7 +64,8 @@ private:
 		MAT_NONE  = 0,
 		MAT_TINT  = 1 << 0, // trailing digits like "01" (tint/variant pass inferred)
 		MAT_GLASS = 1 << 1, // "...Glass" or "..._Glass"
-		MAT_SPEC  = 1 << 2  // "...Spec" or "..._Spec"
+		MAT_SPEC  = 1 << 2, // "...Spec" or "..._Spec"
+		MAT_OVERLAY = 1 << 3 // "...Overlay" or "..._Overlay"
 	};
 
 	struct ParsedMaterialName

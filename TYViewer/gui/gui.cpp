@@ -133,6 +133,13 @@ Gui::ParsedMaterialName Gui::parseMaterialName(const std::string& name)
 		stripSuffix("_Spec");
 	}
 
+	if (endsWith(out.baseName, "Overlay") || endsWith(out.baseName, "_Overlay"))
+	{
+		out.flags |= MAT_OVERLAY;
+		stripSuffix("Overlay");
+		stripSuffix("_Overlay");
+	}
+
 	// Trailing digits are commonly used for variant/tint passes (e.g. "...01").
 	// We treat ONLY trailing digits as a variant marker.
 	{
@@ -1432,6 +1439,11 @@ void Gui::renderMaterialList()
 			{
 				if (!tagText.empty()) tagText += ",";
 				tagText += " SPEC";
+			}
+			if (parsed.flags & MAT_OVERLAY)
+			{
+				if (!tagText.empty()) tagText += ",";
+				tagText += " OVERLAY";
 			}
 			if (!tagText.empty())
 			{

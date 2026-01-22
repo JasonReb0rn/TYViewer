@@ -19,6 +19,9 @@ public:
 	~Mesh();
 
 	virtual void draw(Shader& shader) const override;
+
+	// Raw vertex access (debug/overlay). Order matches parsed file order.
+	const std::vector<Vertex>& getVertices() const { return m_vertices; }
 	
 	// Material debugging
 	std::string getMaterialName() const { return m_materialName; }

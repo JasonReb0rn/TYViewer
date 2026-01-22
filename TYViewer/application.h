@@ -58,6 +58,7 @@ private:
 	bool drawBounds = true;
 	bool drawColliders = true;
 	bool drawBones = true;
+	bool drawVertexIds = false;
 
 	bool wireframe = false;
 
@@ -78,4 +79,17 @@ private:
 	Mesh* mesh;
 	
 	Gui* gui;
+
+private:
+	// ------------------------------------------------------------------
+	// Screen-space vertex index overlay ("V")
+	// ------------------------------------------------------------------
+	void initializeVertexIdOverlay();
+	void cleanupVertexIdOverlay();
+	void drawVertexIdOverlay(const glm::mat4& vpmatrix);
+
+	unsigned int vertexOverlayTextShaderProgram = 0;
+	unsigned int vertexOverlayTextVAO = 0;
+	unsigned int vertexOverlayTextVBO = 0;
+	unsigned int vertexOverlayFontTexture = 0;
 };

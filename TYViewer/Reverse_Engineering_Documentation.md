@@ -150,11 +150,16 @@ In practice, multiple “material names” often reuse the *same* underlying tex
 - **Trailing digits**: e.g. `A049_Elle01`
   - **Likely meaning**: a tint/variant pass (RGB tint applied on top of the same atlas).
   - **Evidence**: geometry is different but uses the same atlas regions; no distinct texture file is commonly present for the `01` suffix.
+  - **Update**: totally wrong lol.
 - **`Glass` suffix**: e.g. `A049_ElleGlass`
   - **Likely meaning**: semi-transparent rendering (alpha blend / alpha test / depth-write differences).
   - **Evidence**: still uses the same atlas, but should render with transparency semantics.
 - **`Spec` suffix**: e.g. `...Spec`
   - **Likely meaning**: specular/shinier material state (lighting/specular parameters), not necessarily a different diffuse map.
+- **`Overlay` suffix**: e.g. `...Overlay`
+  - **Observed behavior**: a black/white overlay texture rendered on top of the model on separate geometry.
+  - **Likely meaning**: clipped “lightmap” / baked lighting overlay pass (alpha-tested / masked overlay rather than a full transparency blend).
+  - **Note**: TYViewer currently does not implement special overlay compositing; this should be handled as a separate render pass later.
 
 **Important**: These are naming conventions observed in real model sets, and are not yet backed by a fully decoded “material definition” structure. Long term, we should map these suffixes to real render-state fields (likely from MDL3/MDG header bits), rather than relying on string heuristics.
 
