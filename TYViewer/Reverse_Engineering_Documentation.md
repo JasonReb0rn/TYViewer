@@ -142,6 +142,22 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
    - Applying a +1 shift fixes the “every other face” UV warping.
    - V still needs flipping (`v = 1.0 - rawV`).
 
+### OBSERVED / INFERRED (Material naming conventions)
+The TY2 PC pipeline appears to separate **mesh geometry** (MDG) from **material/texture slots** (MDL3 metadata). The strings that show up as “materials” in TYViewer are currently sourced from the MDL3 texture-name list and should be treated as **material slot identifiers**, not strictly as unique diffuse texture filenames.
+
+In practice, multiple “material names” often reuse the *same* underlying texture atlas, and the suffix encodes **render-state or variation**, not a different image.
+
+- **Trailing digits**: e.g. `A049_Elle01`
+  - **Likely meaning**: a tint/variant pass (RGB tint applied on top of the same atlas).
+  - **Evidence**: geometry is different but uses the same atlas regions; no distinct texture file is commonly present for the `01` suffix.
+- **`Glass` suffix**: e.g. `A049_ElleGlass`
+  - **Likely meaning**: semi-transparent rendering (alpha blend / alpha test / depth-write differences).
+  - **Evidence**: still uses the same atlas, but should render with transparency semantics.
+- **`Spec` suffix**: e.g. `...Spec`
+  - **Likely meaning**: specular/shinier material state (lighting/specular parameters), not necessarily a different diffuse map.
+
+**Important**: These are naming conventions observed in real model sets, and are not yet backed by a fully decoded “material definition” structure. Long term, we should map these suffixes to real render-state fields (likely from MDL3/MDG header bits), rather than relying on string heuristics.
+
 ### UNKNOWN/UNCLEAR:
 1. **Vertex Colors**: Not found in the 48-byte vertex data
    - Currently defaults to white (1,1,1,1)

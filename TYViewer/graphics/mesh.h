@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <string>
+#include <limits>
 
 #include "vertex.h"
 #include "texture.h"
@@ -24,8 +25,20 @@ public:
 	void setEnabled(bool enabled) { m_enabled = enabled; }
 	bool isEnabled() const { return m_enabled; }
 	
-	int getVertexCount() const { return m_vertices.size(); }
-	int getTriangleCount() const { return m_indices.size() / 3; }
+	// NOTE: UI/debug code expects `int`, but containers use `size_t`.
+	// Clamp to avoid overflow and silence C4267 warnings on x64.
+	int getVertexCount() const
+	{
+		const size_t count = m_vertices.size();
+		const size_t maxInt = static_cast<size_t>(std::numeric_limits<int>::max());
+		return (count > maxInt) ? std::numeric_limits<int>::max() : static_cast<int>(count);
+	}
+	int getTriangleCount() const
+	{
+		const size_t count = m_indices.size() / 3;
+		const size_t maxInt = static_cast<size_t>(std::numeric_limits<int>::max());
+		return (count > maxInt) ? std::numeric_limits<int>::max() : static_cast<int>(count);
+	}
 
 private:
 	void setup();

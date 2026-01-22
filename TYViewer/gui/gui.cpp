@@ -3,6 +3,7 @@
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <cctype>
+#include <string>
 #include <glm/gtc/type_ptr.hpp>
 #include "../debug.h"
 #include "../model.h"
@@ -94,6 +95,69 @@ Gui::Gui() :
 Gui::~Gui()
 {
 	cleanupGL();
+}
+
+Gui::ParsedMaterialName Gui::parseMaterialName(const std::string& name)
+{
+	ParsedMaterialName out;
+	out.baseName = name;
+	out.variantDigits.clear();
+	out.flags = MAT_NONE;
+
+	auto endsWith = [](const std::string& s, const std::string& suffix) -> bool
+	{
+		return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+	};
+
+	auto stripSuffix = [&](const std::string& suffix)
+	{
+		if (endsWith(out.baseName, suffix))
+		{
+			out.baseName.erase(out.baseName.size() - suffix.size());
+		}
+	};
+
+	// Detect common render-state suffixes first.
+	// NOTE: this is intentionally minimal; we don't yet decode real material state fields.
+	if (endsWith(out.baseName, "Glass") || endsWith(out.baseName, "_Glass"))
+	{
+		out.flags |= MAT_GLASS;
+		stripSuffix("Glass");
+		stripSuffix("_Glass");
+	}
+
+	if (endsWith(out.baseName, "Spec") || endsWith(out.baseName, "_Spec"))
+	{
+		out.flags |= MAT_SPEC;
+		stripSuffix("Spec");
+		stripSuffix("_Spec");
+	}
+
+	// Trailing digits are commonly used for variant/tint passes (e.g. "...01").
+	// We treat ONLY trailing digits as a variant marker.
+	{
+		size_t end = out.baseName.size();
+		size_t start = end;
+		while (start > 0 && out.baseName[start - 1] >= '0' && out.baseName[start - 1] <= '9')
+		{
+			start--;
+		}
+
+		if (start < end)
+		{
+			out.variantDigits = out.baseName.substr(start, end - start);
+			out.baseName.erase(start);
+			out.flags |= MAT_TINT;
+		}
+	}
+
+	// Trim any leftover trailing separators
+	while (!out.baseName.empty() && (out.baseName.back() == '_' || out.baseName.back() == '-'))
+	{
+		out.baseName.pop_back();
+	}
+
+	return out;
 }
 
 void Gui::initialize(int width, int height)
@@ -409,13 +473,18 @@ void Gui::resize(int width, int height)
 	// Recalculate material list size if we have a model
 	if (currentModel)
 	{
+		const float kHeaderHeight = 45.0f;   // title + instructions + gap to first item
+		const float kItemHeight = 34.0f;     // two-line entry
+		const float kBottomPad = 5.0f;
+
 		int materialCount = currentModel->getMeshCount();
-		float contentHeight = 40.0f + (materialCount * 25.0f) + 10.0f;
+		float contentHeight = kHeaderHeight + (materialCount * kItemHeight) + kBottomPad;
 		float maxHeight = height * 0.7f;
 		float panelHeight = (contentHeight < maxHeight) ? contentHeight : maxHeight;
 		
 		materialListRect = {(float)width - 310.0f, 170.0f, 300.0f, panelHeight};
-		maxMaterialListScroll = (contentHeight > panelHeight) ? (contentHeight - panelHeight + 40.0f) : 0.0f;
+		maxMaterialListScroll = (contentHeight > panelHeight) ? (contentHeight - panelHeight) : 0.0f;
+		if (materialListScroll > maxMaterialListScroll) materialListScroll = maxMaterialListScroll;
 	}
 	else
 	{
@@ -842,8 +911,10 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 			else if (currentModel && materialListRect.contains(x, y))
 			{
 				// Handle material list clicks - toggle material enabled/disabled
-				float relativeY = y - (materialListRect.y + 45.0f) + materialListScroll;
-				int itemIndex = (int)(relativeY / 25.0f);
+				const float kHeaderHeight = 45.0f;
+				const float kItemHeight = 34.0f;
+				float relativeY = y - (materialListRect.y + kHeaderHeight) + materialListScroll;
+				int itemIndex = (int)(relativeY / kItemHeight);
 				
 				if (itemIndex >= 0 && itemIndex < currentModel->getMeshCount())
 				{
@@ -908,8 +979,10 @@ void Gui::onMouseMove(float x, float y)
 	hoveredMaterialItem = -1;
 	if (currentModel && materialListRect.contains(x, y))
 	{
-		float relativeY = y - (materialListRect.y + 45.0f) + materialListScroll;
-		int itemIndex = (int)(relativeY / 25.0f);
+		const float kHeaderHeight = 45.0f;
+		const float kItemHeight = 34.0f;
+		float relativeY = y - (materialListRect.y + kHeaderHeight) + materialListScroll;
+		int itemIndex = (int)(relativeY / kItemHeight);
 		
 		if (itemIndex >= 0 && itemIndex < currentModel->getMeshCount())
 		{
@@ -1089,7 +1162,8 @@ void Gui::onScroll(float yoffset)
 	// Scroll the material list when mouse is over it
 	if (currentModel && materialListRect.contains(mouseX, mouseY))
 	{
-		materialListScroll -= yoffset * 25.0f;
+		const float kItemHeight = 34.0f;
+		materialListScroll -= yoffset * kItemHeight;
 		if (materialListScroll < 0.0f) materialListScroll = 0.0f;
 		if (materialListScroll > maxMaterialListScroll) materialListScroll = maxMaterialListScroll;
 	}
@@ -1190,9 +1264,12 @@ void Gui::setCurrentModel(Model* model, const std::string& modelName)
 	// Calculate material list panel size based on content
 	if (currentModel)
 	{
+		const float kHeaderHeight = 45.0f;   // title + instructions + gap to first item
+		const float kItemHeight = 34.0f;     // two-line entry
+		const float kBottomPad = 5.0f;
+
 		int materialCount = currentModel->getMeshCount();
-		// Header (title + instructions) = 40px, each material = 25px, padding = 10px
-		float contentHeight = 40.0f + (materialCount * 25.0f) + 10.0f;
+		float contentHeight = kHeaderHeight + (materialCount * kItemHeight) + kBottomPad;
 		
 		// Cap at a reasonable maximum height (70% of window height)
 		float maxHeight = windowHeight * 0.7f;
@@ -1202,7 +1279,7 @@ void Gui::setCurrentModel(Model* model, const std::string& modelName)
 		materialListRect = {(float)windowWidth - 310.0f, 170.0f, 300.0f, panelHeight};
 		
 		// Calculate scroll
-		maxMaterialListScroll = (contentHeight > panelHeight) ? (contentHeight - panelHeight + 40.0f) : 0.0f;
+		maxMaterialListScroll = (contentHeight > panelHeight) ? (contentHeight - panelHeight) : 0.0f;
 	}
 }
 
@@ -1273,6 +1350,12 @@ void Gui::renderModelInfo()
 void Gui::renderMaterialList()
 {
 	if (!currentModel) return;
+
+	const float kHeaderHeight = 45.0f;
+	const float kItemHeight = 34.0f;     // 2 lines (name + tags)
+	const float kItemBoxHeight = 30.0f;  // background fill for the item
+	const float kNameLineY = 4.0f;
+	const float kTagsLineY = 16.0f;
 	
 	glUseProgram(shaderProgram);
 	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
@@ -1293,7 +1376,11 @@ void Gui::renderMaterialList()
 	// Instructions
 	drawText("Click to toggle", materialListRect.x + 10.0f, materialListRect.y + 25.0f, glm::vec4(0.7f, 0.7f, 0.7f, 1.0f));
 	
-	float yOffset = materialListRect.y + 45.0f - materialListScroll;
+	// Clamp scroll in case panel was resized
+	if (materialListScroll < 0.0f) materialListScroll = 0.0f;
+	if (materialListScroll > maxMaterialListScroll) materialListScroll = maxMaterialListScroll;
+
+	float yOffset = materialListRect.y + kHeaderHeight - materialListScroll;
 	
 	auto& meshes = currentModel->getMeshes();
 	
@@ -1312,32 +1399,75 @@ void Gui::renderMaterialList()
 			else
 				bgColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
 			
-			drawRect(materialListRect.x + 5.0f, yOffset, materialListRect.width - 10.0f, 20.0f, bgColor);
+			drawRect(materialListRect.x + 5.0f, yOffset, materialListRect.width - 10.0f, kItemBoxHeight, bgColor);
 			
 			// Checkbox
 			glm::vec4 checkboxColor = isEnabled ? glm::vec4(0.3f, 0.7f, 0.3f, 1.0f) : glm::vec4(0.7f, 0.3f, 0.3f, 1.0f);
-			drawRect(materialListRect.x + 10.0f, yOffset + 4.0f, 12.0f, 12.0f, checkboxColor);
+			drawRect(materialListRect.x + 10.0f, yOffset + 9.0f, 12.0f, 12.0f, checkboxColor);
 			
 			// Checkbox check mark (if enabled)
 			if (isEnabled)
 			{
-				drawText("X", materialListRect.x + 11.0f, yOffset + 6.0f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+				drawText("X", materialListRect.x + 11.0f, yOffset + 11.0f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
 			}
 			
 			// Material name (truncated if too long)
 			std::string matName = mesh->getMaterialName();
 			if (matName.empty()) matName = "unnamed_" + std::to_string(i);
-			if (matName.length() > 30)
-				matName = matName.substr(0, 27) + "...";
+
+			ParsedMaterialName parsed = parseMaterialName(matName);
+			std::string tagText;
+			if (parsed.flags & MAT_TINT)
+			{
+				tagText += " TINT";
+				if (!parsed.variantDigits.empty())
+					tagText += parsed.variantDigits;
+			}
+			if (parsed.flags & MAT_GLASS)
+			{
+				if (!tagText.empty()) tagText += ",";
+				tagText += " GLASS";
+			}
+			if (parsed.flags & MAT_SPEC)
+			{
+				if (!tagText.empty()) tagText += ",";
+				tagText += " SPEC";
+			}
+			if (!tagText.empty())
+			{
+				tagText = tagText.substr(1); // remove leading space
+			}
+
+			std::string displayName = matName;
+
+			// Truncate name to fit the panel (8px per char font, leave room for tri count)
+			// ~210px available for name text on line 1: 26 chars @ 8px + padding.
+			if (displayName.length() > 26)
+				displayName = displayName.substr(0, 23) + "...";
 			
 			glm::vec4 textColor = isEnabled ? glm::vec4(0.9f, 0.9f, 0.9f, 1.0f) : glm::vec4(0.6f, 0.6f, 0.6f, 1.0f);
-			drawText(matName, materialListRect.x + 28.0f, yOffset + 6.0f, textColor);
+			drawText(displayName, materialListRect.x + 28.0f, yOffset + kNameLineY, textColor);
+
+			if (!tagText.empty())
+			{
+				glm::vec4 tagColor = isEnabled ? glm::vec4(0.65f, 0.75f, 1.0f, 1.0f) : glm::vec4(0.45f, 0.5f, 0.6f, 1.0f);
+				// Slightly dim when hovered to keep focus on the name line
+				if (isHovered && isEnabled)
+					tagColor = glm::vec4(0.55f, 0.65f, 0.9f, 1.0f);
+
+				// Truncate tags as well; they are informational and should not crowd the UI.
+				std::string tagLine = tagText;
+				if (tagLine.length() > 26)
+					tagLine = tagLine.substr(0, 23) + "...";
+
+				drawText(tagLine, materialListRect.x + 28.0f, yOffset + kTagsLineY, tagColor);
+			}
 			
 			// Show triangle count
 			std::string triCount = "(" + std::to_string(mesh->getTriangleCount()) + " tri)";
-			drawText(triCount, materialListRect.x + materialListRect.width - 80.0f, yOffset + 6.0f, glm::vec4(0.7f, 0.7f, 0.7f, 1.0f));
+			drawText(triCount, materialListRect.x + materialListRect.width - 80.0f, yOffset + kNameLineY, glm::vec4(0.7f, 0.7f, 0.7f, 1.0f));
 		}
-		yOffset += 25.0f;
+		yOffset += kItemHeight;
 	}
 }
 

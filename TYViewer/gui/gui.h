@@ -54,6 +54,26 @@ public:
 	bool isInteracting() const { return dropdownOpen || hovering || activeSearchCategory != 0; }
 
 private:
+	// ---------------------------------------------------------------------
+	// TY2 "material" name parsing (rudimentary suffix identification)
+	// ---------------------------------------------------------------------
+	enum MaterialNameFlags : unsigned int
+	{
+		MAT_NONE  = 0,
+		MAT_TINT  = 1 << 0, // trailing digits like "01" (tint/variant pass inferred)
+		MAT_GLASS = 1 << 1, // "...Glass" or "..._Glass"
+		MAT_SPEC  = 1 << 2  // "...Spec" or "..._Spec"
+	};
+
+	struct ParsedMaterialName
+	{
+		std::string baseName;      // name without suffix/variant (best-effort)
+		std::string variantDigits; // trailing digits, if any (e.g. "01")
+		unsigned int flags = MAT_NONE;
+	};
+
+	static ParsedMaterialName parseMaterialName(const std::string& name);
+
 	void renderDropdown();
 	void renderSubmenu();
 	void renderButton();

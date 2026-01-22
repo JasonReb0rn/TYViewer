@@ -352,6 +352,119 @@ inline Model* Content::load(const std::string& name)
 					{
 						// MDG meshes are already organized by texture/component
 						Debug::log("Using MDG meshes with MDL3 metadata");
+
+						// TY2 PC models sometimes list multiple "materials" that are actually variants of the same
+						// underlying texture (e.g. `A049_Elle`, `A049_Elle01`, `A049_ElleGlass`). The archive often
+						// only contains the base texture (e.g. `A049_Elle.dds`).
+						//
+						// If we blindly try to load `<TextureName>.dds` for each entry, missing variants will
+						// fall back to `defaultTexture` (pure white), which looks like "only the first material
+						// is textured".
+						//
+						// Fix: when a texture name isn't found, try common fallbacks before giving up.
+						Texture* lastGoodTexture = nullptr;
+						std::string lastGoodTextureName;
+
+						struct ResolvedTexture
+						{
+							Texture* texture = nullptr;        // will be `defaultTexture` on failure
+							std::string resolvedName;          // name we successfully loaded (without extension), if any
+						};
+
+						auto stripTrailingDigits = [](std::string s)
+						{
+							while (!s.empty() && s.back() >= '0' && s.back() <= '9')
+							{
+								s.pop_back();
+							}
+							return s;
+						};
+
+						auto stripSuffix = [](std::string s, const std::string& suffix)
+						{
+							if (suffix.empty() || s.size() < suffix.size())
+								return s;
+							if (s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0)
+							{
+								s.erase(s.size() - suffix.size());
+							}
+							return s;
+						};
+
+						auto loadTextureWithFallbacks = [&](const std::string& texName) -> ResolvedTexture
+						{
+							if (texName.empty())
+								return { defaultTexture, "" };
+
+							auto tryLoad = [&](const std::string& name) -> ResolvedTexture
+							{
+								if (name.empty())
+									return { defaultTexture, "" };
+
+								Texture* tex = load<Texture>(name + ".dds");
+								if (tex == defaultTexture)
+									return { defaultTexture, "" };
+
+								return { tex, name };
+							};
+
+							// Primary: exact name
+							{
+								ResolvedTexture r = tryLoad(texName);
+								if (r.texture != defaultTexture)
+									return r;
+							}
+
+							// Fallback 1: strip trailing digits (A049_Elle01 -> A049_Elle)
+							{
+								std::string base = stripTrailingDigits(texName);
+								if (!base.empty() && base != texName)
+								{
+									ResolvedTexture r = tryLoad(base);
+									if (r.texture != defaultTexture)
+									{
+										Debug::log("TY2: Texture fallback: " + texName + " -> " + base);
+										return r;
+									}
+								}
+							}
+
+							// Fallback 2: strip common suffix (A049_ElleGlass -> A049_Elle)
+							{
+								std::string base = stripSuffix(texName, "Glass");
+								base = stripSuffix(base, "_Glass");
+								if (!base.empty() && base != texName)
+								{
+									ResolvedTexture r = tryLoad(base);
+									if (r.texture != defaultTexture)
+									{
+										Debug::log("TY2: Texture fallback: " + texName + " -> " + base);
+										return r;
+									}
+								}
+							}
+
+							// Fallback 3: use model base name (often matches the actual texture stored)
+							if (!baseName.empty())
+							{
+								ResolvedTexture r = tryLoad(baseName);
+								if (r.texture != defaultTexture)
+								{
+									Debug::log("TY2: Texture fallback: " + texName + " -> " + baseName);
+									return r;
+								}
+							}
+
+							// Fallback 4: reuse last successfully loaded texture for this model load
+							if (lastGoodTexture != nullptr)
+							{
+								Debug::log("TY2: Texture fallback: " + texName + " -> (reuse) " + lastGoodTextureName);
+								return { lastGoodTexture, lastGoodTextureName };
+							}
+
+							return { defaultTexture, "" };
+						};
+
 						for (size_t i = 0; i < mdgParser.meshes.size(); i++)
 						{
 							std::vector<Vertex> vertices;
@@ -474,8 +587,14 @@ inline Model* Content::load(const std::string& name)
 								textureName = mdl.mdl3Metadata.TextureNames[mdgMesh.textureIndex];
 							}
 							
-						Texture* texture = load<Texture>(textureName + ".dds");
-						if (texture == defaultTexture && !textureName.empty())
+						ResolvedTexture resolved = loadTextureWithFallbacks(textureName);
+						Texture* texture = resolved.texture;
+						if (texture != defaultTexture)
+						{
+							lastGoodTexture = texture;
+							lastGoodTextureName = resolved.resolvedName.empty() ? textureName : resolved.resolvedName;
+						}
+						else if (!textureName.empty())
 						{
 							std::cout << "Failed to load texture: '" + textureName + "' !" << std::endl
 								<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;

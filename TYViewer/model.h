@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <limits>
 
 #include "graphics/drawable.h"
 #include "graphics/transformable.h"
@@ -35,7 +36,12 @@ public:
 	// For GUI access
 	const std::vector<Mesh*>& getMeshes() const { return meshes; }
 	std::vector<Mesh*>& getMeshes() { return meshes; }
-	int getMeshCount() const { return meshes.size(); }
+	int getMeshCount() const
+	{
+		const size_t count = meshes.size();
+		const size_t maxInt = static_cast<size_t>(std::numeric_limits<int>::max());
+		return (count > maxInt) ? std::numeric_limits<int>::max() : static_cast<int>(count);
+	}
 	int getTotalVertexCount() const;
 	int getTotalTriangleCount() const;
 
