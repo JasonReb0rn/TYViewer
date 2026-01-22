@@ -49,6 +49,14 @@ void onKeyPress(GLFWwindow* window, int key, int scancode, int action, int mods)
 	}
 }
 
+void onChar(GLFWwindow* window, unsigned int codepoint)
+{
+	if (application)
+	{
+		application->onChar(codepoint);
+	}
+}
+
 int main(int argc, char* argv[])
 {
 	Debug::log("TYViewer starting...");
@@ -118,6 +126,7 @@ int main(int argc, char* argv[])
 	glfwSetCursorPosCallback(window, onCursorPos);
 	glfwSetScrollCallback(window, onScroll);
 	glfwSetKeyCallback(window, onKeyPress);
+	glfwSetCharCallback(window, onChar);
 
 	Debug::log("Creating application instance...");
 	application = new Application(window);

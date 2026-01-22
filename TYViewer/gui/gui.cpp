@@ -1,6 +1,8 @@
 #include "gui.h"
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#include <algorithm>
+#include <cctype>
 #include <glm/gtc/type_ptr.hpp>
 #include "../debug.h"
 #include "../model.h"
@@ -64,6 +66,11 @@ Gui::Gui() :
 	submenuOpen(false),
 	hoveredCategory(0),
 	hoveredSubmenuItem(-1),
+	activeSearchCategory(0),
+	ty1Search(""),
+	ty2Search(""),
+	ty1FilterDirty(true),
+	ty2FilterDirty(true),
 	mouseX(0.0f),
 	mouseY(0.0f),
 	scrollOffset(0.0f),
@@ -382,6 +389,8 @@ void Gui::setModelList(const std::vector<ModelEntry>& modelList)
 	dropdownRect = {buttonRect.x, buttonRect.y + buttonRect.height + 2.0f, 200.0f, dropdownHeight};
 	
 	// Submenu will be calculated dynamically when hovering
+	markFilterDirty(1);
+	markFilterDirty(2);
 }
 
 void Gui::setOnModelSelected(std::function<void(const ModelEntry&)> callback)
@@ -533,6 +542,14 @@ void Gui::renderSubmenu()
 	glUseProgram(shaderProgram);
 	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
 	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+	const float kTopPad = 5.0f;
+	const float kBottomPad = 5.0f;
+	const float kSidePad = 5.0f;
+	const float kSearchHeight = 25.0f;
+	const float kSearchGap = 5.0f;
+	const float kItemHeight = 25.0f;
+	const float kItemBoxHeight = 20.0f;
 	
 	// Draw submenu background
 	drawRect(submenuRect.x, submenuRect.y, submenuRect.width, submenuRect.height, glm::vec4(0.12f, 0.12f, 0.12f, 0.95f));
@@ -542,47 +559,184 @@ void Gui::renderSubmenu()
 	drawRect(submenuRect.x, submenuRect.y + submenuRect.height - 2.0f, submenuRect.width, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
 	drawRect(submenuRect.x, submenuRect.y, 2.0f, submenuRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
 	drawRect(submenuRect.x + submenuRect.width - 2.0f, submenuRect.y, 2.0f, submenuRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
-	
-	float yOffset = submenuRect.y + 5.0f - scrollOffset;
-	
+
+	// Search bar (takes space at the top of the submenu)
+	submenuSearchRect = {submenuRect.x + kSidePad, submenuRect.y + kTopPad, submenuRect.width - (kSidePad * 2.0f), kSearchHeight};
+
+	const bool searchActive = (activeSearchCategory == hoveredCategory);
+	glm::vec4 searchBg = searchActive ? glm::vec4(0.22f, 0.22f, 0.22f, 1.0f) : glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
+	glm::vec4 searchBorder = searchActive ? glm::vec4(0.7f, 0.7f, 0.7f, 1.0f) : glm::vec4(0.45f, 0.45f, 0.45f, 1.0f);
+	drawRect(submenuSearchRect.x, submenuSearchRect.y, submenuSearchRect.width, submenuSearchRect.height, searchBg);
+	drawRect(submenuSearchRect.x, submenuSearchRect.y, submenuSearchRect.width, 2.0f, searchBorder);
+	drawRect(submenuSearchRect.x, submenuSearchRect.y + submenuSearchRect.height - 2.0f, submenuSearchRect.width, 2.0f, searchBorder);
+	drawRect(submenuSearchRect.x, submenuSearchRect.y, 2.0f, submenuSearchRect.height, searchBorder);
+	drawRect(submenuSearchRect.x + submenuSearchRect.width - 2.0f, submenuSearchRect.y, 2.0f, submenuSearchRect.height, searchBorder);
+
+	std::string searchText = (hoveredCategory == 1) ? ty1Search : ty2Search;
+	if (searchText.empty())
+		searchText = "Search...";
+	else if (searchActive)
+		searchText += "_";
+
+	// Truncate to fit the box (8px per character font)
+	const int maxChars = (int)((submenuSearchRect.width - 12.0f) / 8.0f);
+	if ((int)searchText.size() > maxChars && maxChars > 3)
+		searchText = "..." + searchText.substr(searchText.size() - (maxChars - 3));
+
+	drawText(searchText, submenuSearchRect.x + 6.0f, submenuSearchRect.y + 9.0f, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
+
+	// CRITICAL: Rebind rectangle shader after drawText switched programs
+	glUseProgram(shaderProgram);
+	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+	// Filtered model list (scrolls beneath the search bar)
+	rebuildFilteredIndicesIfNeeded(hoveredCategory);
 	const std::vector<ModelEntry>* modelList = (hoveredCategory == 1) ? &ty1Models : &ty2Models;
-	
-	for (size_t i = 0; i < modelList->size(); i++)
+	const std::vector<int>& filtered = (hoveredCategory == 1) ? ty1FilteredIndices : ty2FilteredIndices;
+
+	const float listTop = submenuRect.y + kTopPad + kSearchHeight + kSearchGap;
+	const float listBottom = submenuRect.y + submenuRect.height - kBottomPad;
+	const float listHeight = std::max(0.0f, listBottom - listTop);
+
+	maxScroll = std::max(0.0f, (float)filtered.size() * kItemHeight - listHeight);
+	if (scrollOffset < 0.0f) scrollOffset = 0.0f;
+	if (scrollOffset > maxScroll) scrollOffset = maxScroll;
+
+	float yOffset = listTop - scrollOffset;
+	for (size_t pos = 0; pos < filtered.size(); pos++)
 	{
-		if (yOffset >= submenuRect.y && yOffset < submenuRect.y + submenuRect.height)
+		const float itemY = yOffset + (float)pos * kItemHeight;
+		if (itemY + kItemBoxHeight < listTop || itemY >= listBottom)
+			continue;
+
+		const ModelEntry& entry = (*modelList)[filtered[pos]];
+
+		glm::vec4 itemColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
+		glm::vec4 textColor = glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);
+
+		bool isSelected = (currentModelName == entry.name);
+		bool isHovered = (hoveredSubmenuItem == (int)pos);
+
+		if (isSelected)
 		{
-			glm::vec4 itemColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
-			glm::vec4 textColor = glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);
-			
-			// Check if this is the currently selected model
-			bool isSelected = (currentModelName == (*modelList)[i].name);
-			// Check if this item is being hovered
-			bool isHovered = (hoveredSubmenuItem == (int)i);
-			
-			if (isSelected)
-			{
-				// Selected item gets green color
-				itemColor = glm::vec4(0.3f, 0.6f, 0.3f, 1.0f);
-				textColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
-			}
-			else if (isHovered)
-			{
-				// Hovered item gets lighter background
-				itemColor = glm::vec4(0.28f, 0.28f, 0.28f, 1.0f);
-				textColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
-			}
-			
-			drawRect(submenuRect.x + 5.0f, yOffset, submenuRect.width - 10.0f, 20.0f, itemColor);
-			
-			// Truncate long names
-			std::string displayName = (*modelList)[i].name;
-			if (displayName.length() > 40)
-				displayName = displayName.substr(0, 37) + "...";
-			
-			drawText(displayName, submenuRect.x + 10.0f, yOffset + 6.0f, textColor);
+			itemColor = glm::vec4(0.3f, 0.6f, 0.3f, 1.0f);
+			textColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
 		}
-		yOffset += 25.0f;
+		else if (isHovered)
+		{
+			itemColor = glm::vec4(0.28f, 0.28f, 0.28f, 1.0f);
+			textColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+		}
+
+		drawRect(submenuRect.x + kSidePad, itemY, submenuRect.width - (kSidePad * 2.0f), kItemBoxHeight, itemColor);
+
+		std::string displayName = entry.name;
+		if (displayName.length() > 40)
+			displayName = displayName.substr(0, 37) + "...";
+
+		drawText(displayName, submenuRect.x + kSidePad + 5.0f, itemY + 6.0f, textColor);
+
+		// CRITICAL: Rebind rectangle shader after drawText switched programs
+		glUseProgram(shaderProgram);
+		glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
 	}
+}
+
+void Gui::markFilterDirty(int category)
+{
+	if (category == 1) ty1FilterDirty = true;
+	if (category == 2) ty2FilterDirty = true;
+}
+
+char Gui::normalizeSearchChar(char c)
+{
+	// Keep printable ASCII only; normalize newlines/tabs to space.
+	if (c == '\r' || c == '\n' || c == '\t')
+		return ' ';
+	return c;
+}
+
+bool Gui::containsCaseInsensitive(const std::string& haystack, const std::string& needle)
+{
+	if (needle.empty())
+		return true;
+
+	auto lowerChar = [](unsigned char ch) { return (char)std::tolower(ch); };
+
+	// Naive search is fine here; filtering only runs when query changes.
+	for (size_t i = 0; i < haystack.size(); i++)
+	{
+		size_t j = 0;
+		while (i + j < haystack.size() && j < needle.size() &&
+		       lowerChar((unsigned char)haystack[i + j]) == lowerChar((unsigned char)needle[j]))
+		{
+			j++;
+		}
+		if (j == needle.size())
+			return true;
+	}
+	return false;
+}
+
+void Gui::rebuildFilteredIndicesIfNeeded(int category)
+{
+	if (category != 1 && category != 2)
+		return;
+
+	std::vector<ModelEntry>* list = (category == 1) ? &ty1Models : &ty2Models;
+	std::vector<int>* out = (category == 1) ? &ty1FilteredIndices : &ty2FilteredIndices;
+	bool* dirty = (category == 1) ? &ty1FilterDirty : &ty2FilterDirty;
+	const std::string& query = (category == 1) ? ty1Search : ty2Search;
+
+	if (!(*dirty))
+		return;
+
+	out->clear();
+	out->reserve(list->size());
+
+	for (int i = 0; i < (int)list->size(); i++)
+	{
+		if (containsCaseInsensitive((*list)[i].name, query))
+			out->push_back(i);
+	}
+
+	*dirty = false;
+}
+
+void Gui::updateSubmenuScrollBounds()
+{
+	if (!submenuOpen || (hoveredCategory != 1 && hoveredCategory != 2))
+	{
+		maxScroll = 0.0f;
+		if (scrollOffset < 0.0f) scrollOffset = 0.0f;
+		return;
+	}
+
+	const float kTopPad = 5.0f;
+	const float kBottomPad = 5.0f;
+	const float kSearchHeight = 25.0f;
+	const float kSearchGap = 5.0f;
+	const float kItemHeight = 25.0f;
+
+	rebuildFilteredIndicesIfNeeded(hoveredCategory);
+	const std::vector<int>& filtered = (hoveredCategory == 1) ? ty1FilteredIndices : ty2FilteredIndices;
+
+	// IMPORTANT: submenu height must expand/shrink with filter results.
+	// Without this, filtering down to a few items makes the submenu tiny, and clearing the query
+	// won't show more items (you'd only see a couple at once).
+	const float maxSubmenuHeight = windowHeight * 0.7f;
+	const float contentHeight = kTopPad + kSearchHeight + kSearchGap + ((float)filtered.size() * kItemHeight) + kBottomPad;
+	const float desiredHeight = (contentHeight < maxSubmenuHeight) ? contentHeight : maxSubmenuHeight;
+	if (submenuRect.height != desiredHeight)
+		submenuRect.height = desiredHeight;
+
+	const float listTop = submenuRect.y + kTopPad + kSearchHeight + kSearchGap;
+	const float listBottom = submenuRect.y + submenuRect.height - kBottomPad;
+	const float listHeight = std::max(0.0f, listBottom - listTop);
+
+	maxScroll = std::max(0.0f, (float)filtered.size() * kItemHeight - listHeight);
+	if (scrollOffset < 0.0f) scrollOffset = 0.0f;
+	if (scrollOffset > maxScroll) scrollOffset = maxScroll;
 }
 
 void Gui::drawRect(float x, float y, float width, float height, const glm::vec4& color)
@@ -619,24 +773,52 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				scrollOffset = 0.0f;
 				hoveredCategory = 0;
 				hoveredSubmenuItem = -1;
+				activeSearchCategory = 0;
 			}
 			else if (submenuOpen && submenuRect.contains(x, y))
 			{
-				// Calculate which model was clicked in submenu
-				float relativeY = y - submenuRect.y + scrollOffset;
-				int itemIndex = (int)(relativeY / 25.0f);
-				
-				const std::vector<ModelEntry>* modelList = (hoveredCategory == 1) ? &ty1Models : &ty2Models;
-				
-				if (itemIndex >= 0 && itemIndex < modelList->size())
+				const float kTopPad = 5.0f;
+				const float kBottomPad = 5.0f;
+				const float kSidePad = 5.0f;
+				const float kSearchHeight = 25.0f;
+				const float kSearchGap = 5.0f;
+				const float kItemHeight = 25.0f;
+
+				// Search bar click focuses typing for that submenu
+				GuiRect searchRect = {submenuRect.x + kSidePad, submenuRect.y + kTopPad, submenuRect.width - (kSidePad * 2.0f), kSearchHeight};
+				if (searchRect.contains(x, y))
 				{
+					activeSearchCategory = hoveredCategory;
+					return;
+				}
+
+				// Clicking in the list area selects an item (based on filtered list)
+				rebuildFilteredIndicesIfNeeded(hoveredCategory);
+				const std::vector<ModelEntry>* modelList = (hoveredCategory == 1) ? &ty1Models : &ty2Models;
+				const std::vector<int>& filtered = (hoveredCategory == 1) ? ty1FilteredIndices : ty2FilteredIndices;
+
+				const float listTop = submenuRect.y + kTopPad + kSearchHeight + kSearchGap;
+				const float listBottom = submenuRect.y + submenuRect.height - kBottomPad;
+
+				if (y < listTop || y >= listBottom)
+					return;
+
+				updateSubmenuScrollBounds();
+
+				float relativeY = y - listTop + scrollOffset;
+				int itemPos = (int)(relativeY / kItemHeight);
+
+				if (itemPos >= 0 && itemPos < (int)filtered.size())
+				{
+					const ModelEntry& entry = (*modelList)[filtered[itemPos]];
+
 					if (onModelSelected)
 					{
-						onModelSelected((*modelList)[itemIndex]);
+						onModelSelected(entry);
 						// Store selected model info
 						for (auto& model : models)
 						{
-							if (model.name == (*modelList)[itemIndex].name)
+							if (model.name == entry.name)
 							{
 								selectedModel = &model;
 								currentModelName = model.name;
@@ -644,10 +826,12 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 							}
 						}
 					}
+
 					dropdownOpen = false;
 					submenuOpen = false;
 					hoveredCategory = 0;
 					hoveredSubmenuItem = -1;
+					activeSearchCategory = 0;
 				}
 			}
 			else if (dropdownOpen && dropdownRect.contains(x, y))
@@ -676,6 +860,7 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				submenuOpen = false;
 				hoveredCategory = 0;
 				hoveredSubmenuItem = -1;
+				activeSearchCategory = 0;
 			}
 		}
 	}
@@ -694,15 +879,26 @@ void Gui::onMouseMove(float x, float y)
 	{
 		// Mouse is in submenu - keep hoveredCategory as is (don't reset it)
 		// This ensures the dropdown category stays highlighted
-		
-		float relativeY = y - submenuRect.y + scrollOffset - 5.0f; // -5.0f accounts for top padding
-		int itemIndex = (int)(relativeY / 25.0f);
-		
-		const std::vector<ModelEntry>* modelList = (hoveredCategory == 1) ? &ty1Models : &ty2Models;
-		
-		if (itemIndex >= 0 && itemIndex < (int)modelList->size())
+
+		const float kTopPad = 5.0f;
+		const float kBottomPad = 5.0f;
+		const float kSearchHeight = 25.0f;
+		const float kSearchGap = 5.0f;
+		const float kItemHeight = 25.0f;
+
+		rebuildFilteredIndicesIfNeeded(hoveredCategory);
+		const std::vector<int>& filtered = (hoveredCategory == 1) ? ty1FilteredIndices : ty2FilteredIndices;
+
+		const float listTop = submenuRect.y + kTopPad + kSearchHeight + kSearchGap;
+		const float listBottom = submenuRect.y + submenuRect.height - kBottomPad;
+
+		if (y >= listTop && y < listBottom)
 		{
-			hoveredSubmenuItem = itemIndex;
+			float relativeY = y - listTop + scrollOffset;
+			int itemPos = (int)(relativeY / kItemHeight);
+
+			if (itemPos >= 0 && itemPos < (int)filtered.size())
+				hoveredSubmenuItem = itemPos;
 		}
 		// Don't process dropdown hover detection when in submenu
 		return;
@@ -748,34 +944,38 @@ void Gui::onMouseMove(float x, float y)
 					
 					// Use 70% of window height for submenu
 					float maxSubmenuHeight = windowHeight * 0.7f;
-					float contentHeight = ty1Models.size() * 25.0f;
+
+					const float kTopPad = 5.0f;
+					const float kBottomPad = 5.0f;
+					const float kSearchHeight = 25.0f;
+					const float kSearchGap = 5.0f;
+					const float kItemHeight = 25.0f;
+
+					rebuildFilteredIndicesIfNeeded(1);
+					float contentHeight = kTopPad + kSearchHeight + kSearchGap + ((float)ty1FilteredIndices.size() * kItemHeight) + kBottomPad;
 					float submenuHeight = (contentHeight < maxSubmenuHeight) ? contentHeight : maxSubmenuHeight;
-					
-					if (contentHeight > submenuHeight)
-						maxScroll = contentHeight - submenuHeight;
-					else
-						maxScroll = 0.0f;
-					
+
 					submenuRect = {dropdownRect.x + dropdownRect.width + 2.0f, submenuYPos, 350.0f, submenuHeight};
+					updateSubmenuScrollBounds();
 					
 					// Auto-scroll to selected model if one exists in this category
 					if (!currentModelName.empty())
 					{
 						Debug::log("Looking for current model in TY1: " + currentModelName);
-						// Find the index of the current model in TY1 list
-						for (size_t i = 0; i < ty1Models.size(); i++)
+						// Find the position of the current model in the FILTERED TY1 list
+						for (size_t pos = 0; pos < ty1FilteredIndices.size(); pos++)
 						{
-							if (ty1Models[i].name == currentModelName)
+							int idx = ty1FilteredIndices[pos];
+							if (ty1Models[idx].name == currentModelName)
 							{
 								// Place the selected item at the TOP of the visible area
-								float itemPosition = i * 25.0f;
+								float itemPosition = (float)pos * kItemHeight;
 								scrollOffset = itemPosition;
 								
 								// Clamp to valid scroll range
-								if (scrollOffset < 0.0f) scrollOffset = 0.0f;
-								if (scrollOffset > maxScroll) scrollOffset = maxScroll;
+								updateSubmenuScrollBounds();
 								
-								Debug::log("Auto-scrolled TY1 submenu to model: " + currentModelName + " at index " + std::to_string(i) + " (scroll=" + std::to_string(scrollOffset) + ")");
+								Debug::log("Auto-scrolled TY1 submenu to model: " + currentModelName + " at filtered position " + std::to_string(pos) + " (scroll=" + std::to_string(scrollOffset) + ")");
 								break;
 							}
 						}
@@ -810,34 +1010,38 @@ void Gui::onMouseMove(float x, float y)
 					
 					// Use 70% of window height for submenu
 					float maxSubmenuHeight = windowHeight * 0.7f;
-					float contentHeight = ty2Models.size() * 25.0f;
+
+					const float kTopPad = 5.0f;
+					const float kBottomPad = 5.0f;
+					const float kSearchHeight = 25.0f;
+					const float kSearchGap = 5.0f;
+					const float kItemHeight = 25.0f;
+
+					rebuildFilteredIndicesIfNeeded(2);
+					float contentHeight = kTopPad + kSearchHeight + kSearchGap + ((float)ty2FilteredIndices.size() * kItemHeight) + kBottomPad;
 					float submenuHeight = (contentHeight < maxSubmenuHeight) ? contentHeight : maxSubmenuHeight;
-					
-					if (contentHeight > submenuHeight)
-						maxScroll = contentHeight - submenuHeight;
-					else
-						maxScroll = 0.0f;
-					
+
 					submenuRect = {dropdownRect.x + dropdownRect.width + 2.0f, submenuYPos, 350.0f, submenuHeight};
+					updateSubmenuScrollBounds();
 					
 					// Auto-scroll to selected model if one exists in this category
 					if (!currentModelName.empty())
 					{
 						Debug::log("Looking for current model in TY2: " + currentModelName);
-						// Find the index of the current model in TY2 list
-						for (size_t i = 0; i < ty2Models.size(); i++)
+						// Find the position of the current model in the FILTERED TY2 list
+						for (size_t pos = 0; pos < ty2FilteredIndices.size(); pos++)
 						{
-							if (ty2Models[i].name == currentModelName)
+							int idx = ty2FilteredIndices[pos];
+							if (ty2Models[idx].name == currentModelName)
 							{
 								// Place the selected item at the TOP of the visible area
-								float itemPosition = i * 25.0f;
+								float itemPosition = (float)pos * kItemHeight;
 								scrollOffset = itemPosition;
 								
 								// Clamp to valid scroll range
-								if (scrollOffset < 0.0f) scrollOffset = 0.0f;
-								if (scrollOffset > maxScroll) scrollOffset = maxScroll;
+								updateSubmenuScrollBounds();
 								
-								Debug::log("Auto-scrolled TY2 submenu to model: " + currentModelName + " at index " + std::to_string(i) + " (scroll=" + std::to_string(scrollOffset) + ")");
+								Debug::log("Auto-scrolled TY2 submenu to model: " + currentModelName + " at filtered position " + std::to_string(pos) + " (scroll=" + std::to_string(scrollOffset) + ")");
 								break;
 							}
 						}
@@ -858,6 +1062,7 @@ void Gui::onMouseMove(float x, float y)
 		submenuOpen = false;
 		hoveredCategory = 0;
 		hoveredSubmenuItem = -1;
+		activeSearchCategory = 0;
 	}
 }
 
@@ -873,6 +1078,7 @@ void Gui::onScroll(float yoffset)
 		
 		if (canScroll)
 		{
+			updateSubmenuScrollBounds();
 			scrollOffset -= yoffset * 25.0f; // Scroll one item at a time
 			if (scrollOffset < 0.0f) scrollOffset = 0.0f;
 			if (scrollOffset > maxScroll) scrollOffset = maxScroll;
@@ -892,36 +1098,86 @@ void Gui::onScroll(float yoffset)
 void Gui::onKeyPress(int key)
 {
 	if (!submenuOpen) return;
+
+	// Search bar editing (special keys)
+	if (activeSearchCategory == 1 || activeSearchCategory == 2)
+	{
+		std::string& search = (activeSearchCategory == 1) ? ty1Search : ty2Search;
+
+		if (key == GLFW_KEY_BACKSPACE)
+		{
+			if (!search.empty())
+			{
+				search.pop_back();
+				markFilterDirty(activeSearchCategory);
+				scrollOffset = 0.0f;
+				updateSubmenuScrollBounds();
+			}
+			return;
+		}
+		if (key == GLFW_KEY_ESCAPE || key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER)
+		{
+			activeSearchCategory = 0;
+			return;
+		}
+	}
 	
 	// Arrow keys for scrolling submenu
-	if (key == 265) // Up arrow (GLFW_KEY_UP)
+	updateSubmenuScrollBounds();
+
+	if (key == GLFW_KEY_UP)
 	{
 		scrollOffset -= 25.0f;
 		if (scrollOffset < 0.0f) scrollOffset = 0.0f;
 	}
-	else if (key == 264) // Down arrow (GLFW_KEY_DOWN)
+	else if (key == GLFW_KEY_DOWN)
 	{
 		scrollOffset += 25.0f;
 		if (scrollOffset > maxScroll) scrollOffset = maxScroll;
 	}
-	else if (key == 266) // Page Up
+	else if (key == GLFW_KEY_PAGE_UP)
 	{
 		scrollOffset -= submenuRect.height;
 		if (scrollOffset < 0.0f) scrollOffset = 0.0f;
 	}
-	else if (key == 267) // Page Down
+	else if (key == GLFW_KEY_PAGE_DOWN)
 	{
 		scrollOffset += submenuRect.height;
 		if (scrollOffset > maxScroll) scrollOffset = maxScroll;
 	}
-	else if (key == 268) // Home
+	else if (key == GLFW_KEY_HOME)
 	{
 		scrollOffset = 0.0f;
 	}
-	else if (key == 269) // End
+	else if (key == GLFW_KEY_END)
 	{
 		scrollOffset = maxScroll;
 	}
+}
+
+void Gui::onChar(unsigned int codepoint)
+{
+	if (!submenuOpen) return;
+	if (activeSearchCategory != 1 && activeSearchCategory != 2) return;
+
+	// Limit to basic printable ASCII for now (matches built-in font range)
+	if (codepoint < 32 || codepoint > 126)
+		return;
+
+	char c = normalizeSearchChar((char)codepoint);
+	if (c < 32 || c > 126)
+		return;
+
+	std::string& search = (activeSearchCategory == 1) ? ty1Search : ty2Search;
+
+	// Hard cap to keep things reasonable
+	if (search.size() >= 96)
+		return;
+
+	search.push_back(c);
+	markFilterDirty(activeSearchCategory);
+	scrollOffset = 0.0f;
+	updateSubmenuScrollBounds();
 }
 
 void Gui::setCurrentModel(Model* model, const std::string& modelName)

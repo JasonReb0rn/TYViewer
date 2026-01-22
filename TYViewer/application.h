@@ -51,6 +51,7 @@ public:
 	void onMouseMove(double x, double y);
 	void onScroll(double xoffset, double yoffset);
 	void onKeyPress(int key);
+	void onChar(unsigned int codepoint);
 
 private:
 	bool drawGrid = true;

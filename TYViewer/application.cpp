@@ -278,6 +278,14 @@ void Application::onKeyPress(int key)
 	}
 }
 
+void Application::onChar(unsigned int codepoint)
+{
+	if (gui)
+	{
+		gui->onChar(codepoint);
+	}
+}
+
 void Application::update(float dt)
 {
 	float mouseInputX = Mouse::getMouseDelta().x;
