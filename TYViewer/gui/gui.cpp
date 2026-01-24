@@ -101,7 +101,6 @@ Gui::ParsedMaterialName Gui::parseMaterialName(const std::string& name)
 {
 	ParsedMaterialName out;
 	out.baseName = name;
-	out.variantDigits.clear();
 	out.flags = MAT_NONE;
 
 	auto endsWith = [](const std::string& s, const std::string& suffix) -> bool
@@ -140,24 +139,6 @@ Gui::ParsedMaterialName Gui::parseMaterialName(const std::string& name)
 		stripSuffix("_Overlay");
 	}
 
-	// Trailing digits are commonly used for variant/tint passes (e.g. "...01").
-	// We treat ONLY trailing digits as a variant marker.
-	{
-		size_t end = out.baseName.size();
-		size_t start = end;
-		while (start > 0 && out.baseName[start - 1] >= '0' && out.baseName[start - 1] <= '9')
-		{
-			start--;
-		}
-
-		if (start < end)
-		{
-			out.variantDigits = out.baseName.substr(start, end - start);
-			out.baseName.erase(start);
-			out.flags |= MAT_TINT;
-		}
-	}
-
 	// Trim any leftover trailing separators
 	while (!out.baseName.empty() && (out.baseName.back() == '_' || out.baseName.back() == '-'))
 	{
@@ -174,6 +155,8 @@ void Gui::initialize(int width, int height)
 	
 	// Button at top of screen
 	buttonRect = {10.0f, 10.0f, 200.0f, 30.0f};
+	// Export button next to the model selector
+	exportButtonRect = {buttonRect.x + buttonRect.width + 10.0f, 10.0f, 90.0f, 30.0f};
 	
 	// Model info panel on the right
 	modelInfoRect = {(float)width - 310.0f, 10.0f, 300.0f, 150.0f};
@@ -469,6 +452,11 @@ void Gui::setOnModelSelected(std::function<void(const ModelEntry&)> callback)
 	onModelSelected = callback;
 }
 
+void Gui::setOnExportRequested(std::function<void()> callback)
+{
+	onExportRequested = callback;
+}
+
 void Gui::resize(int width, int height)
 {
 	windowWidth = width;
@@ -517,6 +505,7 @@ void Gui::render()
 	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
 	
 	renderButton();
+	renderExportButton();
 	
 	if (dropdownOpen)
 	{
@@ -566,6 +555,43 @@ void Gui::renderButton()
 		buttonText = buttonText.substr(0, 20) + "...";
 	
 	drawText(buttonText, buttonRect.x + 8.0f, buttonRect.y + 11.0f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+}
+
+void Gui::renderExportButton()
+{
+	glUseProgram(shaderProgram);
+	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
+	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+	const bool enabled = (currentModel != nullptr);
+	const bool hovered = exportButtonRect.contains(mouseX, mouseY);
+
+	glm::vec4 bgColor;
+	glm::vec4 border = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+	glm::vec4 textColor;
+	if (!enabled)
+	{
+		bgColor = glm::vec4(0.12f, 0.12f, 0.12f, 0.75f);
+		textColor = glm::vec4(0.55f, 0.55f, 0.55f, 1.0f);
+	}
+	else if (hovered)
+	{
+		bgColor = glm::vec4(0.25f, 0.45f, 0.25f, 0.95f);
+		textColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+	}
+	else
+	{
+		bgColor = glm::vec4(0.18f, 0.35f, 0.18f, 0.95f);
+		textColor = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
+	}
+
+	drawRect(exportButtonRect.x, exportButtonRect.y, exportButtonRect.width, exportButtonRect.height, bgColor);
+	drawRect(exportButtonRect.x, exportButtonRect.y, exportButtonRect.width, 2.0f, border);
+	drawRect(exportButtonRect.x, exportButtonRect.y + exportButtonRect.height - 2.0f, exportButtonRect.width, 2.0f, border);
+	drawRect(exportButtonRect.x, exportButtonRect.y, 2.0f, exportButtonRect.height, border);
+	drawRect(exportButtonRect.x + exportButtonRect.width - 2.0f, exportButtonRect.y, 2.0f, exportButtonRect.height, border);
+
+	drawText("Export", exportButtonRect.x + 18.0f, exportButtonRect.y + 11.0f, textColor);
 }
 
 void Gui::renderDropdown()
@@ -842,6 +868,16 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 	{
 		if (action == GLFW_PRESS)
 		{
+			if (exportButtonRect.contains(x, y))
+			{
+				// Only allow export when a model is loaded
+				if (currentModel && onExportRequested)
+				{
+					onExportRequested();
+				}
+				return;
+			}
+
 			if (buttonRect.contains(x, y))
 			{
 				dropdownOpen = !dropdownOpen;
@@ -949,7 +985,8 @@ void Gui::onMouseMove(float x, float y)
 	mouseX = x;
 	mouseY = y;
 	
-	hovering = buttonRect.contains(x, y) || (dropdownOpen && dropdownRect.contains(x, y)) || (submenuOpen && submenuRect.contains(x, y));
+	hovering = buttonRect.contains(x, y) || exportButtonRect.contains(x, y) ||
+		(dropdownOpen && dropdownRect.contains(x, y)) || (submenuOpen && submenuRect.contains(x, y));
 	
 	// Track hovered submenu item
 	hoveredSubmenuItem = -1;
@@ -1424,12 +1461,6 @@ void Gui::renderMaterialList()
 
 			ParsedMaterialName parsed = parseMaterialName(matName);
 			std::string tagText;
-			if (parsed.flags & MAT_TINT)
-			{
-				tagText += " TINT";
-				if (!parsed.variantDigits.empty())
-					tagText += parsed.variantDigits;
-			}
 			if (parsed.flags & MAT_GLASS)
 			{
 				if (!tagText.empty()) tagText += ",";

@@ -51,6 +51,8 @@ public:
 	// Set active archive for loading
 	void setActiveArchive(int archiveIndex);
 	int getActiveArchive() const { return activeArchiveIndex; }
+	// Read raw bytes from the currently-active archive (useful for exporters/tools).
+	bool getActiveFileData(const std::string& name, std::vector<char>& data) const;
 
 	template<typename T>
 	T* load(const std::string& name)

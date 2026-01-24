@@ -22,6 +22,8 @@ public:
 
 	// Raw vertex access (debug/overlay). Order matches parsed file order.
 	const std::vector<Vertex>& getVertices() const { return m_vertices; }
+	// Raw index access (triangulated). Indices are into `getVertices()` and are in groups of 3.
+	const std::vector<unsigned int>& getIndices() const { return m_indices; }
 	
 	// Material debugging
 	std::string getMaterialName() const { return m_materialName; }

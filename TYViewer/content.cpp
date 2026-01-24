@@ -38,6 +38,16 @@ void Content::setActiveArchive(int archiveIndex)
 		activeArchiveIndex = archiveIndex;
 }
 
+bool Content::getActiveFileData(const std::string& name, std::vector<char>& data) const
+{
+	if (activeArchiveIndex < 0 || activeArchiveIndex > 1)
+		return false;
+	Archive* archive = archives[activeArchiveIndex];
+	if (archive == nullptr)
+		return false;
+	return archive->getFileData(name, data);
+}
+
 void Content::createDefaultTexture()
 {
 	// Gosh darn it, you said this map didn't need cs source!!!

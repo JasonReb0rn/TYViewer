@@ -39,6 +39,7 @@ public:
 	// Model selection
 	void setModelList(const std::vector<ModelEntry>& models);
 	void setOnModelSelected(std::function<void(const ModelEntry&)> callback);
+	void setOnExportRequested(std::function<void()> callback);
 	
 	// Model debugging
 	void setCurrentModel(class Model* model, const std::string& modelName);
@@ -62,16 +63,14 @@ private:
 	enum MaterialNameFlags : unsigned int
 	{
 		MAT_NONE  = 0,
-		MAT_TINT  = 1 << 0, // trailing digits like "01" (tint/variant pass inferred)
-		MAT_GLASS = 1 << 1, // "...Glass" or "..._Glass"
-		MAT_SPEC  = 1 << 2, // "...Spec" or "..._Spec"
-		MAT_OVERLAY = 1 << 3 // "...Overlay" or "..._Overlay"
+		MAT_GLASS = 1 << 0, // "...Glass" or "..._Glass"
+		MAT_SPEC  = 1 << 1, // "...Spec" or "..._Spec"
+		MAT_OVERLAY = 1 << 2 // "...Overlay" or "..._Overlay"
 	};
 
 	struct ParsedMaterialName
 	{
 		std::string baseName;      // name without suffix/variant (best-effort)
-		std::string variantDigits; // trailing digits, if any (e.g. "01")
 		unsigned int flags = MAT_NONE;
 	};
 
@@ -80,6 +79,7 @@ private:
 	void renderDropdown();
 	void renderSubmenu();
 	void renderButton();
+	void renderExportButton();
 	void renderScrollbar();
 	void renderModelInfo();
 	void renderMaterialList();
@@ -98,6 +98,7 @@ private:
 	int windowHeight;
 	
 	GuiRect buttonRect;
+	GuiRect exportButtonRect;
 	GuiRect dropdownRect;
 	GuiRect submenuRect;
 	GuiRect submenuSearchRect;
@@ -138,6 +139,7 @@ private:
 	float maxScroll;
 	
 	std::function<void(const ModelEntry&)> onModelSelected;
+	std::function<void()> onExportRequested;
 	
 	// OpenGL resources
 	unsigned int shaderProgram;

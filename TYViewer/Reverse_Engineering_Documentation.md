@@ -148,9 +148,8 @@ The TY2 PC pipeline appears to separate **mesh geometry** (MDG) from **material/
 In practice, multiple “material names” often reuse the *same* underlying texture atlas, and the suffix encodes **render-state or variation**, not a different image.
 
 - **Trailing digits**: e.g. `A049_Elle01`
-  - **Likely meaning**: a tint/variant pass (RGB tint applied on top of the same atlas).
-  - **Evidence**: geometry is different but uses the same atlas regions; no distinct texture file is commonly present for the `01` suffix.
-  - **Update**: totally wrong lol.
+  - **Status**: **Not “tint”** (prior assumption was incorrect).
+  - **Current best guess**: some kind of **variant/pass identifier** (render-state, layering, or slot reuse), but **unknown**.
 - **`Glass` suffix**: e.g. `A049_ElleGlass`
   - **Likely meaning**: semi-transparent rendering (alpha blend / alpha test / depth-write differences).
   - **Evidence**: still uses the same atlas, but should render with transparency semantics.

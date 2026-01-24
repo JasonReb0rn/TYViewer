@@ -45,6 +45,7 @@ public:
 	// Model management
 	void loadModel(const std::string& modelName, int archiveIndex);
 	void clearModels();
+	void exportCurrentModel();
 	
 	// Input forwarding to GUI
 	void onMouseButton(int button, int action, double x, double y);
@@ -79,6 +80,10 @@ private:
 	Mesh* mesh;
 	
 	Gui* gui;
+
+	// Current loaded model metadata (for exporting/tools)
+	std::string currentModelName;
+	int currentModelArchiveIndex = 0;
 
 private:
 	// ------------------------------------------------------------------

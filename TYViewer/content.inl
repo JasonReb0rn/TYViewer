@@ -353,13 +353,12 @@ inline Model* Content::load(const std::string& name)
 						// MDG meshes are already organized by texture/component
 						Debug::log("Using MDG meshes with MDL3 metadata");
 
-						// TY2 PC models sometimes list multiple "materials" that are actually variants of the same
-						// underlying texture (e.g. `A049_Elle`, `A049_Elle01`, `A049_ElleGlass`). The archive often
-						// only contains the base texture (e.g. `A049_Elle.dds`).
+						// TY2 PC models sometimes list multiple texture/material slot names that are actually
+						// variants/passes of the same underlying texture (e.g. `A049_Elle`, `A049_Elle01`,
+						// `A049_ElleGlass`). The archive often only contains the base texture (e.g. `A049_Elle.dds`).
 						//
 						// If we blindly try to load `<TextureName>.dds` for each entry, missing variants will
-						// fall back to `defaultTexture` (pure white), which looks like "only the first material
-						// is textured".
+						// fall back to `defaultTexture` (pure white), which can look like "extra materials aren't rendering".
 						//
 						// Fix: when a texture name isn't found, try common fallbacks before giving up.
 						Texture* lastGoodTexture = nullptr;
@@ -464,7 +463,6 @@ inline Model* Content::load(const std::string& name)
 
 							return { defaultTexture, "" };
 						};
-
 						for (size_t i = 0; i < mdgParser.meshes.size(); i++)
 						{
 							std::vector<Vertex> vertices;
@@ -599,6 +597,7 @@ inline Model* Content::load(const std::string& name)
 							std::cout << "Failed to load texture: '" + textureName + "' !" << std::endl
 								<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;
 						}
+
 						meshes.push_back(new Mesh(vertices, indices, texture, textureName));
 						}
 					}

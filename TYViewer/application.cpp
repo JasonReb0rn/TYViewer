@@ -1,9 +1,13 @@
 #include "application.h"
 
 #include <vector>
+#include <filesystem>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+
+#include "export/obj_exporter.h"
+#include "util/folder_picker.h"
 
 std::string Application::APPLICATION_PATH = "";
 std::string Application::ARCHIVE_PATH = "";
@@ -360,6 +364,11 @@ void Application::initialize()
 		Debug::log("Model selected: " + entry.name + " from " + entry.archiveName);
 		loadModel(entry.name, entry.archiveIndex);
 	});
+
+	// Set callback for exporting the currently-loaded model
+	gui->setOnExportRequested([this]() {
+		exportCurrentModel();
+	});
 	
 	// Load initial model if specified in config
 	if (!Config::model.empty() && (ty1Loaded || ty2Loaded))
@@ -381,6 +390,8 @@ void Application::loadModel(const std::string& modelName, int archiveIndex)
 	
 	// Set active archive
 	content.setActiveArchive(archiveIndex);
+	currentModelArchiveIndex = archiveIndex;
+	currentModelName = modelName;
 	
 	// Load the model
 	Model* loadedModel = content.load<Model>(modelName);
@@ -400,6 +411,35 @@ void Application::loadModel(const std::string& modelName, int archiveIndex)
 	{
 		Debug::log("Failed to load model: " + modelName);
 	}
+}
+
+void Application::exportCurrentModel()
+{
+	if (models.empty() || models[0] == nullptr)
+	{
+		Debug::log("Export requested but no model is loaded");
+		return;
+	}
+
+	// Ensure we're exporting from the same archive the model was loaded from.
+	content.setActiveArchive(currentModelArchiveIndex);
+
+	std::string folder = Util::pickFolderDialog(window, "Select export folder");
+	if (folder.empty())
+	{
+		Debug::log("Export cancelled");
+		return;
+	}
+
+	std::filesystem::path outDir(folder);
+	std::string err;
+	if (!Export::exportModelAsObj(*models[0], currentModelName, content, outDir, &err))
+	{
+		Debug::log("Export failed: " + err);
+		return;
+	}
+
+	Debug::log("Export finished");
 }
 
 void Application::clearModels()
