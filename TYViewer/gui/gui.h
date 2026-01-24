@@ -35,6 +35,22 @@ public:
 	void initialize(int windowWidth, int windowHeight);
 	void render();
 	void resize(int width, int height);
+
+	// ---------------------------------------------------------------------
+	// Simple notifications (header banner)
+	// ---------------------------------------------------------------------
+	enum class NotificationKind
+	{
+		Info,
+		Success,
+		Error
+	};
+
+	// Shows a temporary banner to the right of the Export button.
+	// Duration is in seconds. Call again to replace the current banner.
+	void showNotification(const std::string& message,
+	                      NotificationKind kind = NotificationKind::Info,
+	                      float durationSeconds = 3.0f);
 	
 	// Model selection
 	void setModelList(const std::vector<ModelEntry>& models);
@@ -80,6 +96,7 @@ private:
 	void renderSubmenu();
 	void renderButton();
 	void renderExportButton();
+	void renderNotificationBanner();
 	void renderScrollbar();
 	void renderModelInfo();
 	void renderMaterialList();
@@ -99,6 +116,7 @@ private:
 	
 	GuiRect buttonRect;
 	GuiRect exportButtonRect;
+	GuiRect notificationRect;
 	GuiRect dropdownRect;
 	GuiRect submenuRect;
 	GuiRect submenuSearchRect;
@@ -140,6 +158,13 @@ private:
 	
 	std::function<void(const ModelEntry&)> onModelSelected;
 	std::function<void()> onExportRequested;
+
+	// Notification state
+	bool notificationActive = false;
+	NotificationKind notificationKind = NotificationKind::Info;
+	std::string notificationText;
+	float notificationTimeRemaining = 0.0f;
+	double lastRenderTimeSeconds = 0.0;
 	
 	// OpenGL resources
 	unsigned int shaderProgram;

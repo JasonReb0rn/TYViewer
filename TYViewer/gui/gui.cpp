@@ -97,6 +97,14 @@ Gui::~Gui()
 	cleanupGL();
 }
 
+void Gui::showNotification(const std::string& message, NotificationKind kind, float durationSeconds)
+{
+	notificationText = message;
+	notificationKind = kind;
+	notificationTimeRemaining = (durationSeconds > 0.0f) ? durationSeconds : 0.0f;
+	notificationActive = !notificationText.empty() && notificationTimeRemaining > 0.0f;
+}
+
 Gui::ParsedMaterialName Gui::parseMaterialName(const std::string& name)
 {
 	ParsedMaterialName out;
@@ -490,6 +498,25 @@ void Gui::resize(int width, int height)
 
 void Gui::render()
 {
+	// Update notification timer.
+	{
+		const double now = glfwGetTime();
+		if (lastRenderTimeSeconds == 0.0)
+			lastRenderTimeSeconds = now;
+		const float dt = (float)(now - lastRenderTimeSeconds);
+		lastRenderTimeSeconds = now;
+
+		if (notificationActive)
+		{
+			notificationTimeRemaining -= dt;
+			if (notificationTimeRemaining <= 0.0f)
+			{
+				notificationActive = false;
+				notificationTimeRemaining = 0.0f;
+			}
+		}
+	}
+
 	// Save OpenGL state
 	GLboolean depthTestEnabled;
 	glGetBooleanv(GL_DEPTH_TEST, &depthTestEnabled);
@@ -506,6 +533,7 @@ void Gui::render()
 	
 	renderButton();
 	renderExportButton();
+	renderNotificationBanner();
 	
 	if (dropdownOpen)
 	{
@@ -592,6 +620,65 @@ void Gui::renderExportButton()
 	drawRect(exportButtonRect.x + exportButtonRect.width - 2.0f, exportButtonRect.y, 2.0f, exportButtonRect.height, border);
 
 	drawText("Export", exportButtonRect.x + 18.0f, exportButtonRect.y + 11.0f, textColor);
+}
+
+void Gui::renderNotificationBanner()
+{
+	// Banner sits to the right of the Export button.
+	const float kPad = 10.0f;
+	const float x = exportButtonRect.x + exportButtonRect.width + kPad;
+	const float y = exportButtonRect.y;
+	const float h = exportButtonRect.height;
+	const float maxW = (float)windowWidth - x - kPad;
+	const float w = (maxW > 0.0f) ? std::min(420.0f, maxW) : 0.0f;
+
+	notificationRect = { x, y, w, h };
+
+	if (!notificationActive || w <= 0.0f)
+		return;
+
+	glUseProgram(shaderProgram);
+	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
+	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+	glm::vec4 bg;
+	glm::vec4 border = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+	glm::vec4 text = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+
+	switch (notificationKind)
+	{
+		case NotificationKind::Success:
+			bg = glm::vec4(0.18f, 0.45f, 0.18f, 0.92f);
+			break;
+		case NotificationKind::Error:
+			bg = glm::vec4(0.55f, 0.18f, 0.18f, 0.92f);
+			break;
+		case NotificationKind::Info:
+		default:
+			bg = glm::vec4(0.20f, 0.28f, 0.45f, 0.92f);
+			break;
+	}
+
+	// Slightly brighten when hovered to hint it can be dismissed.
+	const bool hovered = notificationRect.contains(mouseX, mouseY);
+	if (hovered)
+		bg.a = 0.98f;
+
+	drawRect(notificationRect.x, notificationRect.y, notificationRect.width, notificationRect.height, bg);
+	drawRect(notificationRect.x, notificationRect.y, notificationRect.width, 2.0f, border);
+	drawRect(notificationRect.x, notificationRect.y + notificationRect.height - 2.0f, notificationRect.width, 2.0f, border);
+	drawRect(notificationRect.x, notificationRect.y, 2.0f, notificationRect.height, border);
+	drawRect(notificationRect.x + notificationRect.width - 2.0f, notificationRect.y, 2.0f, notificationRect.height, border);
+
+	// Text (fixed-width font, 8px per character).
+	std::string msg = notificationText;
+	const int maxChars = (int)((notificationRect.width - 12.0f) / 8.0f);
+	if (maxChars > 3 && (int)msg.size() > maxChars)
+		msg = msg.substr(0, (size_t)maxChars - 3) + "...";
+	else if (maxChars <= 0)
+		return;
+
+	drawText(msg, notificationRect.x + 6.0f, notificationRect.y + 11.0f, text);
 }
 
 void Gui::renderDropdown()
@@ -868,6 +955,14 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 	{
 		if (action == GLFW_PRESS)
 		{
+			// Click notification banner to dismiss (unobtrusive).
+			if (notificationActive && notificationRect.width > 0.0f && notificationRect.contains(x, y))
+			{
+				notificationActive = false;
+				notificationTimeRemaining = 0.0f;
+				return;
+			}
+
 			if (exportButtonRect.contains(x, y))
 			{
 				// Only allow export when a model is loaded

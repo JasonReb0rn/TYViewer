@@ -400,6 +400,10 @@ void Application::loadModel(const std::string& modelName, int archiveIndex)
 	{
 		models.push_back(loadedModel);
 		Debug::log("Successfully loaded model: " + modelName);
+		if (gui)
+		{
+			gui->showNotification("Loaded: " + modelName, Gui::NotificationKind::Success, 2.5f);
+		}
 		
 		// Update GUI with current model info
 		if (gui)
@@ -410,6 +414,10 @@ void Application::loadModel(const std::string& modelName, int archiveIndex)
 	else
 	{
 		Debug::log("Failed to load model: " + modelName);
+		if (gui)
+		{
+			gui->showNotification("Failed to load: " + modelName, Gui::NotificationKind::Error, 4.0f);
+		}
 	}
 }
 
@@ -418,6 +426,10 @@ void Application::exportCurrentModel()
 	if (models.empty() || models[0] == nullptr)
 	{
 		Debug::log("Export requested but no model is loaded");
+		if (gui)
+		{
+			gui->showNotification("Export failed: no model loaded", Gui::NotificationKind::Error, 4.0f);
+		}
 		return;
 	}
 
@@ -428,6 +440,10 @@ void Application::exportCurrentModel()
 	if (folder.empty())
 	{
 		Debug::log("Export cancelled");
+		if (gui)
+		{
+			gui->showNotification("Export cancelled", Gui::NotificationKind::Info, 2.0f);
+		}
 		return;
 	}
 
@@ -436,10 +452,21 @@ void Application::exportCurrentModel()
 	if (!Export::exportModelAsObj(*models[0], currentModelName, content, outDir, &err))
 	{
 		Debug::log("Export failed: " + err);
+		if (gui)
+		{
+			std::string msg = "Export failed";
+			if (!err.empty())
+				msg += ": " + err;
+			gui->showNotification(msg, Gui::NotificationKind::Error, 4.5f);
+		}
 		return;
 	}
 
 	Debug::log("Export finished");
+	if (gui)
+	{
+		gui->showNotification("Export complete", Gui::NotificationKind::Success, 3.0f);
+	}
 }
 
 void Application::clearModels()
