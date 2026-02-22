@@ -476,12 +476,10 @@ void Gui::resize(int width, int height)
 	// Recalculate material list size if we have a model
 	if (currentModel)
 	{
-		const float kHeaderHeight = 45.0f;   // title + instructions + gap to first item
-		const float kItemHeight = 34.0f;     // two-line entry
 		const float kBottomPad = 5.0f;
 
 		int materialCount = currentModel->getMeshCount();
-		float contentHeight = kHeaderHeight + (materialCount * kItemHeight) + kBottomPad;
+		float contentHeight = kMeshPartHeaderHeight + (materialCount * kMeshPartItemHeight) + kBottomPad;
 		float maxHeight = height * 0.7f;
 		float panelHeight = (contentHeight < maxHeight) ? contentHeight : maxHeight;
 		
@@ -1048,18 +1046,50 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 			}
 			else if (currentModel && materialListRect.contains(x, y))
 			{
-				// Handle material list clicks - toggle material enabled/disabled
-				const float kHeaderHeight = 45.0f;
-				const float kItemHeight = 34.0f;
-				float relativeY = y - (materialListRect.y + kHeaderHeight) + materialListScroll;
-				int itemIndex = (int)(relativeY / kItemHeight);
+				// Handle mesh-part list clicks.
+				// - Header: bulk actions (show/hide all)
+				// - Body: toggle individual parts
+				const float yLocal = y - materialListRect.y;
+
+				// Bulk action buttons (drawn in renderMaterialList; keep geometry in sync)
+				const float kBtnH = 18.0f;
+				const float kBtnW = 58.0f;
+				const float kBtnPad = 6.0f;
+				const float btnY = materialListRect.y + 38.0f;
+				GuiRect showAllRect = {
+					materialListRect.x + materialListRect.width - (kBtnPad + kBtnW + kBtnPad + kBtnW + kBtnPad),
+					btnY, kBtnW, kBtnH
+				};
+				GuiRect hideAllRect = { showAllRect.x + kBtnW + kBtnPad, btnY, kBtnW, kBtnH };
+
+				if (yLocal >= 0.0f && yLocal < kMeshPartHeaderHeight)
+				{
+					auto& meshes = currentModel->getMeshes();
+					if (showAllRect.contains(x, y))
+					{
+						for (Mesh* m : meshes) if (m) m->setEnabled(true);
+						Debug::log("Mesh parts: Show all");
+						return;
+					}
+					if (hideAllRect.contains(x, y))
+					{
+						for (Mesh* m : meshes) if (m) m->setEnabled(false);
+						Debug::log("Mesh parts: Hide all");
+						return;
+					}
+					// Clicked header but not a button.
+					return;
+				}
+
+				float relativeY = y - (materialListRect.y + kMeshPartHeaderHeight) + materialListScroll;
+				int itemIndex = (int)(relativeY / kMeshPartItemHeight);
 				
 				if (itemIndex >= 0 && itemIndex < currentModel->getMeshCount())
 				{
 					auto& meshes = currentModel->getMeshes();
 					Mesh* mesh = meshes[itemIndex];
 					mesh->setEnabled(!mesh->isEnabled());
-					Debug::log("Toggled material " + std::to_string(itemIndex) + ": " + mesh->getMaterialName() + " -> " + (mesh->isEnabled() ? "ON" : "OFF"));
+					Debug::log("Toggled mesh part " + std::to_string(itemIndex) + ": " + mesh->getPartName() + " / " + mesh->getMaterialName() + " -> " + (mesh->isEnabled() ? "VISIBLE" : "HIDDEN"));
 				}
 			}
 			else
@@ -1118,14 +1148,20 @@ void Gui::onMouseMove(float x, float y)
 	hoveredMaterialItem = -1;
 	if (currentModel && materialListRect.contains(x, y))
 	{
-		const float kHeaderHeight = 45.0f;
-		const float kItemHeight = 34.0f;
-		float relativeY = y - (materialListRect.y + kHeaderHeight) + materialListScroll;
-		int itemIndex = (int)(relativeY / kItemHeight);
-		
-		if (itemIndex >= 0 && itemIndex < currentModel->getMeshCount())
+		const float yLocal = y - materialListRect.y;
+		if (yLocal < kMeshPartHeaderHeight)
 		{
-			hoveredMaterialItem = itemIndex;
+			// Hovering header area; keep hoveredMaterialItem = -1 but continue processing other UI hovers.
+		}
+		else
+		{
+			float relativeY = y - (materialListRect.y + kMeshPartHeaderHeight) + materialListScroll;
+			int itemIndex = (int)(relativeY / kMeshPartItemHeight);
+
+			if (itemIndex >= 0 && itemIndex < currentModel->getMeshCount())
+			{
+				hoveredMaterialItem = itemIndex;
+			}
 		}
 	}
 	
@@ -1301,8 +1337,7 @@ void Gui::onScroll(float yoffset)
 	// Scroll the material list when mouse is over it
 	if (currentModel && materialListRect.contains(mouseX, mouseY))
 	{
-		const float kItemHeight = 34.0f;
-		materialListScroll -= yoffset * kItemHeight;
+		materialListScroll -= yoffset * kMeshPartItemHeight;
 		if (materialListScroll < 0.0f) materialListScroll = 0.0f;
 		if (materialListScroll > maxMaterialListScroll) materialListScroll = maxMaterialListScroll;
 	}
@@ -1403,12 +1438,10 @@ void Gui::setCurrentModel(Model* model, const std::string& modelName)
 	// Calculate material list panel size based on content
 	if (currentModel)
 	{
-		const float kHeaderHeight = 45.0f;   // title + instructions + gap to first item
-		const float kItemHeight = 34.0f;     // two-line entry
 		const float kBottomPad = 5.0f;
 
 		int materialCount = currentModel->getMeshCount();
-		float contentHeight = kHeaderHeight + (materialCount * kItemHeight) + kBottomPad;
+		float contentHeight = kMeshPartHeaderHeight + (materialCount * kMeshPartItemHeight) + kBottomPad;
 		
 		// Cap at a reasonable maximum height (70% of window height)
 		float maxHeight = windowHeight * 0.7f;
@@ -1463,8 +1496,17 @@ void Gui::renderModelInfo()
 	yOffset += 15.0f;
 	
 	// Mesh count
-	drawText("Meshes: " + std::to_string(currentModel->getMeshCount()), modelInfoRect.x + 10.0f, yOffset, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
-	yOffset += 15.0f;
+	{
+		int visibleCount = 0;
+		for (const Mesh* m : currentModel->getMeshes())
+		{
+			if (m && m->isEnabled()) visibleCount++;
+		}
+		drawText("Parts: " + std::to_string(currentModel->getMeshCount()), modelInfoRect.x + 10.0f, yOffset, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
+		yOffset += 15.0f;
+		drawText("Visible: " + std::to_string(visibleCount), modelInfoRect.x + 10.0f, yOffset, glm::vec4(0.75f, 0.75f, 0.75f, 1.0f));
+		yOffset += 15.0f;
+	}
 	
 	// Vertex count
 	drawText("Vertices: " + std::to_string(currentModel->getTotalVertexCount()), modelInfoRect.x + 10.0f, yOffset, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
@@ -1490,8 +1532,6 @@ void Gui::renderMaterialList()
 {
 	if (!currentModel) return;
 
-	const float kHeaderHeight = 45.0f;
-	const float kItemHeight = 34.0f;     // 2 lines (name + tags)
 	const float kItemBoxHeight = 30.0f;  // background fill for the item
 	const float kNameLineY = 4.0f;
 	const float kTagsLineY = 16.0f;
@@ -1499,6 +1539,12 @@ void Gui::renderMaterialList()
 	glUseProgram(shaderProgram);
 	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
 	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+	auto bindRectShader = [&]()
+	{
+		glUseProgram(shaderProgram);
+		glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+	};
 	
 	// Draw background
 	drawRect(materialListRect.x, materialListRect.y, materialListRect.width, materialListRect.height, glm::vec4(0.12f, 0.12f, 0.12f, 0.95f));
@@ -1509,23 +1555,51 @@ void Gui::renderMaterialList()
 	drawRect(materialListRect.x, materialListRect.y, 2.0f, materialListRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
 	drawRect(materialListRect.x + materialListRect.width - 2.0f, materialListRect.y, 2.0f, materialListRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
 	
-	// Title
-	drawText("MATERIALS", materialListRect.x + 10.0f, materialListRect.y + 10.0f, glm::vec4(1.0f, 1.0f, 0.5f, 1.0f));
-	
-	// Instructions
-	drawText("Click to toggle", materialListRect.x + 10.0f, materialListRect.y + 25.0f, glm::vec4(0.7f, 0.7f, 0.7f, 1.0f));
+	// Header text + bulk actions
+	const auto& meshesConst = currentModel->getMeshes();
+	int visibleCount = 0;
+	for (const Mesh* m : meshesConst)
+	{
+		if (m && m->isEnabled()) visibleCount++;
+	}
+
+	drawText("MESH PARTS", materialListRect.x + 10.0f, materialListRect.y + 10.0f, glm::vec4(1.0f, 1.0f, 0.5f, 1.0f));
+	drawText("Visible: " + std::to_string(visibleCount) + "/" + std::to_string((int)meshesConst.size()),
+	         materialListRect.x + 10.0f, materialListRect.y + 24.0f,
+	         glm::vec4(0.8f, 0.8f, 0.8f, 1.0f));
+
+	// Bulk action buttons (keep geometry in sync with onMouseButton)
+	bindRectShader();
+	const float kBtnH = 18.0f;
+	const float kBtnW = 58.0f;
+	const float kBtnPad = 6.0f;
+	const float btnY = materialListRect.y + 38.0f;
+	GuiRect showAllRect = {
+		materialListRect.x + materialListRect.width - (kBtnPad + kBtnW + kBtnPad + kBtnW + kBtnPad),
+		btnY, kBtnW, kBtnH
+	};
+	GuiRect hideAllRect = { showAllRect.x + kBtnW + kBtnPad, btnY, kBtnW, kBtnH };
+
+	const bool showHover = showAllRect.contains(mouseX, mouseY);
+	const bool hideHover = hideAllRect.contains(mouseX, mouseY);
+	drawRect(showAllRect.x, showAllRect.y, showAllRect.width, showAllRect.height,
+	         showHover ? glm::vec4(0.25f, 0.55f, 0.25f, 0.98f) : glm::vec4(0.18f, 0.42f, 0.18f, 0.95f));
+	drawRect(hideAllRect.x, hideAllRect.y, hideAllRect.width, hideAllRect.height,
+	         hideHover ? glm::vec4(0.62f, 0.25f, 0.25f, 0.98f) : glm::vec4(0.45f, 0.18f, 0.18f, 0.95f));
+	drawText("SHOW", showAllRect.x + 10.0f, showAllRect.y + 6.0f, glm::vec4(0.95f, 0.95f, 0.95f, 1.0f));
+	drawText("HIDE", hideAllRect.x + 10.0f, hideAllRect.y + 6.0f, glm::vec4(0.95f, 0.95f, 0.95f, 1.0f));
 	
 	// Clamp scroll in case panel was resized
 	if (materialListScroll < 0.0f) materialListScroll = 0.0f;
 	if (materialListScroll > maxMaterialListScroll) materialListScroll = maxMaterialListScroll;
 
-	float yOffset = materialListRect.y + kHeaderHeight - materialListScroll;
+	float yOffset = materialListRect.y + kMeshPartHeaderHeight - materialListScroll;
 	
 	auto& meshes = currentModel->getMeshes();
 	
 	for (size_t i = 0; i < meshes.size(); i++)
 	{
-		if (yOffset >= materialListRect.y + 40.0f && yOffset < materialListRect.y + materialListRect.height - 5.0f)
+		if (yOffset >= materialListRect.y + kMeshPartHeaderHeight - 5.0f && yOffset < materialListRect.y + materialListRect.height - 5.0f)
 		{
 			Mesh* mesh = meshes[i];
 			bool isEnabled = mesh->isEnabled();
@@ -1538,6 +1612,7 @@ void Gui::renderMaterialList()
 			else
 				bgColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
 			
+			bindRectShader();
 			drawRect(materialListRect.x + 5.0f, yOffset, materialListRect.width - 10.0f, kItemBoxHeight, bgColor);
 			
 			// Checkbox
@@ -1549,10 +1624,14 @@ void Gui::renderMaterialList()
 			{
 				drawText("X", materialListRect.x + 11.0f, yOffset + 11.0f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
 			}
+			bindRectShader();
 			
-			// Material name (truncated if too long)
+			// Part/component name (primary) + material/texture slot (secondary)
+			std::string partName = mesh->getPartName();
+			if (partName.empty()) partName = "part_" + std::to_string(i);
+
 			std::string matName = mesh->getMaterialName();
-			if (matName.empty()) matName = "unnamed_" + std::to_string(i);
+			if (matName.empty()) matName = "unknown";
 
 			ParsedMaterialName parsed = parseMaterialName(matName);
 			std::string tagText;
@@ -1576,36 +1655,31 @@ void Gui::renderMaterialList()
 				tagText = tagText.substr(1); // remove leading space
 			}
 
-			std::string displayName = matName;
-
-			// Truncate name to fit the panel (8px per char font, leave room for tri count)
-			// ~210px available for name text on line 1: 26 chars @ 8px + padding.
-			if (displayName.length() > 26)
-				displayName = displayName.substr(0, 23) + "...";
+			std::string displayPart = partName;
+			if (displayPart.length() > 26)
+				displayPart = displayPart.substr(0, 23) + "...";
 			
 			glm::vec4 textColor = isEnabled ? glm::vec4(0.9f, 0.9f, 0.9f, 1.0f) : glm::vec4(0.6f, 0.6f, 0.6f, 1.0f);
-			drawText(displayName, materialListRect.x + 28.0f, yOffset + kNameLineY, textColor);
+			drawText(displayPart, materialListRect.x + 28.0f, yOffset + kNameLineY, textColor);
 
+			// Secondary line: material name + tags
+			std::string secondary = matName;
 			if (!tagText.empty())
-			{
-				glm::vec4 tagColor = isEnabled ? glm::vec4(0.65f, 0.75f, 1.0f, 1.0f) : glm::vec4(0.45f, 0.5f, 0.6f, 1.0f);
-				// Slightly dim when hovered to keep focus on the name line
-				if (isHovered && isEnabled)
-					tagColor = glm::vec4(0.55f, 0.65f, 0.9f, 1.0f);
+				secondary += "  " + tagText;
+			if (secondary.length() > 30)
+				secondary = secondary.substr(0, 27) + "...";
+			glm::vec4 secondaryColor = isEnabled ? glm::vec4(0.65f, 0.75f, 1.0f, 1.0f) : glm::vec4(0.45f, 0.5f, 0.6f, 1.0f);
+			drawText(secondary, materialListRect.x + 28.0f, yOffset + kTagsLineY, secondaryColor);
 
-				// Truncate tags as well; they are informational and should not crowd the UI.
-				std::string tagLine = tagText;
-				if (tagLine.length() > 26)
-					tagLine = tagLine.substr(0, 23) + "...";
-
-				drawText(tagLine, materialListRect.x + 28.0f, yOffset + kTagsLineY, tagColor);
-			}
+			// Counts on the right
+			std::string counts = std::to_string(mesh->getVertexCount()) + "v " + std::to_string(mesh->getTriangleCount()) + "t";
+			const float countsX = materialListRect.x + materialListRect.width - 10.0f - ((float)counts.size() * 8.0f);
+			drawText(counts, countsX, yOffset + kNameLineY, glm::vec4(0.7f, 0.7f, 0.7f, 1.0f));
 			
-			// Show triangle count
-			std::string triCount = "(" + std::to_string(mesh->getTriangleCount()) + " tri)";
-			drawText(triCount, materialListRect.x + materialListRect.width - 80.0f, yOffset + kNameLineY, glm::vec4(0.7f, 0.7f, 0.7f, 1.0f));
+			// Restore rectangle shader after text rendering (items draw rectangles each iteration).
+			bindRectShader();
 		}
-		yOffset += kItemHeight;
+		yOffset += kMeshPartItemHeight;
 	}
 }
 

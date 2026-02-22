@@ -15,7 +15,11 @@ class Mesh : public Drawable, public Transformable
 {
 public:
 	Mesh();
-	Mesh(const std::vector<Vertex>& vertices, const std::vector<unsigned int>& indices, Texture* texture, const std::string& materialName = "");
+	Mesh(const std::vector<Vertex>& vertices,
+	     const std::vector<unsigned int>& indices,
+	     Texture* texture,
+	     const std::string& materialName = "",
+	     const std::string& partName = "");
 	~Mesh();
 
 	virtual void draw(Shader& shader) const override;
@@ -25,8 +29,11 @@ public:
 	// Raw index access (triangulated). Indices are into `getVertices()` and are in groups of 3.
 	const std::vector<unsigned int>& getIndices() const { return m_indices; }
 	
-	// Material debugging
+	// "Material" here is the texture/material slot name as provided by the game formats.
+	// Multiple mesh parts can share the same material name.
 	std::string getMaterialName() const { return m_materialName; }
+	// Human-facing "mesh part"/component/subobject name (when available).
+	std::string getPartName() const { return m_partName; }
 	void setEnabled(bool enabled) { m_enabled = enabled; }
 	bool isEnabled() const { return m_enabled; }
 	
@@ -55,5 +62,6 @@ private:
 
 	Texture* m_texture;
 	std::string m_materialName;
+	std::string m_partName;
 	bool m_enabled;
 };

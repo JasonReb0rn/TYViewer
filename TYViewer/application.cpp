@@ -682,7 +682,7 @@ void Application::render(Shader& shader)
 		renderer.draw(*model, shader);
 	}
 	
-	// Reset tint color to white after drawing models (in case last mesh had pink tint from being disabled)
+	// Reset tint color to white after drawing models (avoid shader state leaking into debug draws).
 	shader.bind();
 	shader.setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
 

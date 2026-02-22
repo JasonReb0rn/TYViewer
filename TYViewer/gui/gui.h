@@ -74,6 +74,12 @@ public:
 
 private:
 	// ---------------------------------------------------------------------
+	// "Mesh parts" (submesh/component) list layout constants
+	// ---------------------------------------------------------------------
+	static constexpr float kMeshPartHeaderHeight = 62.0f;
+	static constexpr float kMeshPartItemHeight = 34.0f;    // two-line entry
+
+	// ---------------------------------------------------------------------
 	// TY2 "material" name parsing (rudimentary suffix identification)
 	// ---------------------------------------------------------------------
 	enum MaterialNameFlags : unsigned int

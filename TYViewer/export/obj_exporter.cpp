@@ -141,10 +141,13 @@ namespace Export
 			const auto& verts = mesh->getVertices();
 			const auto& indices = mesh->getIndices();
 
+			const std::string partRaw = mesh->getPartName();
+			const std::string groupName = sanitizeMtlName(partRaw.empty() ? ("mesh_" + std::to_string(meshIndex)) : partRaw);
+
 			const std::string matRaw = mesh->getMaterialName();
 			const std::string matName = sanitizeMtlName(matRaw.empty() ? ("mesh_" + std::to_string(meshIndex)) : matRaw);
 
-			obj << "g mesh_" << meshIndex << "\n";
+			obj << "g " << groupName << "\n";
 			obj << "usemtl " << matName << "\n";
 
 			// Emit vertices for this mesh.

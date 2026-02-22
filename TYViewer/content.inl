@@ -485,6 +485,27 @@ inline Model* Content::load(const std::string& name)
 								vertices.push_back(v);
 							}
 
+							// Debug: Inspect known problematic UV case for TY2 PC MDG parsing.
+							// NOTE: Kept extremely narrow to avoid spamming logs.
+							if (baseName == "A177_Lenny_synker" && i == 0)
+							{
+								auto logV = [&](size_t idx)
+								{
+									if (idx >= vertices.size()) return;
+									const auto& vv = vertices[idx];
+									Debug::log(
+										"A177 debug: v[" + std::to_string(idx) + "] pos=(" +
+										std::to_string(vv.position.x) + "," + std::to_string(vv.position.y) + "," + std::to_string(vv.position.z) +
+										") uv=(" + std::to_string(vv.texcoord.x) + "," + std::to_string(vv.texcoord.y) + ")"
+									);
+								};
+
+								logV(205);
+								logV(334);
+								logV(336);
+								logV(337);
+							}
+
 							// Generate triangle strip indices with degenerate handling
 							size_t degenerateCount = 0;
 							size_t totalTriangleCount = 0;
@@ -578,6 +599,104 @@ inline Model* Content::load(const std::string& name)
 								" (uv mismatch: " + std::to_string(degenerateUvMismatch) +
 								", strip breaks: " + std::to_string(stripBreaks) + ")");
 
+							// Debug: verify whether any triangle references the reported triplet.
+							if (baseName == "A177_Lenny_synker" && i == 0)
+							{
+								size_t hitCount = 0;
+								for (size_t ti = 0; ti + 2 < indices.size(); ti += 3)
+								{
+									unsigned int a = indices[ti];
+									unsigned int b = indices[ti + 1];
+									unsigned int c = indices[ti + 2];
+									bool has205 = (a == 205 || b == 205 || c == 205);
+									bool has334 = (a == 334 || b == 334 || c == 334);
+									bool has336 = (a == 336 || b == 336 || c == 336);
+									if (has205 && has334 && has336)
+									{
+										Debug::log("A177 debug: Found triangle with (205,334,336) at tri#" + std::to_string(ti / 3));
+										hitCount++;
+										break;
+									}
+								}
+								if (hitCount == 0)
+								{
+									Debug::log("A177 debug: No triangle found with indices (205,334,336) in mesh 0");
+								}
+							}
+
+							// Debug: find the "most warped" UV triangle (large 3D area, tiny UV area).
+							// This helps pinpoint the actual triangle that looks wrong on screen, even if the
+							// vertex IDs reported by some debug view are using a different numbering scheme.
+							if (baseName == "A177_Lenny_synker" && i == 0)
+							{
+								const float kMinArea3 = 0.0001f;
+								const float kEps = 1e-8f;
+								float worstRatio = 0.0f;
+								size_t worstTri = static_cast<size_t>(-1);
+
+								for (size_t ti = 0; ti + 2 < indices.size(); ti += 3)
+								{
+									const unsigned int ia = indices[ti];
+									const unsigned int ib = indices[ti + 1];
+									const unsigned int ic = indices[ti + 2];
+									if (ia >= vertices.size() || ib >= vertices.size() || ic >= vertices.size())
+										continue;
+
+									const glm::vec3 p0(vertices[ia].position);
+									const glm::vec3 p1(vertices[ib].position);
+									const glm::vec3 p2(vertices[ic].position);
+									const glm::vec3 e0 = p1 - p0;
+									const glm::vec3 e1 = p2 - p0;
+									const float area3 = 0.5f * glm::length(glm::cross(e0, e1));
+									if (area3 < kMinArea3)
+										continue;
+
+									const glm::vec2 t0 = vertices[ia].texcoord;
+									const glm::vec2 t1 = vertices[ib].texcoord;
+									const glm::vec2 t2 = vertices[ic].texcoord;
+									const glm::vec2 u0 = t1 - t0;
+									const glm::vec2 u1 = t2 - t0;
+									const float area2 = 0.5f * std::abs(u0.x * u1.y - u0.y * u1.x);
+
+									const float ratio = area3 / (area2 + kEps);
+									if (ratio > worstRatio)
+									{
+										worstRatio = ratio;
+										worstTri = ti / 3;
+									}
+								}
+
+								if (worstTri != static_cast<size_t>(-1))
+								{
+									const size_t ti = worstTri * 3;
+									const unsigned int ia = indices[ti];
+									const unsigned int ib = indices[ti + 1];
+									const unsigned int ic = indices[ti + 2];
+									Debug::log("A177 debug: Worst UV warp tri#" + std::to_string(worstTri) +
+										" idx=(" + std::to_string(ia) + "," + std::to_string(ib) + "," + std::to_string(ic) + ")" +
+										" ratio=" + std::to_string(worstRatio));
+
+									auto logCorner = [&](unsigned int idx)
+									{
+										if (idx >= vertices.size()) return;
+										const auto& vv = vertices[idx];
+										Debug::log(
+											"A177 debug:   idx " + std::to_string(idx) +
+											" pos=(" + std::to_string(vv.position.x) + "," + std::to_string(vv.position.y) + "," + std::to_string(vv.position.z) + ")" +
+											" uv=(" + std::to_string(vv.texcoord.x) + "," + std::to_string(vv.texcoord.y) + ")"
+										);
+									};
+
+									logCorner(ia);
+									logCorner(ib);
+									logCorner(ic);
+								}
+								else
+								{
+									Debug::log("A177 debug: No suitable triangles found for warp scan (unexpected)");
+								}
+							}
+
 							// Use texture name from MDL3 metadata
 							std::string textureName = "";
 							if (mdgMesh.textureIndex < mdl.mdl3Metadata.TextureNames.size())
@@ -598,7 +717,17 @@ inline Model* Content::load(const std::string& name)
 								<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;
 						}
 
-						meshes.push_back(new Mesh(vertices, indices, texture, textureName));
+						std::string partName;
+						if (mdgMesh.componentIndex < mdl.subobjects.size())
+						{
+							partName = mdl.subobjects[mdgMesh.componentIndex].name;
+						}
+						if (partName.empty())
+						{
+							partName = "component_" + std::to_string(mdgMesh.componentIndex);
+						}
+
+						meshes.push_back(new Mesh(vertices, indices, texture, textureName, partName));
 						}
 					}
 					else
@@ -721,7 +850,7 @@ inline Model* Content::load(const std::string& name)
 							", strip breaks: " + std::to_string(stripBreaks) + ")");
 
 						// Use default texture since we don't have material info
-						meshes.push_back(new Mesh(vertices, indices, defaultTexture, "unknown"));
+						meshes.push_back(new Mesh(vertices, indices, defaultTexture, "unknown", "mesh_" + std::to_string(i)));
 						}
 					}
 				}
@@ -776,7 +905,7 @@ inline Model* Content::load(const std::string& name)
 						std::cout << "Failed to load texture: '" + mesh.material + "' !" << std::endl
 							<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;
 					}
-					meshes.push_back(new Mesh(vertices, indices, texture, mesh.material));
+					meshes.push_back(new Mesh(vertices, indices, texture, mesh.material, subobj.name));
 					}
 				}
 			}
