@@ -46,6 +46,7 @@ public:
 	void loadModel(const std::string& modelName, int archiveIndex);
 	void clearModels();
 	void exportCurrentModel();
+	void exportCurrentModelRaw();
 	
 	// Input forwarding to GUI
 	void onMouseButton(int button, int action, double x, double y);

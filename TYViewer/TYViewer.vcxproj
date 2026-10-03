@@ -163,6 +163,7 @@
   <ItemGroup>
     <ClCompile Include="glad\src\glad.c" />
     <ClCompile Include="export\obj_exporter.cpp" />
+    <ClCompile Include="export\raw_exporter.cpp" />
     <ClCompile Include="gui\gui.cpp" />
     <ClCompile Include="loader\archive.cpp" />
     <ClCompile Include="config.cpp" />
@@ -189,6 +190,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="export\obj_exporter.h" />
+    <ClInclude Include="export\raw_exporter.h" />
     <ClInclude Include="gui\gui.h" />
     <ClInclude Include="loader\archive.h" />
     <ClInclude Include="grid.h" />

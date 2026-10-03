@@ -163,8 +163,9 @@ void Gui::initialize(int width, int height)
 	
 	// Button at top of screen
 	buttonRect = {10.0f, 10.0f, 200.0f, 30.0f};
-	// Export button next to the model selector
+	// Export buttons next to the model selector
 	exportButtonRect = {buttonRect.x + buttonRect.width + 10.0f, 10.0f, 90.0f, 30.0f};
+	exportRawButtonRect = {exportButtonRect.x + exportButtonRect.width + 10.0f, 10.0f, 110.0f, 30.0f};
 	
 	// Model info panel on the right
 	modelInfoRect = {(float)width - 310.0f, 10.0f, 300.0f, 150.0f};
@@ -465,6 +466,11 @@ void Gui::setOnExportRequested(std::function<void()> callback)
 	onExportRequested = callback;
 }
 
+void Gui::setOnExportRawRequested(std::function<void()> callback)
+{
+	onExportRawRequested = callback;
+}
+
 void Gui::resize(int width, int height)
 {
 	windowWidth = width;
@@ -531,6 +537,7 @@ void Gui::render()
 	
 	renderButton();
 	renderExportButton();
+	renderExportRawButton();
 	renderNotificationBanner();
 	
 	if (dropdownOpen)
@@ -620,13 +627,50 @@ void Gui::renderExportButton()
 	drawText("Export", exportButtonRect.x + 18.0f, exportButtonRect.y + 11.0f, textColor);
 }
 
+void Gui::renderExportRawButton()
+{
+	glUseProgram(shaderProgram);
+	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
+	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+	const bool enabled = (currentModel != nullptr);
+	const bool hovered = exportRawButtonRect.contains(mouseX, mouseY);
+
+	glm::vec4 bgColor;
+	glm::vec4 border = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+	glm::vec4 textColor;
+	if (!enabled)
+	{
+		bgColor = glm::vec4(0.12f, 0.12f, 0.12f, 0.75f);
+		textColor = glm::vec4(0.55f, 0.55f, 0.55f, 1.0f);
+	}
+	else if (hovered)
+	{
+		bgColor = glm::vec4(0.25f, 0.35f, 0.50f, 0.95f);
+		textColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+	}
+	else
+	{
+		bgColor = glm::vec4(0.18f, 0.28f, 0.42f, 0.95f);
+		textColor = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
+	}
+
+	drawRect(exportRawButtonRect.x, exportRawButtonRect.y, exportRawButtonRect.width, exportRawButtonRect.height, bgColor);
+	drawRect(exportRawButtonRect.x, exportRawButtonRect.y, exportRawButtonRect.width, 2.0f, border);
+	drawRect(exportRawButtonRect.x, exportRawButtonRect.y + exportRawButtonRect.height - 2.0f, exportRawButtonRect.width, 2.0f, border);
+	drawRect(exportRawButtonRect.x, exportRawButtonRect.y, 2.0f, exportRawButtonRect.height, border);
+	drawRect(exportRawButtonRect.x + exportRawButtonRect.width - 2.0f, exportRawButtonRect.y, 2.0f, exportRawButtonRect.height, border);
+
+	drawText("Export Raw", exportRawButtonRect.x + 12.0f, exportRawButtonRect.y + 11.0f, textColor);
+}
+
 void Gui::renderNotificationBanner()
 {
-	// Banner sits to the right of the Export button.
+	// Banner sits to the right of the export buttons.
 	const float kPad = 10.0f;
-	const float x = exportButtonRect.x + exportButtonRect.width + kPad;
-	const float y = exportButtonRect.y;
-	const float h = exportButtonRect.height;
+	const float x = exportRawButtonRect.x + exportRawButtonRect.width + kPad;
+	const float y = exportRawButtonRect.y;
+	const float h = exportRawButtonRect.height;
 	const float maxW = (float)windowWidth - x - kPad;
 	const float w = (maxW > 0.0f) ? std::min(420.0f, maxW) : 0.0f;
 
@@ -971,6 +1015,15 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				return;
 			}
 
+			if (exportRawButtonRect.contains(x, y))
+			{
+				if (currentModel && onExportRawRequested)
+				{
+					onExportRawRequested();
+				}
+				return;
+			}
+
 			if (buttonRect.contains(x, y))
 			{
 				dropdownOpen = !dropdownOpen;
@@ -1110,7 +1163,7 @@ void Gui::onMouseMove(float x, float y)
 	mouseX = x;
 	mouseY = y;
 	
-	hovering = buttonRect.contains(x, y) || exportButtonRect.contains(x, y) ||
+	hovering = buttonRect.contains(x, y) || exportButtonRect.contains(x, y) || exportRawButtonRect.contains(x, y) ||
 		(dropdownOpen && dropdownRect.contains(x, y)) || (submenuOpen && submenuRect.contains(x, y));
 	
 	// Track hovered submenu item

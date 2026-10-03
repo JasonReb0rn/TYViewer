@@ -52,13 +52,18 @@ Global Vertex Data Block (starts after all mesh headers):
   Vertices for each mesh are contiguous, following the order meshes appear
   in the ObjectLookupTable traversal.
   
-Per-Vertex Layout (48 bytes):
-    +0-3:   Unknown/flag (often 0xFFFFFFFF)
-    +4-11:  UV coordinates (2 floats) - this is the real UV location
-    +12-23: Position (3 floats, XYZ - confirmed)
-    +24-27: Weight/Modifier (1 float, typically 1.0 - purpose unclear)
-    +28-35: Unknown field (2 floats, often constant per mesh like 27.0, 27.0)
-    +36-47: Normal (3 floats, XYZ normalized - confirmed)
+Per-Vertex Layout (48 bytes). Color and UV belong to the *previous* vertex;
+position, weight, and normal belong to *this* vertex. Mesh boundaries do not
+reset the shift. After the last record, a 12-byte tail holds the final
+vertex's color dword and UV (no position or normal).
+
+    +0-3:   Vertex color of vertex i-1 (D3D 0xAARRGGBB). Dummy on record 0.
+            Not applied yet; renderer still uses white.
+    +4-11:  UV of vertex i-1 (2 floats). V is flipped: v = 1.0 - rawV.
+    +12-23: Position of vertex i (3 floats, XYZ - confirmed)
+    +24-27: Weight/Modifier of vertex i (1 float, typically 1.0 - purpose unclear)
+    +28-35: Unknown field of vertex i (2 floats, often constant per mesh like 27.0, 27.0)
+    +36-47: Normal of vertex i (3 floats, XYZ normalized - confirmed)
     
   Note: The vertex data offset must be found by searching for valid vertex
   patterns, as it doesn't have a fixed location after the mesh headers.
@@ -137,9 +142,11 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
    - Validate Position (+12) and Normal (+36).
    - Skip header regions that can contain false positives.
 
-7. **UVs are float32 at +4/+8 with a +1 vertex shift**
-   - Raw UVs are stored one vertex ahead of their positions.
-   - Applying a +1 shift fixes the “every other face” UV warping.
+7. **UVs are float32, stored one record ahead of their position**
+   - The UV at record `i` (+4/+8) belongs to vertex `i-1`.
+   - The shift is global across the vertex block. It crosses mesh boundaries, including into collision meshes that are not drawn.
+   - The last vertex in the file reads its UV from the 12-byte tail (`+4/+8` after a color dword).
+   - Do not clamp the shift to the current mesh, and do not gate it on duplicate-position heuristics. Meshes with no strip-restart duplicates still need the shift; clamping drops the last vertex's UV (the speed-sign face warp).
    - V still needs flipping (`v = 1.0 - rawV`).
 
 ### OBSERVED / INFERRED (Material naming conventions)
@@ -163,10 +170,11 @@ In practice, multiple “material names” often reuse the *same* underlying tex
 **Important**: These are naming conventions observed in real model sets, and are not yet backed by a fully decoded “material definition” structure. Long term, we should map these suffixes to real render-state fields (likely from MDL3/MDG header bits), rather than relying on string heuristics.
 
 ### UNKNOWN/UNCLEAR:
-1. **Vertex Colors**: Not found in the 48-byte vertex data
-   - Currently defaults to white (1,1,1,1)
-   - May be stored separately, derived from textures, or not used
-   - Models render fine without them
+1. **Vertex Colors**: Stored with the same +1 shift as UVs
+   - The `+0` dword of record `i` is the color of vertex `i-1` (D3D `0xAARRGGBB`).
+   - The file tail's first 4 bytes are the last vertex's color (often `0xFFFFFFFF`).
+   - Parser still writes white so the UV fix can be checked on its own.
+   - Duplicate positions match this shifted dword on static props. Character meshes are often a constant color, so both shifts match.
 
 2. **Weight/Modifier Field (+24-27)**: Always 1.0 in static meshes
    - 4 bytes (1 float)
@@ -195,29 +203,33 @@ In practice, multiple “material names” often reuse the *same* underlying tex
 ## Next Steps
 
 ### HIGH PRIORITY
-1. **Validate +1 UV shift across more TY 2 PC models**
-   - Confirm it holds when connector duplicates are sparse or absent.
+1. **Apply the shifted vertex color**
+   - Decode the `+0` dword of the next record (and the tail) as D3D `0xAARRGGBB` once the UV fix is confirmed in the viewer.
 
 ### MEDIUM PRIORITY
 2. **Understand the +28..+35 floats**
    - Often constant per mesh; may be scale or bounds data.
-3. **Investigate vertex colors**
-   - Not found in the 48-byte vertex stream yet.
 
 ### LOW PRIORITY
-4. **Clarify the +24 weight/modifier field**
+3. **Clarify the +24 weight/modifier field**
    - Always 1.0 in static meshes; likely skinning-related.
-5. **Analyze strip descriptor flags (high byte)**
+4. **Analyze strip descriptor flags (high byte)**
    - 0xA0, 0x20, 0xB0, 0x60 appear; purpose unknown.
-6. **Cache vertex data offset**
+5. **Cache vertex data offset**
    - Avoid repeated searches during load.
 
 ## Testing Results
 
+### Test Model: `P0788_SpeedSign.mdl/mdg` (TY 2 PC)
+- **Status**: Sign-face UV warp fixed by reading UV from the next record, across meshes
+- Two 5-vertex sign faces. The last triangle of each (globals 166–168 and 171–173) used to collapse because the last vertex kept the previous vertex's UV
+- Correct sign corners (V flipped): TL `(0.00427, 0.99526)`, TR `(0.43097, 0.99526)`, BL `(0.00427, 0.52098)`, BR `(0.43097, 0.52098)`
+- BR's UV lives in the next mesh's first record (the other sign, then the skipped `CM_METAL` mesh)
+
 ### Test Model: `P0623_MovieLight.mdl/mdg` (TY 2 PC)
-- **Status**: UVs fully correct with +1 UV shift
-- Mesh has 610 vertices; strip descriptors do not sum to base+dup
-- Adjacent duplicate positions are connector vertices; UVs align after +1 shift
+- **Status**: UVs align with a global +1 shift, including meshes that have no duplicate positions
+- Strip descriptors do not sum to base+dup
+- Adjacent duplicate positions are connector vertices
 - Vertex data starts at offset 244
 
 ## Methodology
@@ -247,4 +259,4 @@ The PC format is **completely different** from PS2 format:
 - Header vertex counts (base + duplicate) are correct for mesh sizing
 - Search algorithm works reliably using position + normal validation
 - Collision meshes use `CM_` textures and are skipped for rendering
-- **UVs resolved**: float32 UVs require +1 vertex shift (plus V flip)
+- **UVs**: float32 UVs are one record ahead of their position (plus V flip), including across meshes and the 12-byte tail

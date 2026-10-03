@@ -7,6 +7,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "export/obj_exporter.h"
+#include "export/raw_exporter.h"
 #include "util/folder_picker.h"
 
 std::string Application::APPLICATION_PATH = "";
@@ -369,6 +370,9 @@ void Application::initialize()
 	gui->setOnExportRequested([this]() {
 		exportCurrentModel();
 	});
+	gui->setOnExportRawRequested([this]() {
+		exportCurrentModelRaw();
+	});
 	
 	// Load initial model if specified in config
 	if (!Config::model.empty() && (ty1Loaded || ty2Loaded))
@@ -466,6 +470,55 @@ void Application::exportCurrentModel()
 	if (gui)
 	{
 		gui->showNotification("Export complete", Gui::NotificationKind::Success, 3.0f);
+	}
+}
+
+void Application::exportCurrentModelRaw()
+{
+	if (models.empty() || models[0] == nullptr || currentModelName.empty())
+	{
+		Debug::log("Raw export requested but no model is loaded");
+		if (gui)
+		{
+			gui->showNotification("Export Raw failed: no model loaded", Gui::NotificationKind::Error, 4.0f);
+		}
+		return;
+	}
+
+	content.setActiveArchive(currentModelArchiveIndex);
+
+	std::string folder = Util::pickFolderDialog(window, "Select folder for raw .mdl/.mdg export");
+	if (folder.empty())
+	{
+		Debug::log("Raw export cancelled");
+		if (gui)
+		{
+			gui->showNotification("Export Raw cancelled", Gui::NotificationKind::Info, 2.0f);
+		}
+		return;
+	}
+
+	std::filesystem::path outDir(folder);
+	std::string err;
+	bool wroteMdg = false;
+	if (!Export::exportModelRaw(currentModelName, content, outDir, &err, &wroteMdg))
+	{
+		Debug::log("Raw export failed: " + err);
+		if (gui)
+		{
+			std::string msg = "Export Raw failed";
+			if (!err.empty())
+				msg += ": " + err;
+			gui->showNotification(msg, Gui::NotificationKind::Error, 4.5f);
+		}
+		return;
+	}
+
+	Debug::log("Raw export finished");
+	if (gui)
+	{
+		std::string msg = wroteMdg ? "Exported .mdl + .mdg" : "Exported .mdl (no .mdg)";
+		gui->showNotification(msg, Gui::NotificationKind::Success, 3.0f);
 	}
 }
 

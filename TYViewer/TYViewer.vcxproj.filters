@@ -87,6 +87,9 @@
     <ClCompile Include="export\obj_exporter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="export\raw_exporter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="util\folder_picker.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -180,6 +183,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="export\obj_exporter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="export\raw_exporter.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="util\folder_picker.h">

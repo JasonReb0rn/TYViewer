@@ -46,7 +46,7 @@ public:
 		Error
 	};
 
-	// Shows a temporary banner to the right of the Export button.
+	// Shows a temporary banner to the right of the export buttons.
 	// Duration is in seconds. Call again to replace the current banner.
 	void showNotification(const std::string& message,
 	                      NotificationKind kind = NotificationKind::Info,
@@ -56,6 +56,7 @@ public:
 	void setModelList(const std::vector<ModelEntry>& models);
 	void setOnModelSelected(std::function<void(const ModelEntry&)> callback);
 	void setOnExportRequested(std::function<void()> callback);
+	void setOnExportRawRequested(std::function<void()> callback);
 	
 	// Model debugging
 	void setCurrentModel(class Model* model, const std::string& modelName);
@@ -102,6 +103,7 @@ private:
 	void renderSubmenu();
 	void renderButton();
 	void renderExportButton();
+	void renderExportRawButton();
 	void renderNotificationBanner();
 	void renderScrollbar();
 	void renderModelInfo();
@@ -122,6 +124,7 @@ private:
 	
 	GuiRect buttonRect;
 	GuiRect exportButtonRect;
+	GuiRect exportRawButtonRect;
 	GuiRect notificationRect;
 	GuiRect dropdownRect;
 	GuiRect submenuRect;
@@ -164,6 +167,7 @@ private:
 	
 	std::function<void(const ModelEntry&)> onModelSelected;
 	std::function<void()> onExportRequested;
+	std::function<void()> onExportRawRequested;
 
 	// Notification state
 	bool notificationActive = false;

@@ -434,13 +434,14 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 	meshes.clear();
 	
 	// Find where vertex data actually starts (after all mesh headers)
-	// PC MDG format uses 48-byte stride per vertex with specific layout:
-	//   +0-3:   Unknown/flag (often 0xFFFFFFFF)
-	//   +4-11:  UV (2 floats)
-	//   +12-23: Position (3 floats)
-	//   +24-27: Weight (1 float)
-	//   +28-35: Unknown (2 floats, often constant per mesh like 27.0, 27.0)
-	//   +36-47: Normal (3 floats)
+	// PC MDG format uses 48-byte stride per vertex. Color and UV are stored
+	// one record ahead of the position they belong to (mesh boundaries do not reset this):
+	//   +0-3:   Vertex color of vertex i-1 (D3D 0xAARRGGBB; dummy on record 0)
+	//   +4-11:  UV of vertex i-1 (2 floats). The last vertex's UV is the 12-byte file tail.
+	//   +12-23: Position of vertex i (3 floats)
+	//   +24-27: Weight of vertex i (1 float)
+	//   +28-35: Unknown of vertex i (2 floats, often constant per mesh like 27.0, 27.0)
+	//   +36-47: Normal of vertex i (3 floats)
 	
 	size_t globalVertexDataStart = 0;
 	const size_t VERTEX_STRIDE = 48;
@@ -634,12 +635,17 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 					continue;
 				}
 
-				Debug::log("MDG PC: UV format = Float2@+4");
+				Debug::log("MDG PC: UV format = Float2@nextRecord+4");
 				
-				// Log first vertex for debugging (position is at +12)
-				float u = from_bytes<float>(buffer, vertexDataOffset + 4);
-				float v = from_bytes<float>(buffer, vertexDataOffset + 8);
-				v = 1.0f - v;
+				// Log first vertex for debugging (position is at +12).
+				// Its UV is stored at +4/+8 of the next record.
+				size_t firstUvOffset = vertexDataOffset + VERTEX_STRIDE;
+				if (firstUvOffset + 12 > size)
+				{
+					firstUvOffset = vertexDataOffset;
+				}
+				float u = from_bytes<float>(buffer, firstUvOffset + 4);
+				float v = 1.0f - from_bytes<float>(buffer, firstUvOffset + 8);
 				float x = from_bytes<float>(buffer, vertexDataOffset + 12);
 				float y = from_bytes<float>(buffer, vertexDataOffset + 16);
 				float z = from_bytes<float>(buffer, vertexDataOffset + 20);
@@ -648,16 +654,10 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 				Debug::log("MDG PC: First vertex UV: (" + std::to_string(u) + ", " + std::to_string(v) + ")");
 				Debug::log("MDG PC: First vertex Pos: (" + std::to_string(x) + ", " + std::to_string(y) + ", " + std::to_string(z) + ")");
 
-				// PC Format: Interleaved vertex data with 48-byte stride
-				// Layout per vertex:
-				//   +0-3:   Unknown/flag (often 0xFFFFFFFF)
-				//   +4-11:  UV (2 floats)
-				//   +12-23: Position (3 floats)
-				//   +24-27: Weight (1 float)
-				//   +28-35: Unknown (2 floats, often constant per mesh)
-				//   +36-47: Normal (3 floats)
+				// PC Format: Interleaved vertex data with 48-byte stride.
+				// Position and normal belong to this record. UV belongs to the previous
+				// vertex, so vertex i reads UV from record i+1 (next mesh, or the 12-byte tail).
 				std::vector<mdl2::Vertex> allVertices(totalVertices);
-				std::vector<std::array<float, 2>> rawUvs(totalVertices);
 				size_t currentOffset = vertexDataOffset;
 				
 				// Verify we have enough data
@@ -673,10 +673,17 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 				// Read all vertices with interleaved layout
 				for (size_t i = 0; i < totalVertices; i++) {
 					size_t vertexOffset = currentOffset + (i * VERTEX_STRIDE);
-					
-					// UV at +4
-					rawUvs[i][0] = from_bytes<float>(buffer, vertexOffset + 4);
-					rawUvs[i][1] = 1.0f - from_bytes<float>(buffer, vertexOffset + 8);
+
+					// UV for this vertex is stored one record ahead (+4/+8), then V-flipped.
+					// Record i+1 is the next vertex, the next mesh's first vertex, or the
+					// 12-byte tail (color dword + UV) after the last vertex in the file.
+					size_t uvOffset = vertexOffset + VERTEX_STRIDE;
+					if (uvOffset + 12 > size)
+					{
+						uvOffset = vertexOffset;
+					}
+					allVertices[i].texcoord[0] = from_bytes<float>(buffer, uvOffset + 4);
+					allVertices[i].texcoord[1] = 1.0f - from_bytes<float>(buffer, uvOffset + 8);
 					
 					// Position at +12
 					allVertices[i].position[0] = from_bytes<float>(buffer, vertexOffset + 12);
@@ -693,61 +700,11 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 					allVertices[i].normal[1] = from_bytes<float>(buffer, vertexOffset + 40);
 					allVertices[i].normal[2] = from_bytes<float>(buffer, vertexOffset + 44);
 					
-					// Default color (white) - colors may be stored elsewhere or not present
+					// Color is the +0 dword of the next record (same shift as UV). Left white for now.
 					allVertices[i].colour[0] = 1.0f;
 					allVertices[i].colour[1] = 1.0f;
 					allVertices[i].colour[2] = 1.0f;
 					allVertices[i].colour[3] = 1.0f;
-				}
-
-				// Heuristic: if adjacent duplicate positions have mismatched UVs, UVs may be shifted by +1.
-				size_t adjacentPairs = 0;
-				size_t matchesShift0 = 0;
-				size_t matchesShift1 = 0;
-				for (size_t i = 0; i + 1 < totalVertices; i++)
-				{
-					bool samePos = std::abs(allVertices[i].position[0] - allVertices[i + 1].position[0]) < 0.00001f &&
-						std::abs(allVertices[i].position[1] - allVertices[i + 1].position[1]) < 0.00001f &&
-						std::abs(allVertices[i].position[2] - allVertices[i + 1].position[2]) < 0.00001f;
-					if (!samePos)
-					{
-						continue;
-					}
-
-					adjacentPairs++;
-					bool sameUv0 = std::abs(rawUvs[i][0] - rawUvs[i + 1][0]) < 0.00001f &&
-						std::abs(rawUvs[i][1] - rawUvs[i + 1][1]) < 0.00001f;
-					if (sameUv0)
-					{
-						matchesShift0++;
-					}
-
-					if (i + 2 < totalVertices)
-					{
-						bool sameUv1 = std::abs(rawUvs[i + 1][0] - rawUvs[i + 2][0]) < 0.00001f &&
-							std::abs(rawUvs[i + 1][1] - rawUvs[i + 2][1]) < 0.00001f;
-						if (sameUv1)
-						{
-							matchesShift1++;
-						}
-					}
-				}
-
-				bool useShiftedUvs = (adjacentPairs > 0 && matchesShift1 > matchesShift0);
-				if (useShiftedUvs)
-				{
-					Debug::log("MDG PC: Using +1 UV shift based on duplicate matches");
-				}
-
-				for (size_t i = 0; i < totalVertices; i++)
-				{
-					size_t uvIndex = i;
-					if (useShiftedUvs && i + 1 < totalVertices)
-					{
-						uvIndex = i + 1;
-					}
-					allVertices[i].texcoord[0] = rawUvs[uvIndex][0];
-					allVertices[i].texcoord[1] = rawUvs[uvIndex][1];
 				}
 				currentOffset += totalVertices * VERTEX_STRIDE;
 				
