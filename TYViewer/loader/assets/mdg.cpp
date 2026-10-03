@@ -433,7 +433,6 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 	Debug::log("MDG: Parsing PC MDG format");
 	meshes.clear();
 	
-	// Find where vertex data actually starts (after all mesh headers)
 	// PC MDG format uses 48-byte stride per vertex. Color and UV are stored
 	// one record ahead of the position they belong to (mesh boundaries do not reset this):
 	//   +0-3:   Vertex color of vertex i-1 (D3D 0xAARRGGBB; dummy on record 0)
@@ -443,11 +442,18 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 	//   +28-35: Unknown of vertex i (2 floats, often constant per mesh like 27.0, 27.0)
 	//   +36-47: Normal of vertex i (3 floats)
 	
-	size_t globalVertexDataStart = 0;
 	const size_t VERTEX_STRIDE = 48;
-	
-	// Determine where mesh headers end so we don't mis-detect in header data
-	size_t maxHeaderEnd = 0;
+	// After the last 48-byte record: color dword + UV of the final vertex.
+	const size_t VERTEX_TAIL = 12;
+
+	// The vertex block is every mesh's (base + duplicate) records, then the
+	// 12-byte tail. Do not scan forward from the last header: strip descriptors
+	// are not part of that header, and treating them as such starts the scan
+	// inside vertex 0. The next 48-byte-aligned hit is vertex 1, which drops
+	// the first vertex and pulls the next mesh's first vertex in as the last
+	// (one rogue triangle per mesh, and a missing opening triangle).
+	size_t fileVertexCount = 0;
+	size_t maxFixedHeaderEnd = 0;
 	std::unordered_set<size_t> visitedMeshes;
 	for (uint16_t ti = 0; ti < mdl3Metadata.TextureCount; ti++)
 	{
@@ -459,12 +465,17 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 			int32_t meshRef = from_bytes<int32_t>(mdlBuffer, lookupOffset);
 			while (meshRef != 0)
 			{
-				if (meshRef < 0 || (size_t)meshRef >= size) break;
+				if (meshRef < 0 || (size_t)meshRef + 0x10 > size) break;
 				if (!visitedMeshes.insert((size_t)meshRef).second) break;
 
-				uint16_t stripCount = from_bytes<uint16_t>(buffer, meshRef + 0x6);
-				size_t headerEnd = meshRef + 0x10 + (stripCount * 2);
-				maxHeaderEnd = std::max(maxHeaderEnd, headerEnd);
+				uint16_t baseVertexCount = from_bytes<uint16_t>(buffer, meshRef + 0x0);
+				uint16_t duplicateVertexCount = from_bytes<uint16_t>(buffer, meshRef + 0x4);
+				fileVertexCount += static_cast<size_t>(baseVertexCount) + static_cast<size_t>(duplicateVertexCount);
+
+				// Fixed header ends at +0x10. The last mesh is followed by the
+				// vertex block (sometimes after a few padding bytes). Adding
+				// stripCount*2 here reads those bytes out of vertex 0.
+				maxFixedHeaderEnd = std::max(maxFixedHeaderEnd, (size_t)meshRef + 0x10);
 
 				if (meshRef + 0xC + 4 > size) break;
 				meshRef = from_bytes<int32_t>(buffer, meshRef + 0xC);
@@ -472,51 +483,23 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 		}
 	}
 
-	// Search for vertex data by looking for a sequence of valid 48-byte vertices
-	// Use position + normal checks (UVs are not reliable in PC format)
-	size_t searchStart = maxHeaderEnd & ~0x3;
-	for (size_t searchOffset = searchStart; searchOffset + (VERTEX_STRIDE * 5) <= size; searchOffset += 4)
+	const size_t vertexBytes = fileVertexCount * VERTEX_STRIDE;
+	if (fileVertexCount == 0 || size < VERTEX_TAIL + vertexBytes)
 	{
-		// Look for at least 5 consecutive valid vertices with 48-byte stride
-		int validCount = 0;
-		for (int v = 0; v < 5; v++) {
-			size_t vertexOffset = searchOffset + (v * VERTEX_STRIDE);
-			if (vertexOffset + VERTEX_STRIDE > size) break;
-			
-			// Check Position at +12
-			float x = from_bytes<float>(buffer, vertexOffset + 12);
-			float y = from_bytes<float>(buffer, vertexOffset + 16);
-			float z = from_bytes<float>(buffer, vertexOffset + 20);
-			bool hasNonZero = (std::abs(x) > 0.0001f || std::abs(y) > 0.0001f || std::abs(z) > 0.0001f);
-			bool posValid = !std::isnan(x) && !std::isinf(x) && std::abs(x) < 1000.0f &&
-			                !std::isnan(y) && !std::isinf(y) && std::abs(y) < 1000.0f &&
-			                !std::isnan(z) && !std::isinf(z) && std::abs(z) < 1000.0f;
-
-			// Check Normal at +36
-			float nx = from_bytes<float>(buffer, vertexOffset + 36);
-			float ny = from_bytes<float>(buffer, vertexOffset + 40);
-			float nz = from_bytes<float>(buffer, vertexOffset + 44);
-			float normalLen = std::sqrt((nx * nx) + (ny * ny) + (nz * nz));
-			bool normalValid = !std::isnan(nx) && !std::isinf(nx) &&
-				!std::isnan(ny) && !std::isinf(ny) &&
-				!std::isnan(nz) && !std::isinf(nz) &&
-				normalLen > 0.2f && normalLen < 1.8f;
-			
-			// Position and normal must be valid
-			if (posValid && normalValid && hasNonZero) validCount++;
-		}
-		
-		if (validCount >= 4) {
-			globalVertexDataStart = searchOffset;
-			Debug::log("MDG PC: Found global vertex data block starting at offset " + std::to_string(globalVertexDataStart));
-			break;
-		}
-	}
-	
-	if (globalVertexDataStart == 0) {
-		Debug::log("MDG PC: Could not find global vertex data block");
+		Debug::log("MDG PC: Could not size the vertex block");
 		return false;
 	}
+
+	size_t globalVertexDataStart = size - VERTEX_TAIL - vertexBytes;
+	if (globalVertexDataStart < maxFixedHeaderEnd)
+	{
+		Debug::log("MDG PC: Vertex block overlaps mesh headers (start=" + std::to_string(globalVertexDataStart) +
+			", headerEnd=" + std::to_string(maxFixedHeaderEnd) + ")");
+		return false;
+	}
+
+	Debug::log("MDG PC: Vertex data block at offset " + std::to_string(globalVertexDataStart) +
+		" (" + std::to_string(fileVertexCount) + " vertices, tail=" + std::to_string(VERTEX_TAIL) + ")");
 	
 	// Track current position in vertex data as we parse meshes sequentially
 	size_t currentVertexDataOffset = globalVertexDataStart;
@@ -525,10 +508,11 @@ bool mdg::parseMDGPC(const char* buffer, size_t size, const mdl2::MDL3Metadata& 
 	// 1. MDG3 header (4 bytes)
 	// 2. Mesh headers referenced by ObjectLookupTable
 	// 3. Each mesh header contains:
+	//    - Base (+0x00) and duplicate (+0x04) vertex counts
 	//    - Strip count at offset +0x6 (2 bytes)
 	//    - Next mesh pointer at offset +0xC (4 bytes)
-	//    - Strip descriptors (2 bytes each) starting at offset +0x10
-	// 4. Vertex data follows after all strip descriptors
+	//    - Strip descriptors (2 bytes each) starting at offset +0x14
+	// 4. Vertex data is one block: fileSize - 12 - (sum of base+duplicate) * 48
 
 	// Iterate through texture/component pairs using ObjectLookupTable
 	for (uint16_t ti = 0; ti < mdl3Metadata.TextureCount; ti++)

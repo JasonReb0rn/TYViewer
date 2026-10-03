@@ -37,7 +37,12 @@ Mesh Header Structure (referenced by ObjectLookupTable in MDL file):
   +0x08: Unknown data (likely animation node index: uint16)
   +0x0A: Unknown/padding
   +0x0C: Next mesh pointer (int32, 0 if no next mesh in linked list)
-  +0x10: Strip descriptors array (2 bytes each, stripCount entries)
+  +0x10: 4 bytes, zero on render meshes. Not the descriptor array.
+  +0x14: Strip descriptors array (2 bytes each, stripCount entries)
+         The loader still reads these from +0x10, so the low-byte sum is
+         short by the last two strips and index generation stays one strip.
+         Do not switch to per-strip indexing until the drum 0xB0 stitch
+         (duplicate count is 1 higher than (stripCount-1)*2) is understood.
   
 Strip Descriptor Format (uint16):
   Low byte (bits 0-7):   Vertex count for this strip (informational only)
@@ -65,8 +70,11 @@ vertex's color dword and UV (no position or normal).
     +28-35: Unknown field of vertex i (2 floats, often constant per mesh like 27.0, 27.0)
     +36-47: Normal of vertex i (3 floats, XYZ normalized - confirmed)
     
-  Note: The vertex data offset must be found by searching for valid vertex
-  patterns, as it doesn't have a fixed location after the mesh headers.
+  Vertex block start (do not scan for it):
+    start = fileSize - 12 - (sum of every mesh's base+duplicate) * 48
+    The sum includes collision meshes. The block must begin at or after the
+    last mesh's fixed header (+0x10). A forward scan from header+stripBytes
+    lands inside vertex 0 and locks onto vertex 1.
 ```
 
 ## Notes
@@ -76,7 +84,7 @@ vertex's color dword and UV (no position or normal).
    - If no markers → Use PC parser (`parseMDGPC`)
 
 2. **PC Parser (`parseMDGPC`)**:
-   - Finds the vertex block by validating Position (+12) and Normal (+36)
+   - Places the vertex block at `fileSize - 12 - totalVertices * 48`
    - Uses the ObjectLookupTable in the MDL3 file to walk meshes
    - Uses base+duplicate counts from the mesh header to size each mesh
    - Vertex data is interleaved; no separate UV buffer found
@@ -138,9 +146,9 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
    - Base count (+0x00) + duplicate count (+0x04) = total vertices.
    - Duplicates act as strip connectors.
 
-6. **Vertex block offset search works**
-   - Validate Position (+12) and Normal (+36).
-   - Skip header regions that can contain false positives.
+6. **Vertex block start is `fileSize - 12 - totalVertices * 48`**
+   - `totalVertices` is the sum of base+duplicate over every mesh, including collision.
+   - Scanning forward from the last header skips vertex 0. Each mesh then ends on the next mesh's first vertex (one rogue triangle) and loses its opening triangle. On the street lamp that hole is the face through viewer verts (0, 1, 9), because vert 9 repeats the dropped vertex.
 
 7. **UVs are float32, stored one record ahead of their position**
    - The UV at record `i` (+4/+8) belongs to vertex `i-1`.
@@ -257,6 +265,6 @@ The PC format is **completely different** from PS2 format:
 - Geometry renders correctly with full face coverage
 - 48-byte stride confirmed
 - Header vertex counts (base + duplicate) are correct for mesh sizing
-- Search algorithm works reliably using position + normal validation
+- Vertex block start is `fileSize - 12 - totalVertices * 48` (no pattern scan)
 - Collision meshes use `CM_` textures and are skipped for rendering
 - **UVs**: float32 UVs are one record ahead of their position (plus V flip), including across meshes and the 12-byte tail
