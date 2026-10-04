@@ -14,8 +14,16 @@ Model::~Model()
 
 void Model::draw(Shader& shader) const
 {
+	drawMeshes(shader, false);
+	drawMeshes(shader, true);
+}
+
+void Model::drawMeshes(Shader& shader, bool transparentPass) const
+{
 	for (auto& mesh : meshes)
 	{
+		if (mesh->isTransparent() != transparentPass)
+			continue;
 		mesh->draw(shader);
 	}
 }

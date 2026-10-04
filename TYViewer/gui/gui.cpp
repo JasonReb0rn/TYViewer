@@ -508,25 +508,7 @@ void Gui::resize(int width, int height)
 	// Update panel positions
 	modelInfoRect = {(float)width - 310.0f, 10.0f, 300.0f, 150.0f};
 	
-	// Recalculate material list size if we have a model
-	if (currentModel)
-	{
-		const float kBottomPad = 5.0f;
-
-		int materialCount = currentModel->getMeshCount();
-		float contentHeight = kMeshPartHeaderHeight + (materialCount * kMeshPartItemHeight) + kBottomPad;
-		float maxHeight = height * 0.7f;
-		float panelHeight = (contentHeight < maxHeight) ? contentHeight : maxHeight;
-		
-		materialListRect = {(float)width - 310.0f, 170.0f, 300.0f, panelHeight};
-		maxMaterialListScroll = (contentHeight > panelHeight) ? (contentHeight - panelHeight) : 0.0f;
-		if (materialListScroll > maxMaterialListScroll) materialListScroll = maxMaterialListScroll;
-	}
-	else
-	{
-		// Default size when no model
-		materialListRect = {(float)width - 310.0f, 170.0f, 300.0f, 200.0f};
-	}
+	layoutMaterialList();
 }
 
 void Gui::render()
@@ -584,10 +566,9 @@ void Gui::render()
 	
 	// Render model info and material list panels
 	if (currentModel)
-	{
 		renderModelInfo();
+	if (hasMaterialPanel())
 		renderMaterialList();
-	}
 	
 	// Restore OpenGL state
 	if (depthTestEnabled)
@@ -1337,12 +1318,21 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				// Clicking on category doesn't do anything - must hover to open submenu
 				// Just ignore the click
 			}
-			else if (currentModel && materialListRect.contains(x, y))
+			else if (hasMaterialPanel() && materialListRect.contains(x, y))
 			{
 				// Handle mesh-part list clicks.
-				// - Header: bulk actions (show/hide all)
+				// - Header: search, then bulk actions (show/hide all, or the filtered rows)
 				// - Body: toggle individual parts
+				rebuildMaterialFilter();
 				const float yLocal = y - materialListRect.y;
+
+				if (materialSearchRect().contains(x, y))
+				{
+					materialSearchActive = true;
+					activeSearchCategory = -1;
+					return;
+				}
+				materialSearchActive = false;
 
 				// Bulk action buttons (drawn in renderMaterialList; keep geometry in sync)
 				const float kBtnH = 18.0f;
@@ -1357,16 +1347,33 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 
 				if (yLocal >= 0.0f && yLocal < kMeshPartHeaderHeight)
 				{
-					auto& meshes = currentModel->getMeshes();
+					auto applyEnabled = [&](bool enabled)
+					{
+						if (!materialSearch.empty())
+						{
+							for (int flatIndex : materialFiltered)
+							{
+								Mesh* mesh = materialMeshAt(flatIndex);
+								if (mesh) mesh->setEnabled(enabled);
+							}
+							return;
+						}
+						const int count = materialMeshCount();
+						for (int i = 0; i < count; i++)
+						{
+							Mesh* mesh = materialMeshAt(i);
+							if (mesh) mesh->setEnabled(enabled);
+						}
+					};
 					if (showAllRect.contains(x, y))
 					{
-						for (Mesh* m : meshes) if (m) m->setEnabled(true);
+						applyEnabled(true);
 						Debug::log("Mesh parts: Show all");
 						return;
 					}
 					if (hideAllRect.contains(x, y))
 					{
-						for (Mesh* m : meshes) if (m) m->setEnabled(false);
+						applyEnabled(false);
 						Debug::log("Mesh parts: Hide all");
 						return;
 					}
@@ -1377,10 +1384,11 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				float relativeY = y - (materialListRect.y + kMeshPartHeaderHeight) + materialListScroll;
 				int itemIndex = (int)(relativeY / kMeshPartItemHeight);
 				
-				if (itemIndex >= 0 && itemIndex < currentModel->getMeshCount())
+				if (itemIndex >= 0 && itemIndex < (int)materialFiltered.size())
 				{
-					auto& meshes = currentModel->getMeshes();
-					Mesh* mesh = meshes[itemIndex];
+					Mesh* mesh = materialMeshAt(materialFiltered[itemIndex]);
+					if (mesh == nullptr)
+						return;
 					mesh->setEnabled(!mesh->isEnabled());
 					Debug::log("Toggled mesh part " + std::to_string(itemIndex) + ": " + mesh->getPartName() + " / " + mesh->getMaterialName() + " -> " + (mesh->isEnabled() ? "VISIBLE" : "HIDDEN"));
 				}
@@ -1393,6 +1401,7 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				hoveredCategory = -1;
 				hoveredSubmenuItem = -1;
 				activeSearchCategory = -1;
+				materialSearchActive = false;
 			}
 		}
 	}
@@ -1441,8 +1450,9 @@ void Gui::onMouseMove(float x, float y)
 	
 	// Track hovered material item
 	hoveredMaterialItem = -1;
-	if (currentModel && materialListRect.contains(x, y))
+	if (hasMaterialPanel() && materialListRect.contains(x, y))
 	{
+		rebuildMaterialFilter();
 		const float yLocal = y - materialListRect.y;
 		if (yLocal < kMeshPartHeaderHeight)
 		{
@@ -1453,7 +1463,7 @@ void Gui::onMouseMove(float x, float y)
 			float relativeY = y - (materialListRect.y + kMeshPartHeaderHeight) + materialListScroll;
 			int itemIndex = (int)(relativeY / kMeshPartItemHeight);
 
-			if (itemIndex >= 0 && itemIndex < currentModel->getMeshCount())
+			if (itemIndex >= 0 && itemIndex < (int)materialFiltered.size())
 			{
 				hoveredMaterialItem = itemIndex;
 			}
@@ -1509,7 +1519,7 @@ void Gui::onScroll(float yoffset)
 	}
 	
 	// Scroll the material list when mouse is over it
-	if (currentModel && materialListRect.contains(mouseX, mouseY))
+	if (hasMaterialPanel() && materialListRect.contains(mouseX, mouseY))
 	{
 		materialListScroll -= yoffset * kMeshPartItemHeight;
 		if (materialListScroll < 0.0f) materialListScroll = 0.0f;
@@ -1519,6 +1529,27 @@ void Gui::onScroll(float yoffset)
 
 void Gui::onKeyPress(int key)
 {
+	if (materialSearchActive)
+	{
+		if (key == GLFW_KEY_BACKSPACE)
+		{
+			if (!materialSearch.empty())
+			{
+				materialSearch.pop_back();
+				materialFilterDirty = true;
+				materialListScroll = 0.0f;
+				layoutMaterialList();
+			}
+			return;
+		}
+		if (key == GLFW_KEY_ESCAPE || key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER)
+		{
+			materialSearchActive = false;
+			return;
+		}
+		return;
+	}
+
 	if (!submenuOpen) return;
 
 	// Search bar editing (special keys)
@@ -1579,6 +1610,22 @@ void Gui::onKeyPress(int key)
 
 void Gui::onChar(unsigned int codepoint)
 {
+	if (materialSearchActive)
+	{
+		if (codepoint < 32 || codepoint > 126)
+			return;
+		char c = normalizeSearchChar((char)codepoint);
+		if (c < 32 || c > 126)
+			return;
+		if (materialSearch.size() >= 64)
+			return;
+		materialSearch.push_back(c);
+		materialFilterDirty = true;
+		materialListScroll = 0.0f;
+		layoutMaterialList();
+		return;
+	}
+
 	if (!submenuOpen) return;
 	if (!hasCategory(activeSearchCategory)) return;
 
@@ -1605,50 +1652,151 @@ void Gui::onChar(unsigned int codepoint)
 void Gui::setCurrentModel(Model* model, const std::string& modelName)
 {
 	currentModel = model;
+	levelModels.clear();
 	currentModelName = modelName;
 	sceneLoaded = false;
+	materialSearch.clear();
+	materialSearchActive = false;
+	materialFilterDirty = true;
 	materialListScroll = 0.0f;
 	hoveredMaterialItem = -1;
-	
-	// Calculate material list panel size based on content
-	if (currentModel)
-	{
-		const float kBottomPad = 5.0f;
+	layoutMaterialList();
+}
 
-		int materialCount = currentModel->getMeshCount();
-		float contentHeight = kMeshPartHeaderHeight + (materialCount * kMeshPartItemHeight) + kBottomPad;
-		
-		// Cap at a reasonable maximum height (70% of window height)
-		float maxHeight = windowHeight * 0.7f;
-		float panelHeight = (contentHeight < maxHeight) ? contentHeight : maxHeight;
-		
-		// Update material list rect
-		materialListRect = {(float)windowWidth - 310.0f, 170.0f, 300.0f, panelHeight};
-		
-		// Calculate scroll
-		maxMaterialListScroll = (contentHeight > panelHeight) ? (contentHeight - panelHeight) : 0.0f;
-	}
+void Gui::setLevelModels(const std::vector<Model*>& models, const std::string& name)
+{
+	currentModel = nullptr;
+	levelModels = models;
+	currentModelName = name;
+	sceneLoaded = !models.empty();
+	materialSearch.clear();
+	materialSearchActive = false;
+	materialFilterDirty = true;
+	materialListScroll = 0.0f;
+	hoveredMaterialItem = -1;
+	layoutMaterialList();
 }
 
 void Gui::setSceneLabel(const std::string& name, bool canRecenter)
 {
 	currentModel = nullptr;
+	levelModels.clear();
 	currentModelName = name;
 	sceneLoaded = canRecenter;
+	materialSearch.clear();
+	materialSearchActive = false;
+	materialFilterDirty = true;
 	materialListScroll = 0.0f;
 	hoveredMaterialItem = -1;
-	materialListRect = {(float)windowWidth - 310.0f, 170.0f, 300.0f, 200.0f};
+	layoutMaterialList();
 }
 
 void Gui::clearCurrentModel()
 {
 	currentModel = nullptr;
+	levelModels.clear();
 	sceneLoaded = false;
+	materialSearch.clear();
+	materialSearchActive = false;
+	materialFilterDirty = true;
 	materialListScroll = 0.0f;
 	hoveredMaterialItem = -1;
-	
-	// Reset material list to default size
-	materialListRect = {(float)windowWidth - 310.0f, 170.0f, 300.0f, 200.0f};
+	layoutMaterialList();
+}
+
+bool Gui::hasMaterialPanel() const
+{
+	return currentModel != nullptr || !levelModels.empty();
+}
+
+int Gui::materialMeshCount() const
+{
+	if (currentModel != nullptr)
+		return currentModel->getMeshCount();
+
+	int count = 0;
+	for (const Model* model : levelModels)
+	{
+		if (model != nullptr)
+			count += model->getMeshCount();
+	}
+	return count;
+}
+
+Mesh* Gui::materialMeshAt(int flatIndex)
+{
+	if (flatIndex < 0)
+		return nullptr;
+
+	if (currentModel != nullptr)
+	{
+		auto& meshes = currentModel->getMeshes();
+		if (flatIndex >= static_cast<int>(meshes.size()))
+			return nullptr;
+		return meshes[flatIndex];
+	}
+
+	int cursor = 0;
+	for (Model* model : levelModels)
+	{
+		if (model == nullptr)
+			continue;
+		auto& meshes = model->getMeshes();
+		const int count = static_cast<int>(meshes.size());
+		if (flatIndex < cursor + count)
+			return meshes[flatIndex - cursor];
+		cursor += count;
+	}
+	return nullptr;
+}
+
+void Gui::rebuildMaterialFilter()
+{
+	if (!materialFilterDirty)
+		return;
+
+	materialFilterDirty = false;
+	materialFiltered.clear();
+	const int count = materialMeshCount();
+	for (int i = 0; i < count; i++)
+	{
+		Mesh* mesh = materialMeshAt(i);
+		if (mesh == nullptr)
+			continue;
+		if (materialSearch.empty()
+			|| containsCaseInsensitive(mesh->getPartName(), materialSearch)
+			|| containsCaseInsensitive(mesh->getMaterialName(), materialSearch))
+			materialFiltered.push_back(i);
+	}
+}
+
+void Gui::layoutMaterialList()
+{
+	if (!hasMaterialPanel())
+	{
+		materialListRect = {(float)windowWidth - 310.0f, 170.0f, 300.0f, 200.0f};
+		maxMaterialListScroll = 0.0f;
+		return;
+	}
+
+	rebuildMaterialFilter();
+	const float kBottomPad = 5.0f;
+	const float contentHeight = kMeshPartHeaderHeight
+		+ (static_cast<float>(materialFiltered.size()) * kMeshPartItemHeight)
+		+ kBottomPad;
+	const float maxHeight = windowHeight * 0.7f;
+	const float panelHeight = (contentHeight < maxHeight) ? contentHeight : maxHeight;
+	materialListRect = {(float)windowWidth - 310.0f, 170.0f, 300.0f, panelHeight};
+	maxMaterialListScroll = (contentHeight > panelHeight) ? (contentHeight - panelHeight) : 0.0f;
+	if (materialListScroll < 0.0f)
+		materialListScroll = 0.0f;
+	if (materialListScroll > maxMaterialListScroll)
+		materialListScroll = maxMaterialListScroll;
+}
+
+GuiRect Gui::materialSearchRect() const
+{
+	return { materialListRect.x + 8.0f, materialListRect.y + 60.0f, materialListRect.width - 16.0f, 20.0f };
 }
 
 void Gui::renderModelInfo()
@@ -1716,7 +1864,7 @@ void Gui::renderModelInfo()
 
 void Gui::renderMaterialList()
 {
-	if (!currentModel) return;
+	if (!hasMaterialPanel()) return;
 
 	const float kItemBoxHeight = 30.0f;  // background fill for the item
 	const float kNameLineY = 4.0f;
@@ -1742,15 +1890,18 @@ void Gui::renderMaterialList()
 	drawRect(materialListRect.x + materialListRect.width - 2.0f, materialListRect.y, 2.0f, materialListRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
 	
 	// Header text + bulk actions
-	const auto& meshesConst = currentModel->getMeshes();
+	rebuildMaterialFilter();
 	int visibleCount = 0;
-	for (const Mesh* m : meshesConst)
+	const int meshTotal = materialMeshCount();
+	for (int i = 0; i < meshTotal; i++)
 	{
-		if (m && m->isEnabled()) visibleCount++;
+		const Mesh* mesh = materialMeshAt(i);
+		if (mesh && mesh->isEnabled()) visibleCount++;
 	}
 
-	drawText("MESH PARTS", materialListRect.x + 10.0f, materialListRect.y + 10.0f, glm::vec4(1.0f, 1.0f, 0.5f, 1.0f));
-	drawText("Visible: " + std::to_string(visibleCount) + "/" + std::to_string((int)meshesConst.size()),
+	const char* title = levelModels.empty() ? "MESH PARTS" : "LEVEL PARTS";
+	drawText(title, materialListRect.x + 10.0f, materialListRect.y + 10.0f, glm::vec4(1.0f, 1.0f, 0.5f, 1.0f));
+	drawText("Visible: " + std::to_string(visibleCount) + "/" + std::to_string(meshTotal),
 	         materialListRect.x + 10.0f, materialListRect.y + 24.0f,
 	         glm::vec4(0.8f, 0.8f, 0.8f, 1.0f));
 
@@ -1774,6 +1925,27 @@ void Gui::renderMaterialList()
 	         hideHover ? glm::vec4(0.62f, 0.25f, 0.25f, 0.98f) : glm::vec4(0.45f, 0.18f, 0.18f, 0.95f));
 	drawText("SHOW", showAllRect.x + 10.0f, showAllRect.y + 6.0f, glm::vec4(0.95f, 0.95f, 0.95f, 1.0f));
 	drawText("HIDE", hideAllRect.x + 10.0f, hideAllRect.y + 6.0f, glm::vec4(0.95f, 0.95f, 0.95f, 1.0f));
+
+	bindRectShader();
+	const GuiRect searchRect = materialSearchRect();
+	const glm::vec4 searchBg = materialSearchActive ? glm::vec4(0.22f, 0.22f, 0.22f, 1.0f) : glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
+	const glm::vec4 searchBorder = materialSearchActive ? glm::vec4(0.7f, 0.7f, 0.7f, 1.0f) : glm::vec4(0.45f, 0.45f, 0.45f, 1.0f);
+	drawRect(searchRect.x, searchRect.y, searchRect.width, searchRect.height, searchBg);
+	drawRect(searchRect.x, searchRect.y, searchRect.width, 2.0f, searchBorder);
+	drawRect(searchRect.x, searchRect.y + searchRect.height - 2.0f, searchRect.width, 2.0f, searchBorder);
+	drawRect(searchRect.x, searchRect.y, 2.0f, searchRect.height, searchBorder);
+	drawRect(searchRect.x + searchRect.width - 2.0f, searchRect.y, 2.0f, searchRect.height, searchBorder);
+
+	std::string searchText = materialSearch;
+	if (searchText.empty())
+		searchText = materialSearchActive ? "_" : "Search part or material";
+	else if (materialSearchActive)
+		searchText += "_";
+	const int maxChars = (int)((searchRect.width - 12.0f) / 8.0f);
+	if ((int)searchText.size() > maxChars && maxChars > 3)
+		searchText = "..." + searchText.substr(searchText.size() - (maxChars - 3));
+	drawText(searchText, searchRect.x + 6.0f, searchRect.y + 6.0f, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
+	bindRectShader();
 	
 	// Clamp scroll in case panel was resized
 	if (materialListScroll < 0.0f) materialListScroll = 0.0f;
@@ -1781,15 +1953,18 @@ void Gui::renderMaterialList()
 
 	float yOffset = materialListRect.y + kMeshPartHeaderHeight - materialListScroll;
 	
-	auto& meshes = currentModel->getMeshes();
-	
-	for (size_t i = 0; i < meshes.size(); i++)
+	for (size_t row = 0; row < materialFiltered.size(); row++)
 	{
 		if (yOffset >= materialListRect.y + kMeshPartHeaderHeight - 5.0f && yOffset < materialListRect.y + materialListRect.height - 5.0f)
 		{
-			Mesh* mesh = meshes[i];
+			Mesh* mesh = materialMeshAt(materialFiltered[row]);
+			if (mesh == nullptr)
+			{
+				yOffset += kMeshPartItemHeight;
+				continue;
+			}
 			bool isEnabled = mesh->isEnabled();
-			bool isHovered = (hoveredMaterialItem == (int)i);
+			bool isHovered = (hoveredMaterialItem == (int)row);
 			
 			// Background color
 			glm::vec4 bgColor;
@@ -1814,7 +1989,7 @@ void Gui::renderMaterialList()
 			
 			// Part/component name (primary) + material/texture slot (secondary)
 			std::string partName = mesh->getPartName();
-			if (partName.empty()) partName = "part_" + std::to_string(i);
+			if (partName.empty()) partName = "part_" + std::to_string(materialFiltered[row]);
 
 			std::string matName = mesh->getMaterialName();
 			if (matName.empty()) matName = "unknown";

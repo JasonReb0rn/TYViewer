@@ -315,6 +315,7 @@ void Application::initialize()
 	}
 	shader->bind();
 	shader->setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
+	shader->setUniform1f("alphaRef", 0.01f);
 	shader->setUniform1i("diffuseTexture", 0);
 
 	basic = content.load<Shader>("standard.shader");
@@ -502,8 +503,9 @@ namespace
 	bool isCollisionMaterialName(const std::string& material)
 	{
 		const std::string lower = lowerCopy(material);
-		// Suffixed default Max material. The unsuffixed t0103_01.dds is a real texture.
-		if (lower.rfind("t0103_01_", 0) == 0)
+		// Default Max material. Suffixed slots (T0103_01_*) have no DDS and draw white.
+		// The unsuffixed name binds t0103_01.dds, the red/yellow collision bitmap.
+		if (lower == "t0103_01" || lower.rfind("t0103_01_", 0) == 0)
 			return true;
 		if (lower == "collision")
 			return true;
@@ -512,8 +514,7 @@ namespace
 
 	bool isUntexturedCollisionPrefix(const std::string& part)
 	{
-		return part.find("invis") != std::string::npos
-			|| part.rfind("c_", 0) == 0
+		return part.rfind("c_", 0) == 0
 			|| part.rfind("c ", 0) == 0;
 	}
 
@@ -526,6 +527,44 @@ namespace
 		const std::string material = mesh->getMaterialName();
 		if (isCollisionStem(part) || isCollisionMaterialName(material))
 			return true;
+
+		// B2 perimeter shell. Vertical quads on TY_B2_001 sit in front of the
+		// masked tree cards and hide them. E1 A_TreeWall does not match.
+		// Sector parts ending in " trees" are real geometry, not this shell.
+		if (part == "tree_walls")
+			return true;
+
+		// Walkable snow ribbon on Room_b2_01 (TY_B2_001 / TY_B2_005). The drawn
+		// path is the sector meshes in Room_b2_02. path_rope_* does not match.
+		if (part.find("snow_path") != std::string::npos)
+			return true;
+
+		// invis_* shells stay collision even when the material has a DDS.
+		// ty_b2_029 and ty_b2_031 are grass emitters and are also the drawn dirt
+		// on sector parts. The grass flag does not keep an invis_ shell visible.
+		if (part.find("invis") != std::string::npos)
+			return true;
+
+		// A3 quicksand volume, the only one in the game. It uses the surrounding
+		// ground textures, so the untextured C_ rule does not catch it. The mesh
+		// tells the engine where the hazard is. The drawn pit is
+		// "003 000 006 Geom_Quicksand_02" and must not match.
+		if (part == "c_geom_quicksand")
+			return true;
+
+		// B1 collision shells left with Max's default names. Object02 is already
+		// hidden by T0103_01_c. These two use TY_A1_024, which also textures the
+		// real cavern, so the material alone is not collision. Other Object01 /
+		// Object03 parts (A2 waterfalls, props) use different materials.
+		const std::string materialLower = lowerCopy(material);
+		if ((part == "object01" || part == "object03") && materialLower == "ty_a1_024")
+			return true;
+
+		// global.mad "invisible 1" is not drawn (C3 island skirts, B3 grass emitters).
+		const Content::Ty1MaterialDraw draw = content.lookupTy1Material(material);
+		if (draw.invisible)
+			return true;
+
 		if (!isUntexturedCollisionPrefix(part))
 			return false;
 		return !content.hasActiveFile(material + ".dds");
@@ -746,7 +785,7 @@ void Application::loadTy1Level(const std::string& levelName)
 	frameCameraOnLoadedModels();
 	if (gui)
 	{
-		gui->setSceneLabel(levelName, true);
+		gui->setLevelModels(models, levelName);
 		gui->showNotification("Loaded " + std::to_string(models.size()) + " room meshes", Gui::NotificationKind::Success, 3.0f);
 	}
 }
@@ -1310,14 +1349,21 @@ void Application::render(Shader& shader)
 	shader.bind();
 	shader.setUniformMat4("VPMatrix", vpmatrix);
 
+	// Opaque world first, then alpha and additive sheets. A waterfall drawn in
+	// file order writes depth and hides the cliff that is stored in a later room.
 	for (auto& model : models)
-	{
-		renderer.draw(*model, shader);
-	}
-	
+		model->drawMeshes(shader, false);
+	for (auto& model : models)
+		model->drawMeshes(shader, true);
+
+	glBlendEquation(GL_FUNC_ADD);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDepthMask(GL_TRUE);
+
 	// Reset tint color to white after drawing models (avoid shader state leaking into debug draws).
 	shader.bind();
 	shader.setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
+	shader.setUniform1f("alphaRef", 0.01f);
 
 	for (auto& label : labels)
 	{

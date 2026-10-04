@@ -910,8 +910,10 @@ inline Model* Content::load(const std::string& name)
 						continue;
 
 					// Exact DDS first. Level art often uses a variant of a texture that does
-					// exist: TY_C2_010_a, TY_C1_008a, TY_Z2_003_grass, TY_*_nograss.
+					// exist: TY_C2_010_a, TY_C1_008a, TY_*_nograss.
 					// Those slots were drawing the white fallback and looking like collision.
+					// _grass and _lessgrass are drawn ground. global.mad alias supplies the
+					// texture (TY_a2_022_grass -> TY_a2_022). effect = grass only spawns grass.
 					// Collision placeholders (T0103_01_*, Material #, Collision) stay white.
 					auto tryTy1Texture = [&](const std::string& texName) -> Texture*
 					{
@@ -937,8 +939,15 @@ inline Model* Content::load(const std::string& name)
 						return true;
 					};
 
-					Texture* texture = tryTy1Texture(mesh.material);
-					if (texture == defaultTexture && !mesh.material.empty())
+					// global.mad alias is the texture file. Suffix stripping is only for
+					// names the material script does not remap.
+					const Ty1MaterialDraw materialDraw = lookupTy1Material(mesh.material);
+					Texture* texture = defaultTexture;
+					if (!materialDraw.textureAlias.empty())
+						texture = tryTy1Texture(materialDraw.textureAlias);
+					if (texture == defaultTexture)
+						texture = tryTy1Texture(mesh.material);
+					if (texture == defaultTexture && materialDraw.textureAlias.empty() && !mesh.material.empty())
 					{
 						std::string lowerMat = mesh.material;
 						for (char& ch : lowerMat)
@@ -956,7 +965,7 @@ inline Model* Content::load(const std::string& name)
 						if (!collisionPlaceholder)
 						{
 							std::vector<std::string> candidates;
-							const char* words[] = { "_nograss", "_no_grass", "_lessgrass", "_grass", "_reed", "_overlay" };
+							const char* words[] = { "_nograss", "_no_grass", "_reed", "_overlay" };
 							for (const char* word : words)
 							{
 								const std::string suffix(word);
@@ -995,7 +1004,10 @@ inline Model* Content::load(const std::string& name)
 						std::cout << "Failed to load texture: '" + mesh.material + "' !" << std::endl
 							<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;
 					}
-					meshes.push_back(new Mesh(vertices, indices, texture, mesh.material, subobj.name));
+					Mesh* meshPart = new Mesh(vertices, indices, texture, mesh.material, subobj.name);
+					meshPart->setBlend(materialDraw.blend);
+					meshPart->setAlphaRef(materialDraw.alphaRef);
+					meshes.push_back(meshPart);
 					}
 				}
 			}

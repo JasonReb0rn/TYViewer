@@ -11,6 +11,16 @@
 #include "drawable.h"
 #include "transformable.h"
 
+// How a mesh composites. Opaque stays in the depth-writing pass.
+// Alpha, additive, and subtractive are drawn after every opaque mesh.
+enum class MeshBlend
+{
+	Opaque = 0,
+	Alpha,
+	Additive,
+	Subtractive
+};
+
 class Mesh : public Drawable, public Transformable
 {
 public:
@@ -39,6 +49,12 @@ public:
 	int getSubobjectGroup() const { return m_subobjectGroup; }
 	void setEnabled(bool enabled) { m_enabled = enabled; }
 	bool isEnabled() const { return m_enabled; }
+	void setBlend(MeshBlend blend) { m_blend = blend; }
+	MeshBlend getBlend() const { return m_blend; }
+	// Fragments below this alpha are discarded. Masked cards use the material aref.
+	void setAlphaRef(float alphaRef) { m_alphaRef = alphaRef; }
+	float getAlphaRef() const { return m_alphaRef; }
+	bool isTransparent() const { return m_blend != MeshBlend::Opaque; }
 	
 	// NOTE: UI/debug code expects `int`, but containers use `size_t`.
 	// Clamp to avoid overflow and silence C4267 warnings on x64.
@@ -68,4 +84,6 @@ private:
 	std::string m_partName;
 	int m_subobjectGroup = -1;
 	bool m_enabled;
+	MeshBlend m_blend = MeshBlend::Opaque;
+	float m_alphaRef = 0.01f;
 };

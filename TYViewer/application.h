@@ -62,7 +62,7 @@ public:
 
 private:
 	bool drawGrid = true;
-	bool drawBounds = true;
+	bool drawBounds = false;
 	bool drawColliders = true;
 	bool drawBones = true;
 	bool drawVertexIds = false;

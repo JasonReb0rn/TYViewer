@@ -93,6 +93,10 @@ void Shader::setUniform1i(const std::string& name, int v)
 {
 	glUniform1i(getUniformLocation(name), v);
 }
+void Shader::setUniform1f(const std::string& name, float v)
+{
+	glUniform1f(getUniformLocation(name), v);
+}
 void Shader::setUniform4f(const std::string& name, glm::vec4 v)
 {
 	glUniform4f(getUniformLocation(name), v.x, v.y, v.z, v.w);
@@ -147,6 +151,7 @@ Shader* Shader::createDefault()
 
 		uniform sampler2D diffuseTexture;
 		uniform vec4 tintColour;
+		uniform float alphaRef;
 
 		out vec4 color;
 
@@ -154,7 +159,7 @@ Shader* Shader::createDefault()
 		{
 			vec4 texColor = texture(diffuseTexture, v_texcoord);
 			color = texColor * v_colour * tintColour;
-			if (color.a <= 0.01)
+			if (color.a < alphaRef)
 			{
 				discard;
 			}

@@ -8,6 +8,7 @@
 
 // Forward declarations
 class Model;
+class Mesh;
 
 struct GuiRect
 {
@@ -75,6 +76,8 @@ public:
 	// Model debugging
 	void setCurrentModel(class Model* model, const std::string& modelName);
 	void clearCurrentModel();
+	// Level view: one row per mesh across every loaded room model.
+	void setLevelModels(const std::vector<class Model*>& models, const std::string& name);
 	// Level (or other multi-mesh) view: names the button without enabling model export.
 	// canRecenter turns the recenter button on when room meshes are in the scene.
 	void setSceneLabel(const std::string& name, bool canRecenter);
@@ -86,15 +89,19 @@ public:
 	void onKeyPress(int key);
 	void onChar(unsigned int codepoint);
 
-	bool isInteracting() const { return dropdownOpen || hovering || activeSearchCategory >= 0; }
+	bool isInteracting() const
+	{
+		return dropdownOpen || hovering || activeSearchCategory >= 0 || materialSearchActive
+			|| materialListRect.contains(mouseX, mouseY);
+	}
 	// True when the GUI expects typed characters (e.g., search box focused)
-	bool isTextInputActive() const { return activeSearchCategory >= 0; }
+	bool isTextInputActive() const { return activeSearchCategory >= 0 || materialSearchActive; }
 
 private:
 	// ---------------------------------------------------------------------
 	// "Mesh parts" (submesh/component) list layout constants
 	// ---------------------------------------------------------------------
-	static constexpr float kMeshPartHeaderHeight = 62.0f;
+	static constexpr float kMeshPartHeaderHeight = 88.0f;
 	static constexpr float kMeshPartItemHeight = 34.0f;    // two-line entry
 
 	// ---------------------------------------------------------------------
@@ -128,6 +135,12 @@ private:
 	void renderScrollbar();
 	void renderModelInfo();
 	void renderMaterialList();
+	bool hasMaterialPanel() const;
+	int materialMeshCount() const;
+	class Mesh* materialMeshAt(int flatIndex);
+	void rebuildMaterialFilter();
+	void layoutMaterialList();
+	GuiRect materialSearchRect() const;
 
 	// Search/filtering helpers (submenu)
 	void markFilterDirty(int category);
@@ -177,8 +190,13 @@ private:
 	std::string currentModelName;
 	bool sceneLoaded = false;
 	
-	// Current model for debugging
+	// Current model for debugging. A level uses levelModels instead.
 	class Model* currentModel;
+	std::vector<class Model*> levelModels;
+	std::string materialSearch;
+	bool materialSearchActive = false;
+	bool materialFilterDirty = true;
+	std::vector<int> materialFiltered;
 	float materialListScroll;
 	float maxMaterialListScroll;
 	int hoveredMaterialItem;
@@ -205,7 +223,7 @@ private:
 	bool collisionAvailable = false;
 	bool collisionVisible = false;
 	std::function<void()> onBoundsToggle;
-	bool boundsVisible = true;
+	bool boundsVisible = false;
 
 	// Notification state
 	bool notificationActive = false;

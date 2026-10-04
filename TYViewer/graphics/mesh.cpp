@@ -13,6 +13,7 @@ Mesh::Mesh() :
 	m_partName(""),
 	m_subobjectGroup(-1),
 	m_enabled(true),
+	m_blend(MeshBlend::Opaque),
 	vao(0),
 	vbo(0),
 	ebo(0)
@@ -32,6 +33,7 @@ Mesh::Mesh(const std::vector<Vertex>& vertices,
 	m_partName(partName),
 	m_subobjectGroup(-1),
 	m_enabled(true),
+	m_blend(MeshBlend::Opaque),
 	vao(0),
 	vbo(0),
 	ebo(0)
@@ -87,9 +89,31 @@ void Mesh::draw(Shader& shader) const
 	}
 
 	shader.bind();
-	
+
+	// Opaque keeps the default blend and writes depth. Transparent modes are
+	// drawn in a later pass and must not punch a hole through the world.
+	glBlendEquation(GL_FUNC_ADD);
+	glDepthMask(GL_TRUE);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	if (m_blend == MeshBlend::Additive)
+	{
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+		glDepthMask(GL_FALSE);
+	}
+	else if (m_blend == MeshBlend::Subtractive)
+	{
+		glBlendEquation(GL_FUNC_REVERSE_SUBTRACT);
+		glBlendFunc(GL_ONE, GL_ONE);
+		glDepthMask(GL_FALSE);
+	}
+	else if (m_blend == MeshBlend::Alpha)
+	{
+		glDepthMask(GL_FALSE);
+	}
+
 	// Normal white tint (material/texture decides the look).
 	shader.setUniform4f("tintColour", glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+	shader.setUniform1f("alphaRef", m_alphaRef);
 	
 	m_texture->bind();
 

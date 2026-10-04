@@ -83,8 +83,24 @@ public:
 	template<>
 	Font* load<Font>(const std::string& name);
 
+	// TY1 global.mad entry. Unknown names stay opaque with no texture alias.
+	struct Ty1MaterialDraw
+	{
+		std::string textureAlias;
+		MeshBlend blend = MeshBlend::Opaque;
+		// global.mad "invisible 1": the game does not draw this material.
+		bool invisible = false;
+		// global.mad "effect = grass,...". The surface may still be drawn.
+		bool grassEffect = false;
+		// global.mad "masked 1" / "aref". Cutout cards (tree walls) discard below this.
+		bool masked = false;
+		float alphaRef = 0.01f;
+	};
+	Ty1MaterialDraw lookupTy1Material(const std::string& materialName);
+
 private:
 	void createDefaultTexture();
+	void loadTy1Materials();
 
 	Archive* archives[2]; // 0 = TY1, 1 = TY2
 	int activeArchiveIndex;
@@ -93,6 +109,9 @@ private:
 	std::unordered_map<std::string, Shader*> shaders;
 	std::unordered_map<std::string, Model*> models;
 	std::unordered_map<std::string, Font*> fonts;
+
+	bool ty1MaterialsReady = false;
+	std::unordered_map<std::string, Ty1MaterialDraw> ty1Materials;
 };
 
 #include "content.inl"
