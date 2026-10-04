@@ -324,6 +324,52 @@ namespace
 			return "Act_43_BilbyGrandma";
 		return "Act_04_Bilby";
 	}
+
+	// `8,blank` or `610,Teleporter2`. `blank` and `none` are not names.
+	struct ParsedId
+	{
+		int number = 0;
+		std::string label;
+		bool ok = false;
+	};
+
+	ParsedId parseIdValue(const std::string& rhs)
+	{
+		ParsedId parsed;
+		std::string number = rhs;
+		std::string label;
+		const size_t comma = rhs.find(',');
+		if (comma != std::string::npos)
+		{
+			number = trimCopy(rhs.substr(0, comma));
+			label = trimCopy(rhs.substr(comma + 1));
+		}
+		size_t i = 0;
+		while (i < number.size() && std::isspace(static_cast<unsigned char>(number[i])))
+			i++;
+		if (i >= number.size())
+			return parsed;
+		int sign = 1;
+		if (number[i] == '-')
+		{
+			sign = -1;
+			i++;
+		}
+		if (i >= number.size() || !std::isdigit(static_cast<unsigned char>(number[i])))
+			return parsed;
+		int value = 0;
+		while (i < number.size() && std::isdigit(static_cast<unsigned char>(number[i])))
+		{
+			value = value * 10 + (number[i] - '0');
+			i++;
+		}
+		parsed.ok = true;
+		parsed.number = sign * value;
+		const std::string lower = lowerCopy(label);
+		if (!label.empty() && lower != "blank" && lower != "none")
+			parsed.label = label;
+		return parsed;
+	}
 }
 
 glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance)
@@ -494,13 +540,35 @@ std::vector<Ty1Instance> parseTy1Instances(
 		if (eq == std::string::npos)
 			continue;
 
-		const std::string key = lowerCopy(trimCopy(value.substr(0, eq)));
+		const std::string keyText = trimCopy(value.substr(0, eq));
+		const std::string key = lowerCopy(keyText);
 		const std::string rhs = trimCopy(value.substr(eq + 1));
 		if (!open)
 		{
 			open = true;
 			current.scale = glm::vec3(1.0f);
 			current.visible = true;
+		}
+
+		Ty1Field field;
+		field.key = keyText;
+		field.value = rhs;
+		if (indented)
+		{
+			if (!current.fields.empty())
+				current.fields.back().children.push_back(field);
+		}
+		else
+			current.fields.push_back(field);
+
+		if (!indented && key == "id" && current.objectId < 0)
+		{
+			const ParsedId parsed = parseIdValue(rhs);
+			if (parsed.ok)
+			{
+				current.objectId = parsed.number;
+				current.objectLabel = parsed.label;
+			}
 		}
 
 		if (indented)
@@ -616,4 +684,178 @@ std::vector<Ty1Instance> parseTy1Instances(
 	}
 	flush();
 	return instances;
+}
+
+const char* ty1KindName(const Ty1Instance& instance)
+{
+	switch (instance.kind)
+	{
+	case Ty1Kind::Critter: return "critter";
+	case Ty1Kind::Water: return "water";
+	case Ty1Kind::Trigger: return "trigger";
+	case Ty1Kind::Sound: return "sound";
+	case Ty1Kind::Patrol: return "patrol";
+	case Ty1Kind::Prop: break;
+	}
+	if (instance.rangeSphere)
+		return "range";
+	return "prop";
+}
+
+std::unordered_map<int, int> ty1IdIndex(const std::vector<Ty1Instance>& instances)
+{
+	std::unordered_map<int, int> index;
+	for (int i = 0; i < static_cast<int>(instances.size()); i++)
+	{
+		const int id = instances[static_cast<size_t>(i)].objectId;
+		if (id > 0)
+			index.emplace(id, i);
+	}
+	return index;
+}
+
+std::vector<Ty1InfoLine> describeTy1Instance(
+	const std::vector<Ty1Instance>& instances,
+	int index,
+	const std::unordered_map<int, int>& idToIndex)
+{
+	std::vector<Ty1InfoLine> lines;
+	if (index < 0 || index >= static_cast<int>(instances.size()))
+		return lines;
+
+	const Ty1Instance& instance = instances[static_cast<size_t>(index)];
+
+	auto childNamed = [](const Ty1Field& field, const char* name) -> const Ty1Field*
+	{
+		for (const Ty1Field& child : field.children)
+		{
+			if (lowerCopy(child.key) == name)
+				return &child;
+		}
+		return nullptr;
+	};
+
+	auto push = [&](std::string text, int link, bool dim, bool heading, int indent)
+	{
+		Ty1InfoLine line;
+		line.text = std::move(text);
+		line.link = link;
+		line.dim = dim;
+		line.heading = heading;
+		line.indent = indent;
+		lines.push_back(std::move(line));
+	};
+
+	push(instance.typeName.empty() ? "object" : instance.typeName, -1, false, true, 0);
+	push(ty1KindName(instance), -1, false, false, 0);
+	if (instance.modelFile.empty() && instance.extraModelFile.empty())
+		push("no model", -1, true, false, 0);
+	else
+	{
+		std::string model = instance.modelFile;
+		if (!instance.extraModelFile.empty())
+		{
+			if (!model.empty())
+				model += "  ";
+			model += instance.extraModelFile;
+		}
+		push(model, -1, false, false, 0);
+	}
+	if (instance.objectId >= 0)
+	{
+		std::string idText = "ID " + std::to_string(instance.objectId);
+		if (!instance.objectLabel.empty())
+			idText += " " + instance.objectLabel;
+		push(std::move(idText), -1, false, false, 0);
+	}
+
+	for (const Ty1Field& field : instance.fields)
+	{
+		if (lowerCopy(field.value) == "event")
+		{
+			const Ty1Field* target = childNamed(field, "targetid");
+			const Ty1Field* message = childNamed(field, "message");
+			const ParsedId targetId = target ? parseIdValue(target->value) : ParsedId{};
+			const bool empty = !targetId.ok || targetId.number == 0;
+			if (empty)
+			{
+				push(field.key + "  none", -1, true, false, 0);
+			}
+			else
+			{
+				std::string messageText = "none";
+				if (message && !message->value.empty() && lowerCopy(message->value) != "none")
+					messageText = message->value;
+				std::string dest = targetId.label.empty()
+					? ("(" + std::to_string(targetId.number) + ")")
+					: (targetId.label + " (" + std::to_string(targetId.number) + ")");
+				int link = -1;
+				std::string targetType;
+				const auto found = idToIndex.find(targetId.number);
+				if (found != idToIndex.end()
+					&& found->second >= 0
+					&& found->second < static_cast<int>(instances.size()))
+				{
+					link = found->second;
+					targetType = instances[static_cast<size_t>(link)].typeName;
+				}
+				std::string text = field.key + "  " + messageText + " -> " + dest;
+				if (!targetType.empty())
+					text += "  " + targetType;
+				push(std::move(text), link, false, false, 0);
+			}
+			for (const Ty1Field& child : field.children)
+			{
+				const std::string childKey = lowerCopy(child.key);
+				if (childKey == "targetid" || childKey == "message")
+					continue;
+				push(child.key + " = " + child.value, -1, false, false, 1);
+			}
+			continue;
+		}
+
+		push(field.key + " = " + field.value, -1, false, false, 0);
+		for (const Ty1Field& child : field.children)
+			push(child.key + " = " + child.value, -1, false, false, 1);
+	}
+
+	if (instance.objectId > 0)
+	{
+		std::vector<Ty1InfoLine> hits;
+		for (int i = 0; i < static_cast<int>(instances.size()); i++)
+		{
+			const Ty1Instance& other = instances[static_cast<size_t>(i)];
+			for (const Ty1Field& field : other.fields)
+			{
+				if (lowerCopy(field.value) != "event")
+					continue;
+				const Ty1Field* target = childNamed(field, "targetid");
+				if (target == nullptr)
+					continue;
+				const ParsedId targetId = parseIdValue(target->value);
+				if (!targetId.ok || targetId.number != instance.objectId)
+					continue;
+				const Ty1Field* message = childNamed(field, "message");
+				std::string messageText = "none";
+				if (message && !message->value.empty() && lowerCopy(message->value) != "none")
+					messageText = message->value;
+				std::string who = other.typeName.empty() ? "object" : other.typeName;
+				if (!other.objectLabel.empty())
+					who += " " + other.objectLabel;
+				else if (other.objectId > 0)
+					who += " " + std::to_string(other.objectId);
+				Ty1InfoLine hit;
+				hit.text = who + "  " + field.key + "  " + messageText;
+				hit.link = i;
+				hits.push_back(std::move(hit));
+			}
+		}
+		push("Targeted by", -1, false, true, 0);
+		if (hits.empty())
+			push("none", -1, true, false, 0);
+		else
+			lines.insert(lines.end(), hits.begin(), hits.end());
+	}
+
+	return lines;
 }

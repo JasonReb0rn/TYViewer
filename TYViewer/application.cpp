@@ -410,8 +410,12 @@ void Application::initialize()
 		if (index >= 0 && index < static_cast<int>(levelObjects.size()))
 			levelObjects[static_cast<size_t>(index)].visible = visible;
 	});
+	gui->setOnPartVisibilityChanged([this]() {
+		syncCollisionVisibility();
+	});
 	gui->setOnLevelObjectSelected([this](int index) {
 		selectedLevelObject = index;
+		refreshObjectInspector();
 	});
 	gui->setOnLevelObjectFocused([this](int index) {
 		frameCameraOnInstance(index);
@@ -468,6 +472,7 @@ void Application::loadModel(const std::string& modelName, int archiveIndex)
 
 		frameCameraOnModel(loadedModel);
 		setCollisionMeshesVisible(true);
+		capturePartDefaults();
 	}
 	else
 	{
@@ -745,6 +750,33 @@ namespace
 	}
 }
 
+void Application::refreshObjectInspector()
+{
+	if (!gui)
+		return;
+	if (selectedLevelObject < 0 || selectedLevelObject >= static_cast<int>(levelObjects.size()))
+	{
+		gui->setObjectInfo({});
+		return;
+	}
+
+	const std::vector<Ty1InfoLine> described = describeTy1Instance(
+		levelObjects, selectedLevelObject, levelObjectIds);
+	std::vector<ObjectInfoLine> lines;
+	lines.reserve(described.size());
+	for (const Ty1InfoLine& src : described)
+	{
+		ObjectInfoLine line;
+		line.text = src.text;
+		line.link = src.link;
+		line.dim = src.dim;
+		line.heading = src.heading;
+		line.indent = src.indent;
+		lines.push_back(std::move(line));
+	}
+	gui->setObjectInfo(std::move(lines));
+}
+
 void Application::loadTy1Level(const std::string& levelName)
 {
 	clearModels();
@@ -788,6 +820,7 @@ void Application::loadTy1Level(const std::string& levelName)
 		Debug::log("global.model missing; prop catalogs will be skipped");
 
 	levelObjects = parseTy1Instances(text, globalModelText, content.getModelList(0));
+	levelObjectIds = ty1IdIndex(levelObjects);
 	propModels.clear();
 	std::unordered_set<Model*> seenProps;
 	size_t propsWithMesh = 0;
@@ -830,6 +863,7 @@ void Application::loadTy1Level(const std::string& levelName)
 
 	viewingLevel = true;
 	setCollisionMeshesVisible(false);
+	capturePartDefaults();
 	frameCameraOnLoadedModels();
 	if (gui)
 	{
@@ -848,18 +882,11 @@ void Application::loadTy1Level(const std::string& levelName)
 					item.modelFile += "  " + instance.modelFile;
 			}
 			item.visible = instance.visible;
-			if (instance.kind == Ty1Kind::Critter)
-				item.kindLabel = "critter";
-			else if (instance.kind == Ty1Kind::Water)
-				item.kindLabel = "water";
-			else if (instance.kind == Ty1Kind::Trigger)
-				item.kindLabel = "trigger";
-			else if (instance.kind == Ty1Kind::Sound)
-				item.kindLabel = "sound";
-			else if (instance.kind == Ty1Kind::Patrol)
-				item.kindLabel = "patrol";
-			else if (instance.rangeSphere)
-				item.kindLabel = "range";
+			item.defaultVisible = instance.visible;
+			const char* kindName = ty1KindName(instance);
+			if (std::strcmp(kindName, "prop") != 0)
+				item.kindLabel = kindName;
+			item.idLabel = instance.objectLabel;
 			items.push_back(item);
 		}
 		gui->setLevelObjects(items);
@@ -1353,6 +1380,49 @@ void Application::setCollisionMeshesVisible(bool visible)
 	refreshCollisionToggle();
 }
 
+void Application::capturePartDefaults()
+{
+	auto visit = [](Model* model)
+	{
+		if (model == nullptr)
+			return;
+		for (Mesh* mesh : model->getMeshes())
+		{
+			if (mesh != nullptr)
+				mesh->captureDefaultEnabled();
+		}
+	};
+	for (Model* model : models)
+		visit(model);
+	for (Model* model : propModels)
+		visit(model);
+}
+
+void Application::syncCollisionVisibility()
+{
+	bool any = false;
+	bool anyEnabled = false;
+	auto visit = [&](const Model* model)
+	{
+		if (model == nullptr)
+			return;
+		for (const Mesh* mesh : model->getMeshes())
+		{
+			if (mesh == nullptr || !isCollisionMesh(mesh, content))
+				continue;
+			any = true;
+			if (mesh->isEnabled())
+				anyEnabled = true;
+		}
+	};
+	for (const Model* model : models)
+		visit(model);
+	for (const Model* model : propModels)
+		visit(model);
+	collisionMeshesVisible = any ? anyEnabled : true;
+	refreshCollisionToggle();
+}
+
 void Application::refreshCollisionToggle()
 {
 	bool any = false;
@@ -1382,6 +1452,7 @@ void Application::clearModels()
 {
 	models.clear();
 	levelObjects.clear();
+	levelObjectIds.clear();
 	propModels.clear();
 	selectedLevelObject = -1;
 	// Note: Models are managed by the Content system, so we don't delete them here
@@ -1808,12 +1879,22 @@ void Application::render(Shader& shader)
 	if (selectedLevelObject >= 0 && selectedLevelObject < static_cast<int>(levelObjects.size()))
 	{
 		const Ty1Instance& instance = levelObjects[static_cast<size_t>(selectedLevelObject)];
-		const glm::vec4 critterColour(1.0f, 0.0f, 0.0f, 1.0f);
-		const glm::vec4 waterColour(0.25f, 0.55f, 1.0f, 1.0f);
-		const glm::vec4 triggerColour(1.0f, 0.85f, 0.15f, 1.0f);
-		const glm::vec4 soundColour(0.2f, 0.95f, 1.0f, 1.0f);
-		const glm::vec4 patrolColour(1.0f, 0.35f, 0.9f, 1.0f);
-		const glm::vec4 rangeColour(0.35f, 1.0f, 0.4f, 1.0f);
+		const glm::vec4 critterColour = objectKindColour("critter");
+		const glm::vec4 waterColour = objectKindColour("water");
+		const glm::vec4 triggerColour = objectKindColour("trigger");
+		const glm::vec4 soundColour = objectKindColour("sound");
+		const glm::vec4 patrolColour = objectKindColour("patrol");
+		const glm::vec4 rangeColour = objectKindColour("range");
+
+		// The mesh shader multiplies by the texture left bound from the last model.
+		// A terrain texel turns these guides dull and they disappear into the world.
+		// A white texture plus a solid tint writes the chip colour on its own.
+		if (content.defaultTexture != nullptr)
+			content.defaultTexture->bind();
+		basic->setUniform1i("solidColour", 1);
+		basic->setUniform1f("alphaRef", 0.0f);
+		const GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
+		glDisable(GL_BLEND);
 
 		auto drawBox = [&](const glm::vec3& pos, float yaw, float pitch, float roll, const glm::vec3& size, const glm::vec4& colour)
 		{
@@ -1826,6 +1907,7 @@ void Application::render(Shader& shader)
 			matrix = glm::rotate(matrix, -pitch, glm::vec3(1.0f, 0.0f, 0.0f));
 			matrix = glm::scale(matrix, glm::max(size, glm::vec3(0.01f)));
 			basic->setUniformMat4("modelMatrix", matrix);
+			basic->setUniform4f("tintColour", colour);
 			renderer.drawHollowBox(glm::vec3(-0.5f), glm::vec3(1.0f), colour);
 			basic->setUniformMat4("modelMatrix", glm::mat4(1.0f));
 		};
@@ -1844,6 +1926,7 @@ void Application::render(Shader& shader)
 				colour = soundColour;
 			else if (instance.rangeSphere)
 				colour = rangeColour;
+			basic->setUniform4f("tintColour", colour);
 			renderer.drawSphere(instance.spherePosition, instance.sphereRadius, colour);
 		}
 		if (!instance.waypoints.empty())
@@ -1854,6 +1937,7 @@ void Application::render(Shader& shader)
 			path.insert(path.end(), instance.waypoints.begin(), instance.waypoints.end());
 			if (instance.closePath && path.size() >= 2)
 				path.push_back(path.front());
+			basic->setUniform4f("tintColour", patrolColour);
 			renderer.drawLineStrip(path, patrolColour);
 			if (instance.pathWidth > 0.0f && path.size() >= 2)
 			{
@@ -1883,6 +1967,12 @@ void Application::render(Shader& shader)
 			for (size_t pointIndex = 0; pointIndex < markerCount; pointIndex++)
 				renderer.drawSphere(path[pointIndex], 18.0f, patrolColour, 8);
 		}
+
+		basic->setUniform1i("solidColour", 0);
+		basic->setUniform4f("tintColour", glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+		basic->setUniform1f("alphaRef", 0.01f);
+		if (blendWasEnabled)
+			glEnable(GL_BLEND);
 	}
 
 	// Vertex index overlay should be readable regardless of wireframe mode.

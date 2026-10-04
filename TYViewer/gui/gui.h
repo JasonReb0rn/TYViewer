@@ -20,6 +20,9 @@ struct GuiRect
 	}
 };
 
+// Colour of an OBJECTS kind chip. Viewport guides use the same value.
+glm::vec4 objectKindColour(const std::string& kindLabel);
+
 enum class EntryKind
 {
 	Model,
@@ -39,8 +42,22 @@ struct LevelObjectItem
 	std::string typeName;
 	std::string modelFile;
 	bool visible = true;
+	// Visibility from the level file, before show-all or hide-all.
+	bool defaultVisible = true;
 	// Empty for a prop. Otherwise critter, water, trigger, sound, patrol, or range.
 	std::string kindLabel;
+	// Name from `ID = number,label` when it is not blank or none.
+	std::string idLabel;
+};
+
+// One inspector row. `link` selects another object, or -1.
+struct ObjectInfoLine
+{
+	std::string text;
+	int link = -1;
+	bool dim = false;
+	bool heading = false;
+	int indent = 0;
 };
 
 class Gui
@@ -89,7 +106,10 @@ public:
 	void setLevelModels(const std::vector<class Model*>& models, const std::string& name);
 	// Placed objects for the current level. Separate from the room-mesh list.
 	void setLevelObjects(const std::vector<LevelObjectItem>& objects);
+	void setObjectInfo(std::vector<ObjectInfoLine> lines);
 	void setOnLevelObjectToggled(std::function<void(int index, bool visible)> callback);
+	// Level-part show/hide changed mesh visibility. The app refreshes the collision toggle.
+	void setOnPartVisibilityChanged(std::function<void()> callback);
 	void setOnLevelObjectSelected(std::function<void(int index)> callback);
 	void setOnLevelObjectFocused(std::function<void(int index)> callback);
 	// Level (or other multi-mesh) view: names the button without enabling model export.
@@ -108,7 +128,8 @@ public:
 		return dropdownOpen || hovering || activeSearchCategory >= 0 || materialSearchActive
 			|| objectSearchActive
 			|| materialListRect.contains(mouseX, mouseY)
-			|| (!levelObjectItems.empty() && objectListRect.contains(mouseX, mouseY));
+			|| (!levelObjectItems.empty() && (objectListRect.contains(mouseX, mouseY)
+				|| objectInfoRect.contains(mouseX, mouseY)));
 	}
 	// True when the GUI expects typed characters (e.g., search box focused)
 	bool isTextInputActive() const { return activeSearchCategory >= 0 || materialSearchActive || objectSearchActive; }
@@ -119,6 +140,13 @@ private:
 	// ---------------------------------------------------------------------
 	static constexpr float kMeshPartHeaderHeight = 88.0f;
 	static constexpr float kMeshPartItemHeight = 34.0f;    // two-line entry
+	// OBJECTS header is taller than LEVEL PARTS because of the kind filter.
+	static constexpr float kObjectListHeaderHeight = 130.0f;
+	static constexpr float kCollapsedListHeight = 28.0f;
+	static constexpr float kObjectColumnWidth = 420.0f;
+	static constexpr float kObjectColumnTop = 180.0f;
+	static constexpr float kInfoHeaderHeight = 22.0f;
+	static constexpr float kInfoLineHeight = 12.0f;
 
 	// ---------------------------------------------------------------------
 	// TY2 "material" name parsing (rudimentary suffix identification)
@@ -152,6 +180,7 @@ private:
 	void renderModelInfo();
 	void renderMaterialList();
 	void renderObjectList();
+	void renderObjectInfo();
 	bool hasMaterialPanel() const;
 	int materialMeshCount() const;
 	class Mesh* materialMeshAt(int flatIndex);
@@ -163,6 +192,12 @@ private:
 	void layoutObjectList();
 	GuiRect objectSearchRect() const;
 	void setObjectVisible(int index, bool visible);
+	void selectLevelObject(int index);
+	void revealLevelObject(int index);
+	void rebuildInfoDrawLines();
+	void drawCollapseButton(const GuiRect& rect, bool collapsed);
+	void drawTextButton(const GuiRect& rect, const char* label, const glm::vec4& fill, const glm::vec4& hoverFill);
+	GuiRect objectKindChipRect(int index) const;
 
 	// Search/filtering helpers (submenu)
 	void markFilterDirty(int category);
@@ -193,6 +228,7 @@ private:
 	GuiRect modelInfoRect;
 	GuiRect materialListRect;
 	GuiRect objectListRect;
+	GuiRect objectInfoRect;
 	
 	static constexpr int kCategoryCount = 4;
 
@@ -228,6 +264,10 @@ private:
 	std::string objectSearch;
 	bool objectSearchActive = false;
 	bool objectFilterDirty = true;
+	// Zero shows every kind. Otherwise bits for model, critter, water, trigger, sound, patrol, range.
+	unsigned int objectKindFilter = 0;
+	bool objectListCollapsed = false;
+	bool materialListCollapsed = false;
 	std::vector<int> objectFiltered;
 	float objectListScroll = 0.0f;
 	float maxObjectListScroll = 0.0f;
@@ -236,8 +276,23 @@ private:
 	int lastObjectClickIndex = -1;
 	double lastObjectClickTime = 0.0;
 	std::function<void(int index, bool visible)> onLevelObjectToggled;
+	std::function<void()> onPartVisibilityChanged;
 	std::function<void(int index)> onLevelObjectSelected;
 	std::function<void(int index)> onLevelObjectFocused;
+
+	std::vector<ObjectInfoLine> objectInfoLines;
+	struct InfoDrawLine
+	{
+		std::string text;
+		int link = -1;
+		bool dim = false;
+		bool heading = false;
+		float indent = 0.0f;
+	};
+	std::vector<InfoDrawLine> infoDrawLines;
+	float objectInfoScroll = 0.0f;
+	float maxObjectInfoScroll = 0.0f;
+	int hoveredInfoRow = -1;
 	
 	bool dropdownOpen;
 	bool hovering;

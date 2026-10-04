@@ -59,6 +59,9 @@ public:
 	int getSubobjectGroup() const { return m_subobjectGroup; }
 	void setEnabled(bool enabled) { m_enabled = enabled; }
 	bool isEnabled() const { return m_enabled; }
+	// Remember the visibility chosen when the model or level was opened.
+	void captureDefaultEnabled() { m_defaultEnabled = m_enabled; }
+	bool defaultEnabled() const { return m_defaultEnabled; }
 	void setBlend(MeshBlend blend) { m_blend = blend; }
 	MeshBlend getBlend() const { return m_blend; }
 	// Fragments below this alpha are discarded. Masked cards use the material aref.
@@ -94,6 +97,7 @@ private:
 	std::string m_partName;
 	int m_subobjectGroup = -1;
 	bool m_enabled;
+	bool m_defaultEnabled = true;
 	MeshBlend m_blend = MeshBlend::Opaque;
 	float m_alphaRef = 0.01f;
 };

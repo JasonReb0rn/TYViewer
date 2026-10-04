@@ -2,6 +2,7 @@
 
 #include <string>
 #include <iostream>
+#include <unordered_map>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -86,6 +87,8 @@ private:
 
 	std::vector<Model*> models;
 	std::vector<Ty1Instance> levelObjects;
+	// Nonzero instance ID to index in levelObjects.
+	std::unordered_map<int, int> levelObjectIds;
 	// Unique prop models. Not drawn at the origin; instances reference them.
 	std::vector<Model*> propModels;
 	int selectedLevelObject = -1;
@@ -101,8 +104,11 @@ private:
 private:
 	void frameCameraOnModels(const std::vector<const Model*>& list, bool levelFraming);
 	void frameCameraOnInstance(int index);
+	void refreshObjectInspector();
 	void drawSelectedObjectOutline(Shader& shader, const Ty1Instance& instance);
 	void refreshCollisionToggle();
+	void capturePartDefaults();
+	void syncCollisionVisibility();
 
 	// ------------------------------------------------------------------
 	// Screen-space vertex index overlay ("V")

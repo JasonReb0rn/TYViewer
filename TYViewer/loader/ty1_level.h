@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <glm/vec3.hpp>
@@ -15,6 +16,25 @@ enum class Ty1Kind
 	Trigger,
 	Sound,
 	Patrol
+};
+
+// One `key = value` from the instance, in file order. Indented lines are children
+// of the block they belong to (an event, a camera, a box, a sphere, or a path).
+struct Ty1Field
+{
+	std::string key;
+	std::string value;
+	std::vector<Ty1Field> children;
+};
+
+// One row in the object inspector. `link` is another instance index, or -1.
+struct Ty1InfoLine
+{
+	std::string text;
+	int link = -1;
+	bool dim = false;
+	bool heading = false;
+	int indent = 0;
 };
 
 // One placed object from a TY1 .lv2 `name` block. `model` is filled by the caller.
@@ -58,7 +78,28 @@ struct Ty1Instance
 	std::vector<glm::vec3> waypoints;
 	bool closePath = false;
 	float pathWidth = 0.0f;
+
+	// `ID = number,label` from the file. -1 when the instance has no ID.
+	// `blank` and `none` leave the label empty.
+	int objectId = -1;
+	std::string objectLabel;
+
+	// Every field in the instance, including the ones the draw path already uses.
+	std::vector<Ty1Field> fields;
 };
+
+// List label for this instance. A plain prop is "prop". A prop with a range sphere is "range".
+const char* ty1KindName(const Ty1Instance& instance);
+
+// First instance index for each nonzero ID in this level.
+std::unordered_map<int, int> ty1IdIndex(const std::vector<Ty1Instance>& instances);
+
+// Header, file fields, and the other instances whose events point here.
+// `index` must address `instances`.
+std::vector<Ty1InfoLine> describeTy1Instance(
+	const std::vector<Ty1Instance>& instances,
+	int index,
+	const std::unordered_map<int, int>& idToIndex);
 
 // Krome stores this as a row-vector matrix (scale, then pitch, yaw, roll, translation
 // in the last row). The returned matrix is that transform for a column-vector shader.

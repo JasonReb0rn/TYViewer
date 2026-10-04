@@ -3,11 +3,97 @@
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <string>
 #include <glm/gtc/type_ptr.hpp>
 #include "../debug.h"
 #include "../model.h"
 #include "../graphics/mesh.h"
+
+namespace
+{
+	struct KindChipDef
+	{
+		const char* label;
+		unsigned int bit;
+		glm::vec4 color;
+	};
+
+	// bit 0 is the "all" chip. The other bits match objectKindFilter.
+	const KindChipDef kKindChips[] =
+	{
+		{ "all", 0, glm::vec4(0.82f, 0.82f, 0.82f, 1.0f) },
+		{ "model", 1u << 0, glm::vec4(0.65f, 0.85f, 0.70f, 1.0f) },
+		{ "critter", 1u << 1, glm::vec4(1.0f, 0.55f, 0.45f, 1.0f) },
+		{ "water", 1u << 2, glm::vec4(0.45f, 0.70f, 1.0f, 1.0f) },
+		{ "trigger", 1u << 3, glm::vec4(1.0f, 0.85f, 0.35f, 1.0f) },
+		{ "sound", 1u << 4, glm::vec4(0.40f, 0.95f, 1.0f, 1.0f) },
+		{ "patrol", 1u << 5, glm::vec4(1.0f, 0.50f, 0.90f, 1.0f) },
+		{ "range", 1u << 6, glm::vec4(0.50f, 1.0f, 0.55f, 1.0f) },
+	};
+	const int kKindChipCount = 8;
+
+	GuiRect collapseButtonRect(const GuiRect& panel)
+	{
+		const float size = 16.0f;
+		return { panel.x + panel.width - 8.0f - size, panel.y + 6.0f, size, size };
+	}
+
+	unsigned int kindBitForLabel(const std::string& kindLabel)
+	{
+		if (kindLabel == "critter") return 1u << 1;
+		if (kindLabel == "water") return 1u << 2;
+		if (kindLabel == "trigger") return 1u << 3;
+		if (kindLabel == "sound") return 1u << 4;
+		if (kindLabel == "patrol") return 1u << 5;
+		if (kindLabel == "range") return 1u << 6;
+		return 1u << 0;
+	}
+
+	// A row is drawn only when its whole box sits in the list body. A tall window
+	// leaves a remainder under the last full row, and drawing that next row paints
+	// past the panel edge.
+	bool rowFits(float rowTop, float bodyTop, float bodyBottom, float boxHeight)
+	{
+		return rowTop >= bodyTop && rowTop + boxHeight <= bodyBottom;
+	}
+
+	struct BulkButtonRects
+	{
+		GuiRect showDefault;
+		GuiRect showAll;
+		GuiRect hideAll;
+	};
+
+	BulkButtonRects bulkButtonRects(const GuiRect& panel)
+	{
+		const float height = 18.0f;
+		const float y = panel.y + 38.0f;
+		const float gap = 4.0f;
+		const float edge = 6.0f;
+		const float hideWidth = 72.0f;
+		const float showWidth = 72.0f;
+		const float defaultWidth = 104.0f;
+		float right = panel.x + panel.width - edge;
+		BulkButtonRects rects;
+		rects.hideAll = { right - hideWidth, y, hideWidth, height };
+		right -= hideWidth + gap;
+		rects.showAll = { right - showWidth, y, showWidth, height };
+		right -= showWidth + gap;
+		rects.showDefault = { right - defaultWidth, y, defaultWidth, height };
+		return rects;
+	}
+}
+
+glm::vec4 objectKindColour(const std::string& kindLabel)
+{
+	for (int chip = 0; chip < kKindChipCount; chip++)
+	{
+		if (kindLabel == kKindChips[chip].label)
+			return kKindChips[chip].color;
+	}
+	return glm::vec4(0.82f, 0.82f, 0.82f, 1.0f);
+}
 
 // Simple vertex shader for GUI rendering
 const char* guiVertexShaderSource = R"(
@@ -179,7 +265,8 @@ void Gui::initialize(int width, int height)
 	
 	// Material list panel below model info (default size, will resize when model is loaded)
 	materialListRect = {(float)width - 310.0f, 170.0f, 300.0f, 200.0f};
-	objectListRect = { 10.0f, 180.0f, 300.0f, 200.0f };
+	objectListRect = { 10.0f, kObjectColumnTop, kObjectColumnWidth, 200.0f };
+	objectInfoRect = { 10.0f, 388.0f, kObjectColumnWidth, 220.0f };
 	
 	initializeGL();
 }
@@ -549,7 +636,10 @@ void Gui::render()
 	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
 	
 	if (!levelObjectItems.empty())
+	{
 		renderObjectList();
+		renderObjectInfo();
+	}
 
 	renderButton();
 	renderExportButton();
@@ -1326,6 +1416,14 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 			else if (hasMaterialPanel() && materialListRect.contains(x, y))
 			{
 				objectSearchActive = false;
+				if (collapseButtonRect(materialListRect).contains(x, y))
+				{
+					materialListCollapsed = !materialListCollapsed;
+					layoutMaterialList();
+					return;
+				}
+				if (materialListCollapsed)
+					return;
 				// Handle mesh-part list clicks.
 				// - Header: search, then bulk actions (show/hide all, or the filtered rows)
 				// - Body: toggle individual parts
@@ -1340,27 +1438,18 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				}
 				materialSearchActive = false;
 
-				// Bulk action buttons (drawn in renderMaterialList; keep geometry in sync)
-				const float kBtnH = 18.0f;
-				const float kBtnW = 58.0f;
-				const float kBtnPad = 6.0f;
-				const float btnY = materialListRect.y + 38.0f;
-				GuiRect showAllRect = {
-					materialListRect.x + materialListRect.width - (kBtnPad + kBtnW + kBtnPad + kBtnW + kBtnPad),
-					btnY, kBtnW, kBtnH
-				};
-				GuiRect hideAllRect = { showAllRect.x + kBtnW + kBtnPad, btnY, kBtnW, kBtnH };
+				const BulkButtonRects bulk = bulkButtonRects(materialListRect);
 
 				if (yLocal >= 0.0f && yLocal < kMeshPartHeaderHeight)
 				{
-					auto applyEnabled = [&](bool enabled)
+					auto eachListedMesh = [&](const auto& visit)
 					{
 						if (!materialSearch.empty())
 						{
 							for (int flatIndex : materialFiltered)
 							{
 								Mesh* mesh = materialMeshAt(flatIndex);
-								if (mesh) mesh->setEnabled(enabled);
+								if (mesh) visit(*mesh);
 							}
 							return;
 						}
@@ -1368,22 +1457,27 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 						for (int i = 0; i < count; i++)
 						{
 							Mesh* mesh = materialMeshAt(i);
-							if (mesh) mesh->setEnabled(enabled);
+							if (mesh) visit(*mesh);
 						}
 					};
-					if (showAllRect.contains(x, y))
+					bool changed = false;
+					if (bulk.showDefault.contains(x, y))
 					{
-						applyEnabled(true);
-						Debug::log("Mesh parts: Show all");
-						return;
+						eachListedMesh([](Mesh& mesh) { mesh.setEnabled(mesh.defaultEnabled()); });
+						changed = true;
 					}
-					if (hideAllRect.contains(x, y))
+					else if (bulk.showAll.contains(x, y))
 					{
-						applyEnabled(false);
-						Debug::log("Mesh parts: Hide all");
-						return;
+						eachListedMesh([](Mesh& mesh) { mesh.setEnabled(true); });
+						changed = true;
 					}
-					// Clicked header but not a button.
+					else if (bulk.hideAll.contains(x, y))
+					{
+						eachListedMesh([](Mesh& mesh) { mesh.setEnabled(false); });
+						changed = true;
+					}
+					if (changed && onPartVisibilityChanged)
+						onPartVisibilityChanged();
 					return;
 				}
 
@@ -1402,6 +1496,14 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 			else if (!levelObjectItems.empty() && objectListRect.contains(x, y))
 			{
 				materialSearchActive = false;
+				if (collapseButtonRect(objectListRect).contains(x, y))
+				{
+					objectListCollapsed = !objectListCollapsed;
+					layoutObjectList();
+					return;
+				}
+				if (objectListCollapsed)
+					return;
 				rebuildObjectFilter();
 				const float yLocal = y - objectListRect.y;
 
@@ -1413,43 +1515,51 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				}
 				objectSearchActive = false;
 
-				const float kBtnH = 18.0f;
-				const float kBtnW = 58.0f;
-				const float kBtnPad = 6.0f;
-				const float btnY = objectListRect.y + 38.0f;
-				GuiRect showAllRect = {
-					objectListRect.x + objectListRect.width - (kBtnPad + kBtnW + kBtnPad + kBtnW + kBtnPad),
-					btnY, kBtnW, kBtnH
-				};
-				GuiRect hideAllRect = { showAllRect.x + kBtnW + kBtnPad, btnY, kBtnW, kBtnH };
+				const BulkButtonRects bulk = bulkButtonRects(objectListRect);
 
-				if (yLocal >= 0.0f && yLocal < kMeshPartHeaderHeight)
+				if (yLocal >= 0.0f && yLocal < kObjectListHeaderHeight)
 				{
-					if (showAllRect.contains(x, y) || hideAllRect.contains(x, y))
+					if (bulk.showDefault.contains(x, y) || bulk.showAll.contains(x, y) || bulk.hideAll.contains(x, y))
 					{
-						const bool enabled = showAllRect.contains(x, y);
-						if (!objectSearch.empty())
+						for (int index : objectFiltered)
 						{
-							for (int index : objectFiltered)
-								setObjectVisible(index, enabled);
+							const LevelObjectItem& item = levelObjectItems[static_cast<size_t>(index)];
+							const bool enabled = bulk.showDefault.contains(x, y)
+								? item.defaultVisible
+								: bulk.showAll.contains(x, y);
+							setObjectVisible(index, enabled);
 						}
-						else
+					}
+					else
+					{
+						for (int chip = 0; chip < kKindChipCount; chip++)
 						{
-							for (int index = 0; index < static_cast<int>(levelObjectItems.size()); index++)
-								setObjectVisible(index, enabled);
+							if (!objectKindChipRect(chip).contains(x, y))
+								continue;
+							if (kKindChips[chip].bit == 0)
+								objectKindFilter = 0;
+							else
+								objectKindFilter ^= kKindChips[chip].bit;
+							objectFilterDirty = true;
+							objectListScroll = 0.0f;
+							layoutObjectList();
+							break;
 						}
-						Debug::log(enabled ? "Objects: Show all" : "Objects: Hide all");
 					}
 					return;
 				}
 
-				float relativeY = y - (objectListRect.y + kMeshPartHeaderHeight) + objectListScroll;
+				float relativeY = y - (objectListRect.y + kObjectListHeaderHeight) + objectListScroll;
 				int row = (int)(relativeY / kMeshPartItemHeight);
 				if (row >= 0 && row < (int)objectFiltered.size())
 				{
 					const int index = objectFiltered[row];
-					const float rowTop = objectListRect.y + kMeshPartHeaderHeight - objectListScroll
+					const float rowTop = objectListRect.y + kObjectListHeaderHeight - objectListScroll
 						+ static_cast<float>(row) * kMeshPartItemHeight;
+					const float bodyTop = objectListRect.y + kObjectListHeaderHeight;
+					const float bodyBottom = objectListRect.y + objectListRect.height - 3.0f;
+					if (!rowFits(rowTop, bodyTop, bodyBottom, 30.0f))
+						return;
 					const GuiRect checkbox = { objectListRect.x + 10.0f, rowTop + 9.0f, 12.0f, 12.0f };
 					if (checkbox.contains(x, y))
 					{
@@ -1462,11 +1572,26 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 					const bool doubleClick = index == lastObjectClickIndex && (now - lastObjectClickTime) <= 0.4;
 					lastObjectClickIndex = index;
 					lastObjectClickTime = now;
-					selectedObjectIndex = index;
-					if (onLevelObjectSelected)
-						onLevelObjectSelected(index);
+					selectLevelObject(index);
 					if (doubleClick && onLevelObjectFocused)
 						onLevelObjectFocused(index);
+				}
+			}
+			else if (!levelObjectItems.empty() && objectInfoRect.contains(x, y))
+			{
+				objectSearchActive = false;
+				materialSearchActive = false;
+				activeSearchCategory = -1;
+				rebuildInfoDrawLines();
+				if (y < objectInfoRect.y + kInfoHeaderHeight)
+					return;
+				const float relativeY = y - (objectInfoRect.y + kInfoHeaderHeight) + objectInfoScroll;
+				const int row = (int)(relativeY / kInfoLineHeight);
+				if (row >= 0 && row < (int)infoDrawLines.size())
+				{
+					const int link = infoDrawLines[static_cast<size_t>(row)].link;
+					if (link >= 0)
+						selectLevelObject(link);
 				}
 			}
 			else
@@ -1527,13 +1652,24 @@ void Gui::onMouseMove(float x, float y)
 	
 	// Track hovered object row
 	hoveredObjectItem = -1;
+	hoveredInfoRow = -1;
+	if (!levelObjectItems.empty() && objectInfoRect.contains(x, y))
+	{
+		if (y >= objectInfoRect.y + kInfoHeaderHeight)
+		{
+			const float relativeY = y - (objectInfoRect.y + kInfoHeaderHeight) + objectInfoScroll;
+			const int row = (int)(relativeY / kInfoLineHeight);
+			if (row >= 0 && row < (int)infoDrawLines.size() && infoDrawLines[static_cast<size_t>(row)].link >= 0)
+				hoveredInfoRow = row;
+		}
+	}
 	if (!levelObjectItems.empty() && objectListRect.contains(x, y))
 	{
 		rebuildObjectFilter();
 		const float yLocal = y - objectListRect.y;
-		if (yLocal >= kMeshPartHeaderHeight)
+		if (!objectListCollapsed && yLocal >= kObjectListHeaderHeight)
 		{
-			float relativeY = y - (objectListRect.y + kMeshPartHeaderHeight) + objectListScroll;
+			float relativeY = y - (objectListRect.y + kObjectListHeaderHeight) + objectListScroll;
 			int row = (int)(relativeY / kMeshPartItemHeight);
 			if (row >= 0 && row < (int)objectFiltered.size())
 				hoveredObjectItem = row;
@@ -1546,7 +1682,7 @@ void Gui::onMouseMove(float x, float y)
 	{
 		rebuildMaterialFilter();
 		const float yLocal = y - materialListRect.y;
-		if (yLocal < kMeshPartHeaderHeight)
+		if (materialListCollapsed || yLocal < kMeshPartHeaderHeight)
 		{
 			// Hovering header area; keep hoveredMaterialItem = -1 but continue processing other UI hovers.
 		}
@@ -1610,7 +1746,15 @@ void Gui::onScroll(float yoffset)
 		}
 	}
 	
-	if (!levelObjectItems.empty() && objectListRect.contains(mouseX, mouseY))
+	if (!levelObjectItems.empty() && objectInfoRect.contains(mouseX, mouseY))
+	{
+		objectInfoScroll -= yoffset * kInfoLineHeight * 3.0f;
+		if (objectInfoScroll < 0.0f) objectInfoScroll = 0.0f;
+		if (objectInfoScroll > maxObjectInfoScroll) objectInfoScroll = maxObjectInfoScroll;
+		return;
+	}
+
+	if (!objectListCollapsed && !levelObjectItems.empty() && objectListRect.contains(mouseX, mouseY))
 	{
 		objectListScroll -= yoffset * kMeshPartItemHeight;
 		if (objectListScroll < 0.0f) objectListScroll = 0.0f;
@@ -1619,7 +1763,7 @@ void Gui::onScroll(float yoffset)
 	}
 
 	// Scroll the material list when mouse is over it
-	if (hasMaterialPanel() && materialListRect.contains(mouseX, mouseY))
+	if (!materialListCollapsed && hasMaterialPanel() && materialListRect.contains(mouseX, mouseY))
 	{
 		materialListScroll -= yoffset * kMeshPartItemHeight;
 		if (materialListScroll < 0.0f) materialListScroll = 0.0f;
@@ -1920,6 +2064,12 @@ void Gui::layoutMaterialList()
 		return;
 	}
 
+	if (materialListCollapsed)
+	{
+		materialListRect = { (float)windowWidth - 310.0f, 170.0f, 300.0f, kCollapsedListHeight };
+		return;
+	}
+
 	rebuildMaterialFilter();
 	const float kBottomPad = 5.0f;
 	const float contentHeight = kMeshPartHeaderHeight
@@ -1945,6 +2095,7 @@ void Gui::clearObjectList()
 	levelObjectItems.clear();
 	objectSearch.clear();
 	objectSearchActive = false;
+	objectKindFilter = 0;
 	objectFilterDirty = true;
 	objectFiltered.clear();
 	objectListScroll = 0.0f;
@@ -1953,6 +2104,11 @@ void Gui::clearObjectList()
 	selectedObjectIndex = -1;
 	lastObjectClickIndex = -1;
 	lastObjectClickTime = 0.0;
+	objectInfoLines.clear();
+	infoDrawLines.clear();
+	objectInfoScroll = 0.0f;
+	maxObjectInfoScroll = 0.0f;
+	hoveredInfoRow = -1;
 	layoutObjectList();
 }
 
@@ -1961,20 +2117,39 @@ void Gui::setLevelObjects(const std::vector<LevelObjectItem>& objects)
 	levelObjectItems = objects;
 	objectSearch.clear();
 	objectSearchActive = false;
+	objectKindFilter = 0;
 	objectFilterDirty = true;
 	objectListScroll = 0.0f;
 	hoveredObjectItem = -1;
 	selectedObjectIndex = -1;
 	lastObjectClickIndex = -1;
 	lastObjectClickTime = 0.0;
+	objectInfoLines.clear();
+	infoDrawLines.clear();
+	objectInfoScroll = 0.0f;
+	maxObjectInfoScroll = 0.0f;
+	hoveredInfoRow = -1;
 	if (!objects.empty())
 		sceneLoaded = true;
+	layoutObjectList();
+}
+
+void Gui::setObjectInfo(std::vector<ObjectInfoLine> lines)
+{
+	objectInfoLines = std::move(lines);
+	objectInfoScroll = 0.0f;
+	hoveredInfoRow = -1;
 	layoutObjectList();
 }
 
 void Gui::setOnLevelObjectToggled(std::function<void(int, bool)> callback)
 {
 	onLevelObjectToggled = std::move(callback);
+}
+
+void Gui::setOnPartVisibilityChanged(std::function<void()> callback)
+{
+	onPartVisibilityChanged = std::move(callback);
 }
 
 void Gui::setOnLevelObjectSelected(std::function<void(int)> callback)
@@ -2006,9 +2181,12 @@ void Gui::rebuildObjectFilter()
 	for (int i = 0; i < static_cast<int>(levelObjectItems.size()); i++)
 	{
 		const LevelObjectItem& item = levelObjectItems[static_cast<size_t>(i)];
+		if (objectKindFilter != 0 && (kindBitForLabel(item.kindLabel) & objectKindFilter) == 0)
+			continue;
 		if (objectSearch.empty()
 			|| containsCaseInsensitive(item.typeName, objectSearch)
-			|| containsCaseInsensitive(item.modelFile, objectSearch))
+			|| containsCaseInsensitive(item.modelFile, objectSearch)
+			|| containsCaseInsensitive(item.idLabel, objectSearch))
 			objectFiltered.push_back(i);
 	}
 }
@@ -2018,28 +2196,109 @@ void Gui::layoutObjectList()
 	if (levelObjectItems.empty())
 	{
 		objectListRect = { 0.0f, 0.0f, 0.0f, 0.0f };
+		objectInfoRect = { 0.0f, 0.0f, 0.0f, 0.0f };
 		maxObjectListScroll = 0.0f;
+		maxObjectInfoScroll = 0.0f;
+		infoDrawLines.clear();
 		return;
 	}
 
 	rebuildObjectFilter();
 	const float kBottomPad = 5.0f;
-	const float contentHeight = kMeshPartHeaderHeight
+	const float kGap = 8.0f;
+	const float bottom = (float)windowHeight - 12.0f;
+	const float available = std::max(0.0f, bottom - kObjectColumnTop);
+	if (objectListCollapsed)
+	{
+		const float listHeight = kCollapsedListHeight;
+		const float inspectorHeight = std::max(0.0f, available - kGap - listHeight);
+		objectListRect = { 10.0f, kObjectColumnTop, kObjectColumnWidth, listHeight };
+		objectInfoRect = {
+			10.0f,
+			kObjectColumnTop + listHeight + kGap,
+			kObjectColumnWidth,
+			inspectorHeight
+		};
+		rebuildInfoDrawLines();
+		return;
+	}
+
+	const float contentHeight = kObjectListHeaderHeight
 		+ (static_cast<float>(objectFiltered.size()) * kMeshPartItemHeight)
 		+ kBottomPad;
-	const float maxHeight = windowHeight * 0.7f;
-	const float panelHeight = (contentHeight < maxHeight) ? contentHeight : maxHeight;
-	objectListRect = { 10.0f, 180.0f, 300.0f, panelHeight };
-	maxObjectListScroll = (contentHeight > panelHeight) ? (contentHeight - panelHeight) : 0.0f;
+	const float listMin = kObjectListHeaderHeight;
+	float inspectorHeight = available * 0.38f;
+	if (available >= 360.0f)
+		inspectorHeight = std::max(220.0f, inspectorHeight);
+	if (inspectorHeight > available - kGap - listMin)
+		inspectorHeight = std::max(60.0f, available - kGap - listMin);
+
+	float listRoom = std::max(0.0f, available - kGap - inspectorHeight);
+	float listHeight = (contentHeight < listRoom) ? contentHeight : listRoom;
+	if (listHeight < listRoom)
+		inspectorHeight = std::max(0.0f, available - kGap - listHeight);
+
+	objectListRect = { 10.0f, kObjectColumnTop, kObjectColumnWidth, listHeight };
+	objectInfoRect = {
+		10.0f,
+		kObjectColumnTop + listHeight + kGap,
+		kObjectColumnWidth,
+		inspectorHeight
+	};
+	maxObjectListScroll = (contentHeight > listHeight) ? (contentHeight - listHeight) : 0.0f;
 	if (objectListScroll < 0.0f)
 		objectListScroll = 0.0f;
 	if (objectListScroll > maxObjectListScroll)
 		objectListScroll = maxObjectListScroll;
+	rebuildInfoDrawLines();
 }
 
 GuiRect Gui::objectSearchRect() const
 {
 	return { objectListRect.x + 8.0f, objectListRect.y + 60.0f, objectListRect.width - 16.0f, 20.0f };
+}
+
+GuiRect Gui::objectKindChipRect(int index) const
+{
+	const int columns = 4;
+	const float gap = 4.0f;
+	const int col = index % columns;
+	const int row = index / columns;
+	const float width = (objectListRect.width - 16.0f - gap * static_cast<float>(columns - 1)) / static_cast<float>(columns);
+	return {
+		objectListRect.x + 8.0f + static_cast<float>(col) * (width + gap),
+		objectListRect.y + 84.0f + static_cast<float>(row) * 22.0f,
+		width,
+		18.0f
+	};
+}
+
+void Gui::drawCollapseButton(const GuiRect& rect, bool collapsed)
+{
+	const bool hovered = rect.contains(mouseX, mouseY);
+	drawRect(rect.x, rect.y, rect.width, rect.height,
+		hovered ? glm::vec4(0.34f, 0.34f, 0.38f, 1.0f) : glm::vec4(0.20f, 0.20f, 0.22f, 1.0f));
+	const glm::vec4 icon(0.92f, 0.92f, 0.92f, 1.0f);
+	if (collapsed)
+	{
+		drawRect(rect.x + 3.0f, rect.y + rect.height * 0.5f - 1.0f, rect.width - 6.0f, 2.0f, icon);
+		return;
+	}
+	const float x = rect.x + 4.0f;
+	const float y = rect.y + 4.0f;
+	const float size = rect.width - 8.0f;
+	drawRect(x, y, size, 1.0f, icon);
+	drawRect(x, y + size - 1.0f, size, 1.0f, icon);
+	drawRect(x, y + 1.0f, 1.0f, size - 2.0f, icon);
+	drawRect(x + size - 1.0f, y + 1.0f, 1.0f, size - 2.0f, icon);
+}
+
+void Gui::drawTextButton(const GuiRect& rect, const char* label, const glm::vec4& fill, const glm::vec4& hoverFill)
+{
+	const bool hovered = rect.contains(mouseX, mouseY);
+	drawRect(rect.x, rect.y, rect.width, rect.height, hovered ? hoverFill : fill);
+	const float textWidth = static_cast<float>(std::strlen(label)) * 8.0f;
+	drawText(label, rect.x + (rect.width - textWidth) * 0.5f, rect.y + 5.0f, glm::vec4(0.95f, 0.95f, 0.95f, 1.0f));
 }
 
 void Gui::renderObjectList()
@@ -2076,30 +2335,28 @@ void Gui::renderObjectList()
 	}
 
 	drawText("OBJECTS", objectListRect.x + 10.0f, objectListRect.y + 10.0f, glm::vec4(0.6f, 1.0f, 0.7f, 1.0f));
+	bindRectShader();
+	drawCollapseButton(collapseButtonRect(objectListRect), objectListCollapsed);
+	if (objectListCollapsed)
+		return;
+
 	drawText("Visible: " + std::to_string(visibleCount) + "/" + std::to_string(levelObjectItems.size()),
 		objectListRect.x + 10.0f, objectListRect.y + 24.0f,
 		glm::vec4(0.8f, 0.8f, 0.8f, 1.0f));
 
 	bindRectShader();
-	const float kBtnH = 18.0f;
-	const float kBtnW = 58.0f;
-	const float kBtnPad = 6.0f;
-	const float btnY = objectListRect.y + 38.0f;
-	GuiRect showAllRect = {
-		objectListRect.x + objectListRect.width - (kBtnPad + kBtnW + kBtnPad + kBtnW + kBtnPad),
-		btnY, kBtnW, kBtnH
-	};
-	GuiRect hideAllRect = { showAllRect.x + kBtnW + kBtnPad, btnY, kBtnW, kBtnH };
-
-	const bool showHover = showAllRect.contains(mouseX, mouseY);
-	const bool hideHover = hideAllRect.contains(mouseX, mouseY);
-	drawRect(showAllRect.x, showAllRect.y, showAllRect.width, showAllRect.height,
-		showHover ? glm::vec4(0.25f, 0.55f, 0.25f, 0.98f) : glm::vec4(0.18f, 0.42f, 0.18f, 0.95f));
-	drawRect(hideAllRect.x, hideAllRect.y, hideAllRect.width, hideAllRect.height,
-		hideHover ? glm::vec4(0.62f, 0.25f, 0.25f, 0.98f) : glm::vec4(0.45f, 0.18f, 0.18f, 0.95f));
-	drawText("SHOW", showAllRect.x + 10.0f, showAllRect.y + 6.0f, glm::vec4(0.95f, 0.95f, 0.95f, 1.0f));
-	drawText("HIDE", hideAllRect.x + 10.0f, hideAllRect.y + 6.0f, glm::vec4(0.95f, 0.95f, 0.95f, 1.0f));
-
+	const BulkButtonRects bulk = bulkButtonRects(objectListRect);
+	const glm::vec4 defaultFill(0.20f, 0.32f, 0.48f, 0.95f);
+	const glm::vec4 defaultHover(0.28f, 0.44f, 0.64f, 0.98f);
+	const glm::vec4 showFill(0.18f, 0.42f, 0.18f, 0.95f);
+	const glm::vec4 showHover(0.25f, 0.55f, 0.25f, 0.98f);
+	const glm::vec4 hideFill(0.45f, 0.18f, 0.18f, 0.95f);
+	const glm::vec4 hideHover(0.62f, 0.25f, 0.25f, 0.98f);
+	drawTextButton(bulk.showDefault, "SHOW DEFAULT", defaultFill, defaultHover);
+	bindRectShader();
+	drawTextButton(bulk.showAll, "SHOW ALL", showFill, showHover);
+	bindRectShader();
+	drawTextButton(bulk.hideAll, "HIDE ALL", hideFill, hideHover);
 	bindRectShader();
 	const GuiRect searchRect = objectSearchRect();
 	const glm::vec4 searchBg = objectSearchActive ? glm::vec4(0.22f, 0.22f, 0.22f, 1.0f) : glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
@@ -2121,15 +2378,43 @@ void Gui::renderObjectList()
 	drawText(searchText, searchRect.x + 6.0f, searchRect.y + 6.0f, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
 	bindRectShader();
 
+	for (int chip = 0; chip < kKindChipCount; chip++)
+	{
+		const GuiRect chipRect = objectKindChipRect(chip);
+		const bool active = kKindChips[chip].bit == 0
+			? objectKindFilter == 0
+			: (objectKindFilter & kKindChips[chip].bit) != 0;
+		const bool hovered = chipRect.contains(mouseX, mouseY);
+		glm::vec4 fill = active
+			? glm::vec4(kKindChips[chip].color.r * 0.45f, kKindChips[chip].color.g * 0.45f, kKindChips[chip].color.b * 0.45f, 0.98f)
+			: glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
+		if (hovered)
+			fill += glm::vec4(0.08f, 0.08f, 0.08f, 0.0f);
+		drawRect(chipRect.x, chipRect.y, chipRect.width, chipRect.height, fill);
+		const glm::vec4 edge = active ? kKindChips[chip].color : glm::vec4(0.35f, 0.35f, 0.35f, 1.0f);
+		drawRect(chipRect.x, chipRect.y, chipRect.width, 1.0f, edge);
+		drawRect(chipRect.x, chipRect.y + chipRect.height - 1.0f, chipRect.width, 1.0f, edge);
+		drawRect(chipRect.x, chipRect.y, 1.0f, chipRect.height, edge);
+		drawRect(chipRect.x + chipRect.width - 1.0f, chipRect.y, 1.0f, chipRect.height, edge);
+		const std::string label = kKindChips[chip].label;
+		const float textWidth = static_cast<float>(label.size()) * 8.0f;
+		const float textX = chipRect.x + std::max(2.0f, (chipRect.width - textWidth) * 0.5f);
+		const glm::vec4 textColor = active ? kKindChips[chip].color : glm::vec4(0.55f, 0.55f, 0.55f, 1.0f);
+		drawText(label, textX, chipRect.y + 5.0f, textColor);
+		bindRectShader();
+	}
+
 	if (objectListScroll < 0.0f)
 		objectListScroll = 0.0f;
 	if (objectListScroll > maxObjectListScroll)
 		objectListScroll = maxObjectListScroll;
 
-	float yOffset = objectListRect.y + kMeshPartHeaderHeight - objectListScroll;
+	const float bodyTop = objectListRect.y + kObjectListHeaderHeight;
+	const float bodyBottom = objectListRect.y + objectListRect.height - 3.0f;
+	float yOffset = bodyTop - objectListScroll;
 	for (size_t row = 0; row < objectFiltered.size(); row++)
 	{
-		if (yOffset >= objectListRect.y + kMeshPartHeaderHeight - 5.0f && yOffset < objectListRect.y + objectListRect.height - 5.0f)
+		if (rowFits(yOffset, bodyTop, bodyBottom, kItemBoxHeight))
 		{
 			const int index = objectFiltered[row];
 			const LevelObjectItem& item = levelObjectItems[static_cast<size_t>(index)];
@@ -2151,42 +2436,238 @@ void Gui::renderObjectList()
 				drawText("X", objectListRect.x + 11.0f, yOffset + 11.0f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
 			bindRectShader();
 
+			const int maxChars = std::max(8, (int)((objectListRect.width - 40.0f) / 8.0f));
 			std::string displayType = item.typeName.empty() ? "object" : item.typeName;
-			if (displayType.length() > 28)
-				displayType = displayType.substr(0, 25) + "...";
+			if ((int)displayType.length() > maxChars)
+				displayType = displayType.substr(0, maxChars - 3) + "...";
 			const glm::vec4 textColor = isEnabled ? glm::vec4(0.9f, 0.9f, 0.9f, 1.0f) : glm::vec4(0.6f, 0.6f, 0.6f, 1.0f);
 			drawText(displayType, objectListRect.x + 28.0f, yOffset + kNameLineY, textColor);
 
-			std::string secondary = item.modelFile.empty() ? "no model" : item.modelFile;
-			glm::vec4 secondaryColor = item.modelFile.empty()
+			std::string secondary;
+			if (!item.kindLabel.empty())
+				secondary += item.kindLabel;
+			if (!item.idLabel.empty())
+			{
+				if (!secondary.empty())
+					secondary += "  ";
+				secondary += item.idLabel;
+			}
+			if (!item.modelFile.empty())
+			{
+				if (!secondary.empty())
+					secondary += "  ";
+				secondary += item.modelFile;
+			}
+			if (secondary.empty())
+				secondary = "no model";
+			glm::vec4 secondaryColor = item.modelFile.empty() && item.idLabel.empty()
 				? glm::vec4(0.55f, 0.55f, 0.55f, 1.0f)
 				: (isEnabled ? glm::vec4(0.65f, 0.85f, 0.7f, 1.0f) : glm::vec4(0.45f, 0.55f, 0.48f, 1.0f));
 			if (!item.kindLabel.empty())
 			{
-				secondary = item.modelFile.empty() ? item.kindLabel : item.kindLabel + "  " + item.modelFile;
-				glm::vec4 kindColor(0.8f, 0.8f, 0.8f, 1.0f);
-				if (item.kindLabel == "critter")
-					kindColor = glm::vec4(1.0f, 0.55f, 0.45f, 1.0f);
-				else if (item.kindLabel == "water")
-					kindColor = glm::vec4(0.45f, 0.7f, 1.0f, 1.0f);
-				else if (item.kindLabel == "trigger")
-					kindColor = glm::vec4(1.0f, 0.85f, 0.35f, 1.0f);
-				else if (item.kindLabel == "sound")
-					kindColor = glm::vec4(0.4f, 0.95f, 1.0f, 1.0f);
-				else if (item.kindLabel == "patrol")
-					kindColor = glm::vec4(1.0f, 0.5f, 0.9f, 1.0f);
-				else if (item.kindLabel == "range")
-					kindColor = glm::vec4(0.5f, 1.0f, 0.55f, 1.0f);
+				glm::vec4 kindColor = objectKindColour(item.kindLabel);
 				if (!isEnabled)
 					kindColor.a = 0.55f;
 				secondaryColor = kindColor;
 			}
-			if (secondary.length() > 32)
-				secondary = secondary.substr(0, 29) + "...";
+			if ((int)secondary.length() > maxChars)
+				secondary = secondary.substr(0, maxChars - 3) + "...";
 			drawText(secondary, objectListRect.x + 28.0f, yOffset + kTagsLineY, secondaryColor);
 			bindRectShader();
 		}
 		yOffset += kMeshPartItemHeight;
+	}
+}
+
+void Gui::selectLevelObject(int index)
+{
+	if (index < 0 || index >= static_cast<int>(levelObjectItems.size()))
+		return;
+	selectedObjectIndex = index;
+	rebuildObjectFilter();
+	bool listed = false;
+	for (int filtered : objectFiltered)
+	{
+		if (filtered == index)
+		{
+			listed = true;
+			break;
+		}
+	}
+	if (!listed && (!objectSearch.empty() || objectKindFilter != 0))
+	{
+		objectSearch.clear();
+		objectSearchActive = false;
+		objectKindFilter = 0;
+		objectFilterDirty = true;
+	}
+	revealLevelObject(index);
+	if (onLevelObjectSelected)
+		onLevelObjectSelected(index);
+}
+
+void Gui::revealLevelObject(int index)
+{
+	rebuildObjectFilter();
+	int row = -1;
+	for (int i = 0; i < static_cast<int>(objectFiltered.size()); i++)
+	{
+		if (objectFiltered[static_cast<size_t>(i)] == index)
+		{
+			row = i;
+			break;
+		}
+	}
+	if (row < 0)
+		return;
+	const float rowTop = static_cast<float>(row) * kMeshPartItemHeight;
+	if (objectListCollapsed)
+		return;
+	const float view = objectListRect.height - kObjectListHeaderHeight;
+	if (view <= 0.0f)
+		return;
+	if (rowTop < objectListScroll)
+		objectListScroll = rowTop;
+	else if (rowTop + kMeshPartItemHeight > objectListScroll + view)
+		objectListScroll = rowTop + kMeshPartItemHeight - view;
+	if (objectListScroll < 0.0f)
+		objectListScroll = 0.0f;
+	if (objectListScroll > maxObjectListScroll)
+		objectListScroll = maxObjectListScroll;
+}
+
+void Gui::rebuildInfoDrawLines()
+{
+	infoDrawLines.clear();
+	if (objectInfoRect.width < 16.0f)
+	{
+		maxObjectInfoScroll = 0.0f;
+		return;
+	}
+
+	auto wrap = [](const std::string& text, int maxChars, std::vector<std::string>& out)
+	{
+		if (maxChars < 8)
+			maxChars = 8;
+		if (text.empty())
+		{
+			out.emplace_back();
+			return;
+		}
+		size_t i = 0;
+		while (i < text.size())
+		{
+			size_t count = std::min(static_cast<size_t>(maxChars), text.size() - i);
+			if (i + count < text.size())
+			{
+				const size_t space = text.rfind(' ', i + count);
+				if (space != std::string::npos && space > i)
+					count = space - i;
+			}
+			if (count == 0)
+				count = 1;
+			out.push_back(text.substr(i, count));
+			i += count;
+			while (i < text.size() && text[i] == ' ')
+				i++;
+		}
+	};
+
+	const float inner = objectInfoRect.width - 20.0f;
+	if (selectedObjectIndex < 0 || objectInfoLines.empty())
+	{
+		InfoDrawLine row;
+		row.text = "Select an object";
+		row.dim = true;
+		infoDrawLines.push_back(row);
+	}
+	else
+	{
+		for (const ObjectInfoLine& line : objectInfoLines)
+		{
+			const float indent = static_cast<float>(std::max(0, line.indent)) * 12.0f;
+			int maxChars = (int)((inner - indent) / 8.0f);
+			std::vector<std::string> pieces;
+			wrap(line.text, maxChars, pieces);
+			for (const std::string& piece : pieces)
+			{
+				InfoDrawLine row;
+				row.text = piece;
+				row.link = line.link;
+				row.dim = line.dim;
+				row.heading = line.heading;
+				row.indent = indent;
+				infoDrawLines.push_back(std::move(row));
+			}
+		}
+	}
+
+	const float contentHeight = kInfoHeaderHeight
+		+ static_cast<float>(infoDrawLines.size()) * kInfoLineHeight
+		+ 8.0f;
+	maxObjectInfoScroll = (contentHeight > objectInfoRect.height) ? (contentHeight - objectInfoRect.height) : 0.0f;
+	if (objectInfoScroll < 0.0f)
+		objectInfoScroll = 0.0f;
+	if (objectInfoScroll > maxObjectInfoScroll)
+		objectInfoScroll = maxObjectInfoScroll;
+}
+
+void Gui::renderObjectInfo()
+{
+	if (levelObjectItems.empty() || objectInfoRect.height < 8.0f)
+		return;
+
+	glUseProgram(shaderProgram);
+	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
+	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+	auto bindRectShader = [&]()
+	{
+		glUseProgram(shaderProgram);
+		glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+	};
+
+	drawRect(objectInfoRect.x, objectInfoRect.y, objectInfoRect.width, objectInfoRect.height, glm::vec4(0.12f, 0.12f, 0.14f, 0.95f));
+	drawRect(objectInfoRect.x, objectInfoRect.y, objectInfoRect.width, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(objectInfoRect.x, objectInfoRect.y + objectInfoRect.height - 2.0f, objectInfoRect.width, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(objectInfoRect.x, objectInfoRect.y, 2.0f, objectInfoRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(objectInfoRect.x + objectInfoRect.width - 2.0f, objectInfoRect.y, 2.0f, objectInfoRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawText("INFO", objectInfoRect.x + 10.0f, objectInfoRect.y + 8.0f, glm::vec4(1.0f, 1.0f, 0.55f, 1.0f));
+	bindRectShader();
+
+	if (objectInfoScroll < 0.0f)
+		objectInfoScroll = 0.0f;
+	if (objectInfoScroll > maxObjectInfoScroll)
+		objectInfoScroll = maxObjectInfoScroll;
+
+	const float listTop = objectInfoRect.y + kInfoHeaderHeight;
+	const float listBottom = objectInfoRect.y + objectInfoRect.height - 4.0f;
+	float y = listTop - objectInfoScroll;
+	for (size_t row = 0; row < infoDrawLines.size(); row++)
+	{
+		const InfoDrawLine& line = infoDrawLines[row];
+		if (y >= listTop - 1.0f && y + kInfoLineHeight <= listBottom + 1.0f)
+		{
+			const bool hovered = hoveredInfoRow == static_cast<int>(row);
+			if (line.link >= 0)
+			{
+				bindRectShader();
+				const glm::vec4 rowColor = hovered
+					? glm::vec4(0.22f, 0.32f, 0.42f, 1.0f)
+					: glm::vec4(0.16f, 0.2f, 0.26f, 1.0f);
+				drawRect(objectInfoRect.x + 4.0f, y - 1.0f, objectInfoRect.width - 8.0f, kInfoLineHeight, rowColor);
+			}
+			glm::vec4 color(0.88f, 0.88f, 0.88f, 1.0f);
+			if (line.heading)
+				color = glm::vec4(0.75f, 0.9f, 1.0f, 1.0f);
+			else if (line.link >= 0)
+				color = hovered ? glm::vec4(0.75f, 0.95f, 1.0f, 1.0f) : glm::vec4(0.55f, 0.82f, 1.0f, 1.0f);
+			else if (line.dim)
+				color = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+			drawText(line.text, objectInfoRect.x + 10.0f + line.indent, y, color);
+			bindRectShader();
+		}
+		y += kInfoLineHeight;
 	}
 }
 
@@ -2292,31 +2773,29 @@ void Gui::renderMaterialList()
 
 	const char* title = levelModels.empty() ? "MESH PARTS" : "LEVEL PARTS";
 	drawText(title, materialListRect.x + 10.0f, materialListRect.y + 10.0f, glm::vec4(1.0f, 1.0f, 0.5f, 1.0f));
+	bindRectShader();
+	drawCollapseButton(collapseButtonRect(materialListRect), materialListCollapsed);
+	if (materialListCollapsed)
+		return;
+
 	drawText("Visible: " + std::to_string(visibleCount) + "/" + std::to_string(meshTotal),
 	         materialListRect.x + 10.0f, materialListRect.y + 24.0f,
 	         glm::vec4(0.8f, 0.8f, 0.8f, 1.0f));
 
 	// Bulk action buttons (keep geometry in sync with onMouseButton)
 	bindRectShader();
-	const float kBtnH = 18.0f;
-	const float kBtnW = 58.0f;
-	const float kBtnPad = 6.0f;
-	const float btnY = materialListRect.y + 38.0f;
-	GuiRect showAllRect = {
-		materialListRect.x + materialListRect.width - (kBtnPad + kBtnW + kBtnPad + kBtnW + kBtnPad),
-		btnY, kBtnW, kBtnH
-	};
-	GuiRect hideAllRect = { showAllRect.x + kBtnW + kBtnPad, btnY, kBtnW, kBtnH };
-
-	const bool showHover = showAllRect.contains(mouseX, mouseY);
-	const bool hideHover = hideAllRect.contains(mouseX, mouseY);
-	drawRect(showAllRect.x, showAllRect.y, showAllRect.width, showAllRect.height,
-	         showHover ? glm::vec4(0.25f, 0.55f, 0.25f, 0.98f) : glm::vec4(0.18f, 0.42f, 0.18f, 0.95f));
-	drawRect(hideAllRect.x, hideAllRect.y, hideAllRect.width, hideAllRect.height,
-	         hideHover ? glm::vec4(0.62f, 0.25f, 0.25f, 0.98f) : glm::vec4(0.45f, 0.18f, 0.18f, 0.95f));
-	drawText("SHOW", showAllRect.x + 10.0f, showAllRect.y + 6.0f, glm::vec4(0.95f, 0.95f, 0.95f, 1.0f));
-	drawText("HIDE", hideAllRect.x + 10.0f, hideAllRect.y + 6.0f, glm::vec4(0.95f, 0.95f, 0.95f, 1.0f));
-
+	const BulkButtonRects bulk = bulkButtonRects(materialListRect);
+	const glm::vec4 defaultFill(0.20f, 0.32f, 0.48f, 0.95f);
+	const glm::vec4 defaultHover(0.28f, 0.44f, 0.64f, 0.98f);
+	const glm::vec4 showFill(0.18f, 0.42f, 0.18f, 0.95f);
+	const glm::vec4 showHover(0.25f, 0.55f, 0.25f, 0.98f);
+	const glm::vec4 hideFill(0.45f, 0.18f, 0.18f, 0.95f);
+	const glm::vec4 hideHover(0.62f, 0.25f, 0.25f, 0.98f);
+	drawTextButton(bulk.showDefault, "SHOW DEFAULT", defaultFill, defaultHover);
+	bindRectShader();
+	drawTextButton(bulk.showAll, "SHOW ALL", showFill, showHover);
+	bindRectShader();
+	drawTextButton(bulk.hideAll, "HIDE ALL", hideFill, hideHover);
 	bindRectShader();
 	const GuiRect searchRect = materialSearchRect();
 	const glm::vec4 searchBg = materialSearchActive ? glm::vec4(0.22f, 0.22f, 0.22f, 1.0f) : glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
@@ -2342,11 +2821,13 @@ void Gui::renderMaterialList()
 	if (materialListScroll < 0.0f) materialListScroll = 0.0f;
 	if (materialListScroll > maxMaterialListScroll) materialListScroll = maxMaterialListScroll;
 
-	float yOffset = materialListRect.y + kMeshPartHeaderHeight - materialListScroll;
+	const float bodyTop = materialListRect.y + kMeshPartHeaderHeight;
+	const float bodyBottom = materialListRect.y + materialListRect.height - 3.0f;
+	float yOffset = bodyTop - materialListScroll;
 	
 	for (size_t row = 0; row < materialFiltered.size(); row++)
 	{
-		if (yOffset >= materialListRect.y + kMeshPartHeaderHeight - 5.0f && yOffset < materialListRect.y + materialListRect.height - 5.0f)
+		if (rowFits(yOffset, bodyTop, bodyBottom, kItemBoxHeight))
 		{
 			Mesh* mesh = materialMeshAt(materialFiltered[row]);
 			if (mesh == nullptr)
