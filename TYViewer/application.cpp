@@ -406,6 +406,10 @@ void Application::initialize()
 	gui->setOnCollisionToggle([this]() {
 		setCollisionMeshesVisible(!collisionMeshesVisible);
 	});
+	gui->setOnBoundsToggle([this]() {
+		drawBounds = !drawBounds;
+		gui->setBoundsVisible(drawBounds);
+	});
 	
 	// Load initial model if specified in config
 	if (!Config::model.empty() && (ty1Loaded || ty2Loaded))
@@ -1220,6 +1224,8 @@ void Application::update(float dt)
 	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_2))
 	{
 		drawBounds = !drawBounds;
+		if (gui)
+			gui->setBoundsVisible(drawBounds);
 	}
 	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_3))
 	{

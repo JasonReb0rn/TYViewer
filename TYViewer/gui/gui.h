@@ -68,6 +68,9 @@ public:
 	void setOnCollisionToggle(std::function<void()> callback);
 	// available: the scene has collision meshes. visible: those meshes are drawn.
 	void setCollisionToggle(bool available, bool visible);
+	void setOnBoundsToggle(std::function<void()> callback);
+	// visible: mesh bounding boxes are drawn in the viewport.
+	void setBoundsVisible(bool visible);
 	
 	// Model debugging
 	void setCurrentModel(class Model* model, const std::string& modelName);
@@ -120,6 +123,7 @@ private:
 	void renderExportRawButton();
 	void renderRecenterButton();
 	void renderCollisionButton();
+	void renderBoundsButton();
 	void renderNotificationBanner();
 	void renderScrollbar();
 	void renderModelInfo();
@@ -146,6 +150,7 @@ private:
 	GuiRect exportRawButtonRect;
 	GuiRect recenterButtonRect;
 	GuiRect collisionButtonRect;
+	GuiRect boundsButtonRect;
 	GuiRect notificationRect;
 	GuiRect dropdownRect;
 	GuiRect submenuRect;
@@ -199,6 +204,8 @@ private:
 	std::function<void()> onCollisionToggle;
 	bool collisionAvailable = false;
 	bool collisionVisible = false;
+	std::function<void()> onBoundsToggle;
+	bool boundsVisible = true;
 
 	// Notification state
 	bool notificationActive = false;
