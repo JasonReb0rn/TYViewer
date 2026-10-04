@@ -88,6 +88,7 @@ private:
 	std::vector<Ty1Instance> levelObjects;
 	// Unique prop models. Not drawn at the origin; instances reference them.
 	std::vector<Model*> propModels;
+	int selectedLevelObject = -1;
 	std::vector<Text*> labels;
 	Mesh* mesh;
 	
@@ -99,6 +100,7 @@ private:
 
 private:
 	void frameCameraOnModels(const std::vector<const Model*>& list, bool levelFraming);
+	void frameCameraOnInstance(int index);
 	void refreshCollisionToggle();
 
 	// ------------------------------------------------------------------

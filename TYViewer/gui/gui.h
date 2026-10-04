@@ -39,6 +39,8 @@ struct LevelObjectItem
 	std::string typeName;
 	std::string modelFile;
 	bool visible = true;
+	// Empty for a prop. Otherwise critter, water, trigger, sound, patrol, or range.
+	std::string kindLabel;
 };
 
 class Gui
@@ -88,6 +90,8 @@ public:
 	// Placed objects for the current level. Separate from the room-mesh list.
 	void setLevelObjects(const std::vector<LevelObjectItem>& objects);
 	void setOnLevelObjectToggled(std::function<void(int index, bool visible)> callback);
+	void setOnLevelObjectSelected(std::function<void(int index)> callback);
+	void setOnLevelObjectFocused(std::function<void(int index)> callback);
 	// Level (or other multi-mesh) view: names the button without enabling model export.
 	// canRecenter turns the recenter button on when room meshes are in the scene.
 	void setSceneLabel(const std::string& name, bool canRecenter);
@@ -228,7 +232,12 @@ private:
 	float objectListScroll = 0.0f;
 	float maxObjectListScroll = 0.0f;
 	int hoveredObjectItem = -1;
+	int selectedObjectIndex = -1;
+	int lastObjectClickIndex = -1;
+	double lastObjectClickTime = 0.0;
 	std::function<void(int index, bool visible)> onLevelObjectToggled;
+	std::function<void(int index)> onLevelObjectSelected;
+	std::function<void(int index)> onLevelObjectFocused;
 	
 	bool dropdownOpen;
 	bool hovering;

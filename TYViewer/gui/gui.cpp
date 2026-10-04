@@ -1448,8 +1448,25 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				if (row >= 0 && row < (int)objectFiltered.size())
 				{
 					const int index = objectFiltered[row];
-					const bool enabled = !levelObjectItems[static_cast<size_t>(index)].visible;
-					setObjectVisible(index, enabled);
+					const float rowTop = objectListRect.y + kMeshPartHeaderHeight - objectListScroll
+						+ static_cast<float>(row) * kMeshPartItemHeight;
+					const GuiRect checkbox = { objectListRect.x + 10.0f, rowTop + 9.0f, 12.0f, 12.0f };
+					if (checkbox.contains(x, y))
+					{
+						const bool enabled = !levelObjectItems[static_cast<size_t>(index)].visible;
+						setObjectVisible(index, enabled);
+						return;
+					}
+
+					const double now = glfwGetTime();
+					const bool doubleClick = index == lastObjectClickIndex && (now - lastObjectClickTime) <= 0.4;
+					lastObjectClickIndex = index;
+					lastObjectClickTime = now;
+					selectedObjectIndex = index;
+					if (onLevelObjectSelected)
+						onLevelObjectSelected(index);
+					if (doubleClick && onLevelObjectFocused)
+						onLevelObjectFocused(index);
 				}
 			}
 			else
@@ -1933,6 +1950,9 @@ void Gui::clearObjectList()
 	objectListScroll = 0.0f;
 	maxObjectListScroll = 0.0f;
 	hoveredObjectItem = -1;
+	selectedObjectIndex = -1;
+	lastObjectClickIndex = -1;
+	lastObjectClickTime = 0.0;
 	layoutObjectList();
 }
 
@@ -1944,6 +1964,9 @@ void Gui::setLevelObjects(const std::vector<LevelObjectItem>& objects)
 	objectFilterDirty = true;
 	objectListScroll = 0.0f;
 	hoveredObjectItem = -1;
+	selectedObjectIndex = -1;
+	lastObjectClickIndex = -1;
+	lastObjectClickTime = 0.0;
 	if (!objects.empty())
 		sceneLoaded = true;
 	layoutObjectList();
@@ -1952,6 +1975,16 @@ void Gui::setLevelObjects(const std::vector<LevelObjectItem>& objects)
 void Gui::setOnLevelObjectToggled(std::function<void(int, bool)> callback)
 {
 	onLevelObjectToggled = std::move(callback);
+}
+
+void Gui::setOnLevelObjectSelected(std::function<void(int)> callback)
+{
+	onLevelObjectSelected = std::move(callback);
+}
+
+void Gui::setOnLevelObjectFocused(std::function<void(int)> callback)
+{
+	onLevelObjectFocused = std::move(callback);
 }
 
 void Gui::setObjectVisible(int index, bool visible)
@@ -2102,7 +2135,12 @@ void Gui::renderObjectList()
 			const LevelObjectItem& item = levelObjectItems[static_cast<size_t>(index)];
 			const bool isEnabled = item.visible;
 			const bool isHovered = (hoveredObjectItem == static_cast<int>(row));
-			const glm::vec4 bgColor = isHovered ? glm::vec4(0.25f, 0.25f, 0.28f, 1.0f) : glm::vec4(0.18f, 0.18f, 0.2f, 1.0f);
+			const bool isSelected = (index == selectedObjectIndex);
+			glm::vec4 bgColor = glm::vec4(0.18f, 0.18f, 0.2f, 1.0f);
+			if (isSelected)
+				bgColor = isHovered ? glm::vec4(0.55f, 0.28f, 0.22f, 1.0f) : glm::vec4(0.42f, 0.20f, 0.16f, 1.0f);
+			else if (isHovered)
+				bgColor = glm::vec4(0.25f, 0.25f, 0.28f, 1.0f);
 
 			bindRectShader();
 			drawRect(objectListRect.x + 5.0f, yOffset, objectListRect.width - 10.0f, kItemBoxHeight, bgColor);
@@ -2120,11 +2158,31 @@ void Gui::renderObjectList()
 			drawText(displayType, objectListRect.x + 28.0f, yOffset + kNameLineY, textColor);
 
 			std::string secondary = item.modelFile.empty() ? "no model" : item.modelFile;
-			if (secondary.length() > 32)
-				secondary = secondary.substr(0, 29) + "...";
-			const glm::vec4 secondaryColor = item.modelFile.empty()
+			glm::vec4 secondaryColor = item.modelFile.empty()
 				? glm::vec4(0.55f, 0.55f, 0.55f, 1.0f)
 				: (isEnabled ? glm::vec4(0.65f, 0.85f, 0.7f, 1.0f) : glm::vec4(0.45f, 0.55f, 0.48f, 1.0f));
+			if (!item.kindLabel.empty())
+			{
+				secondary = item.modelFile.empty() ? item.kindLabel : item.kindLabel + "  " + item.modelFile;
+				glm::vec4 kindColor(0.8f, 0.8f, 0.8f, 1.0f);
+				if (item.kindLabel == "critter")
+					kindColor = glm::vec4(1.0f, 0.55f, 0.45f, 1.0f);
+				else if (item.kindLabel == "water")
+					kindColor = glm::vec4(0.45f, 0.7f, 1.0f, 1.0f);
+				else if (item.kindLabel == "trigger")
+					kindColor = glm::vec4(1.0f, 0.85f, 0.35f, 1.0f);
+				else if (item.kindLabel == "sound")
+					kindColor = glm::vec4(0.4f, 0.95f, 1.0f, 1.0f);
+				else if (item.kindLabel == "patrol")
+					kindColor = glm::vec4(1.0f, 0.5f, 0.9f, 1.0f);
+				else if (item.kindLabel == "range")
+					kindColor = glm::vec4(0.5f, 1.0f, 0.55f, 1.0f);
+				if (!isEnabled)
+					kindColor.a = 0.55f;
+				secondaryColor = kindColor;
+			}
+			if (secondary.length() > 32)
+				secondary = secondary.substr(0, 29) + "...";
 			drawText(secondary, objectListRect.x + 28.0f, yOffset + kTagsLineY, secondaryColor);
 			bindRectShader();
 		}

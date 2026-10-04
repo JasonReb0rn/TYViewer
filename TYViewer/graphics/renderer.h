@@ -3,6 +3,10 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
+#include <vector>
+
+#include <glm/vec3.hpp>
+
 #include "drawable.h"
 
 class Renderer
@@ -14,6 +18,7 @@ public:
 
 	void drawHollowBox(const glm::vec3& min, const glm::vec3& max, const glm::vec4& colour);
 	void drawSphere(const glm::vec3& p, float r, const glm::vec4& colour, int quality = 16);
+	void drawLineStrip(const std::vector<glm::vec3>& points, const glm::vec4& colour);
 
 	void clear(const glm::vec4& colour = glm::vec4(0.2f, 0.2f, 0.2f, 1.0f));
 	void draw(const Drawable& drawable, Shader& shader);

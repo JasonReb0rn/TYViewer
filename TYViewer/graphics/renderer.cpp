@@ -167,6 +167,51 @@ void Renderer::drawSphere(const glm::vec3& p, float r, const glm::vec4& colour, 
 	glDeleteBuffers(1, &ebo);
 }
 
+void Renderer::drawLineStrip(const std::vector<glm::vec3>& points, const glm::vec4& colour)
+{
+	if (points.size() < 2)
+		return;
+
+	std::vector<Vertex> vertices;
+	vertices.reserve(points.size());
+	for (const glm::vec3& point : points)
+		vertices.push_back(Vertex(glm::vec4(point, 1.0f), colour));
+
+	std::vector<unsigned int> indices;
+	indices.reserve((points.size() - 1) * 2);
+	for (unsigned int i = 0; i + 1 < points.size(); i++)
+	{
+		indices.push_back(i);
+		indices.push_back(i + 1);
+	}
+
+	unsigned int vao = 0;
+	unsigned int vbo = 0;
+	unsigned int ebo = 0;
+	glGenVertexArrays(1, &vao);
+	glGenBuffers(1, &vbo);
+	glGenBuffers(1, &ebo);
+	glBindVertexArray(vao);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+	glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), indices.data(), GL_STATIC_DRAW);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex), (const void*)offsetof(Vertex, position));
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex), (const void*)offsetof(Vertex, normal));
+	glEnableVertexAttribArray(2);
+	glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex), (const void*)offsetof(Vertex, colour));
+	glEnableVertexAttribArray(3);
+	glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (const void*)offsetof(Vertex, texcoord));
+	glEnableVertexAttribArray(4);
+	glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (const void*)offsetof(Vertex, skin));
+	glDrawElements(GL_LINES, static_cast<GLsizei>(indices.size()), GL_UNSIGNED_INT, 0);
+	glDeleteVertexArrays(1, &vao);
+	glDeleteBuffers(1, &vbo);
+	glDeleteBuffers(1, &ebo);
+}
+
 void Renderer::clear(const glm::vec4& colour)
 {
 	glClearColor(colour.x, colour.y, colour.z, 1.0f);

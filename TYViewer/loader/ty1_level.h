@@ -6,6 +6,17 @@
 #include <glm/vec3.hpp>
 #include <glm/mat4x4.hpp>
 
+// What the level fields say this instance is. Prop is a placed mesh.
+enum class Ty1Kind
+{
+	Prop,
+	Critter,
+	Water,
+	Trigger,
+	Sound,
+	Patrol
+};
+
 // One placed object from a TY1 .lv2 `name` block. `model` is filled by the caller.
 struct Ty1Instance
 {
@@ -17,6 +28,31 @@ struct Ty1Instance
 	glm::vec3 rotation{ 0.0f, 0.0f, 0.0f };
 	glm::vec3 scale{ 1.0f, 1.0f, 1.0f };
 	bool visible = true;
+	Ty1Kind kind = Ty1Kind::Prop;
+
+	// Flock roam box, or a water volume. Full size, centered on `position`,
+	// turned by `rotation`. Not the mesh scale.
+	bool critter = false;
+	glm::vec3 roamSize{ 0.0f, 0.0f, 0.0f };
+
+	// Nested `box = boxzone`. Full width, height, depth, centered on `boxPosition`.
+	bool hasBox = false;
+	glm::vec3 boxPosition{ 0.0f, 0.0f, 0.0f };
+	float boxYaw = 0.0f;
+	float boxPitch = 0.0f;
+	glm::vec3 boxSize{ 0.0f, 0.0f, 0.0f };
+
+	// Trigger sphere, sound radius, or an enemy `range` / dive `radius`.
+	bool hasSphere = false;
+	bool soundSphere = false;
+	bool rangeSphere = false;
+	glm::vec3 spherePosition{ 0.0f, 0.0f, 0.0f };
+	float sphereRadius = 0.0f;
+
+	// Patrol, enemy region, spawner, or camera path. PATH regions are closed.
+	std::vector<glm::vec3> waypoints;
+	bool closePath = false;
+	float pathWidth = 0.0f;
 };
 
 // Krome stores this as a row-vector matrix (scale, then pitch, yaw, roll, translation

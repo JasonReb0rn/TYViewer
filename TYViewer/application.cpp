@@ -410,6 +410,12 @@ void Application::initialize()
 		if (index >= 0 && index < static_cast<int>(levelObjects.size()))
 			levelObjects[static_cast<size_t>(index)].visible = visible;
 	});
+	gui->setOnLevelObjectSelected([this](int index) {
+		selectedLevelObject = index;
+	});
+	gui->setOnLevelObjectFocused([this](int index) {
+		frameCameraOnInstance(index);
+	});
 	gui->setOnCollisionToggle([this]() {
 		setCollisionMeshesVisible(!collisionMeshesVisible);
 	});
@@ -829,6 +835,18 @@ void Application::loadTy1Level(const std::string& levelName)
 			item.typeName = instance.typeName;
 			item.modelFile = instance.modelFile;
 			item.visible = instance.visible;
+			if (instance.kind == Ty1Kind::Critter)
+				item.kindLabel = "critter";
+			else if (instance.kind == Ty1Kind::Water)
+				item.kindLabel = "water";
+			else if (instance.kind == Ty1Kind::Trigger)
+				item.kindLabel = "trigger";
+			else if (instance.kind == Ty1Kind::Sound)
+				item.kindLabel = "sound";
+			else if (instance.kind == Ty1Kind::Patrol)
+				item.kindLabel = "patrol";
+			else if (instance.rangeSphere)
+				item.kindLabel = "range";
 			items.push_back(item);
 		}
 		gui->setLevelObjects(items);
@@ -1180,6 +1198,106 @@ void Application::frameCameraOnModels(const std::vector<const Model*>& list, boo
 	camera.setClipPlaneFar(std::max(kDefaultFar, dist + farRadius * 3.0f + 50.0f));
 }
 
+void Application::frameCameraOnInstance(int index)
+{
+	if (index < 0 || index >= static_cast<int>(levelObjects.size()))
+		return;
+
+	const Ty1Instance& instance = levelObjects[static_cast<size_t>(index)];
+	glm::dvec3 sum(0.0);
+	size_t count = 0;
+	const glm::mat4 world = ty1InstanceMatrix(instance);
+	if (instance.model != nullptr)
+	{
+		for (const Mesh* mesh : instance.model->getMeshes())
+		{
+			if (mesh == nullptr)
+				continue;
+			for (const Vertex& vertex : mesh->getVertices())
+			{
+				const glm::vec3 point(world * glm::vec4(glm::vec3(vertex.position), 1.0f));
+				sum += glm::dvec3(point);
+				++count;
+			}
+		}
+	}
+
+	glm::vec3 center = instance.position;
+	float radius = 80.0f;
+	if (count > 0)
+	{
+		center = glm::vec3(sum / static_cast<double>(count));
+		radius = 0.0f;
+		for (const Mesh* mesh : instance.model->getMeshes())
+		{
+			if (mesh == nullptr)
+				continue;
+			for (const Vertex& vertex : mesh->getVertices())
+			{
+				const glm::vec3 point(world * glm::vec4(glm::vec3(vertex.position), 1.0f));
+				radius = std::max(radius, glm::length(point - center));
+			}
+		}
+		if (radius < 0.05f)
+			radius = 0.05f;
+	}
+
+	const float kDefaultFar = 30000.0f;
+	float aspect = camera.getAspectRatio();
+	if (aspect < 0.01f)
+		aspect = 16.0f / 9.0f;
+
+	const float vFov = glm::radians(camera.getFieldOfView());
+	const float hFov = 2.0f * std::atan(std::tan(vFov * 0.5f) * aspect);
+	float sinHalf = std::sin(std::min(vFov, hFov) * 0.5f);
+	if (sinHalf < 0.001f)
+		sinHalf = 0.001f;
+
+	const float dist = (radius / sinHalf) * 1.2f;
+	const float lift = dist * 0.12f;
+	const glm::vec3 worldCam = center + glm::vec3(0.0f, lift, dist);
+	const glm::vec3 eye(worldCam.x, worldCam.y, -worldCam.z);
+	const glm::vec3 look(center.x, center.y, -center.z);
+
+	glm::vec3 dir = look - eye;
+	const float dirLen = glm::length(dir);
+	if (dirLen < 0.0001f)
+		dir = glm::vec3(0.0f, 0.0f, 1.0f);
+	else
+		dir /= dirLen;
+
+	float pitch = glm::degrees(std::asin(glm::clamp(dir.y, -1.0f, 1.0f)));
+	const float yaw = glm::degrees(std::atan2(dir.z, dir.x));
+	if (pitch > 89.0f)
+		pitch = 89.0f;
+	if (pitch < -89.0f)
+		pitch = -89.0f;
+
+	camera.setPosition(eye);
+	camera.setRotation(glm::vec3(yaw, pitch, 0.0f));
+
+	// The object is small, but the skybox is not. Measure the level from the new
+	// eye and never pull the far plane in closer than it already was.
+	float reach = 0.0f;
+	for (const Model* model : models)
+	{
+		if (model == nullptr)
+			continue;
+		const glm::vec3 corner = model->bounds_crn;
+		const glm::vec3 size = model->bounds_size;
+		for (int cornerIndex = 0; cornerIndex < 8; cornerIndex++)
+		{
+			const glm::vec3 point(
+				corner.x + ((cornerIndex & 1) ? size.x : 0.0f),
+				corner.y + ((cornerIndex & 2) ? size.y : 0.0f),
+				corner.z + ((cornerIndex & 4) ? size.z : 0.0f));
+			reach = std::max(reach, glm::length(point - worldCam));
+		}
+	}
+	const float needed = std::max(kDefaultFar, reach + 50.0f);
+	camera.setClipPlaneFar(std::max(camera.getClipPlaneFar(), needed));
+}
+
 void Application::setCollisionMeshesVisible(bool visible)
 {
 	bool any = false;
@@ -1234,6 +1352,7 @@ void Application::clearModels()
 	models.clear();
 	levelObjects.clear();
 	propModels.clear();
+	selectedLevelObject = -1;
 	// Note: Models are managed by the Content system, so we don't delete them here
 	
 	// Clear GUI model info
@@ -1540,6 +1659,83 @@ void Application::render(Shader& shader)
 				maxCorner = glm::max(maxCorner, point);
 			}
 			renderer.drawHollowBox(minCorner, maxCorner - minCorner, glm::vec4(1, 1, 1, 1));
+		}
+	}
+
+	if (selectedLevelObject >= 0 && selectedLevelObject < static_cast<int>(levelObjects.size()))
+	{
+		const Ty1Instance& instance = levelObjects[static_cast<size_t>(selectedLevelObject)];
+		const glm::vec4 critterColour(1.0f, 0.0f, 0.0f, 1.0f);
+		const glm::vec4 waterColour(0.25f, 0.55f, 1.0f, 1.0f);
+		const glm::vec4 triggerColour(1.0f, 0.85f, 0.15f, 1.0f);
+		const glm::vec4 soundColour(0.2f, 0.95f, 1.0f, 1.0f);
+		const glm::vec4 patrolColour(1.0f, 0.35f, 0.9f, 1.0f);
+		const glm::vec4 rangeColour(0.35f, 1.0f, 0.4f, 1.0f);
+
+		auto drawBox = [&](const glm::vec3& pos, float yaw, float pitch, float roll, const glm::vec3& size, const glm::vec4& colour)
+		{
+			if (size.x <= 0.0f && size.y <= 0.0f && size.z <= 0.0f)
+				return;
+			glm::mat4 matrix(1.0f);
+			matrix = glm::translate(matrix, pos);
+			matrix = glm::rotate(matrix, -roll, glm::vec3(0.0f, 0.0f, 1.0f));
+			matrix = glm::rotate(matrix, -yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+			matrix = glm::rotate(matrix, -pitch, glm::vec3(1.0f, 0.0f, 0.0f));
+			matrix = glm::scale(matrix, glm::max(size, glm::vec3(0.01f)));
+			basic->setUniformMat4("modelMatrix", matrix);
+			renderer.drawHollowBox(glm::vec3(-0.5f), glm::vec3(1.0f), colour);
+			basic->setUniformMat4("modelMatrix", glm::mat4(1.0f));
+		};
+
+		if (instance.roamSize.x > 0.0f || instance.roamSize.y > 0.0f || instance.roamSize.z > 0.0f)
+		{
+			const glm::vec4 colour = instance.kind == Ty1Kind::Water ? waterColour : critterColour;
+			drawBox(instance.position, instance.rotation.y, instance.rotation.x, instance.rotation.z, instance.roamSize, colour);
+		}
+		if (instance.hasBox)
+			drawBox(instance.boxPosition, instance.boxYaw, instance.boxPitch, 0.0f, instance.boxSize, triggerColour);
+		if (instance.hasSphere && instance.sphereRadius > 0.0f)
+		{
+			glm::vec4 colour = triggerColour;
+			if (instance.soundSphere)
+				colour = soundColour;
+			else if (instance.rangeSphere)
+				colour = rangeColour;
+			renderer.drawSphere(instance.spherePosition, instance.sphereRadius, colour);
+		}
+		if (!instance.waypoints.empty())
+		{
+			std::vector<glm::vec3> path;
+			if (!instance.closePath)
+				path.push_back(instance.position);
+			path.insert(path.end(), instance.waypoints.begin(), instance.waypoints.end());
+			if (instance.closePath && path.size() >= 2)
+				path.push_back(path.front());
+			renderer.drawLineStrip(path, patrolColour);
+			if (instance.pathWidth > 0.0f && path.size() >= 2)
+			{
+				std::vector<glm::vec3> left;
+				std::vector<glm::vec3> right;
+				const float half = instance.pathWidth * 0.5f;
+				for (size_t i = 0; i + 1 < path.size(); i++)
+				{
+					glm::vec3 dir = path[i + 1] - path[i];
+					dir.y = 0.0f;
+					if (glm::length(dir) < 0.001f)
+						continue;
+					dir = glm::normalize(dir);
+					const glm::vec3 side = glm::normalize(glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), dir)) * half;
+					if (left.empty())
+					{
+						left.push_back(path[i] + side);
+						right.push_back(path[i] - side);
+					}
+					left.push_back(path[i + 1] + side);
+					right.push_back(path[i + 1] - side);
+				}
+				renderer.drawLineStrip(left, patrolColour);
+				renderer.drawLineStrip(right, patrolColour);
+			}
 		}
 	}
 

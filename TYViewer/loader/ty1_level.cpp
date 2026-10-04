@@ -231,6 +231,12 @@ namespace
 						continue;
 					if (!descr.empty() && descr[0] == '[')
 						continue;
+					// "BridgeFlat1 prop_0111_bridge_flat_01, instance"
+					const size_t comma = model.find(',');
+					if (comma != std::string::npos)
+						model = model.substr(0, comma);
+					if (model.empty())
+						continue;
 					catalog[upperCopy(descr)] = model;
 				}
 			}
@@ -283,6 +289,17 @@ namespace
 		if (cut != std::string::npos)
 			value = value.substr(0, cut);
 		return value == "0" || value == "false" || value == "no";
+	}
+
+	bool readFloat(const std::string& text, float& out)
+	{
+		std::istringstream stream(text);
+		return static_cast<bool>(stream >> out);
+	}
+
+	bool isStackType(const std::string& key)
+	{
+		return key == "CRATE" || key == "B3CRATE" || key == "INVISICRATE";
 	}
 }
 
@@ -363,13 +380,45 @@ std::vector<Ty1Instance> parseTy1Instances(
 	bool hasRot = false;
 	bool hasScale = false;
 	bool hasVisible = false;
+	bool triggerSphere = false;
+	bool soundSphere = false;
+	bool spherePosSet = false;
+	float pendingRange = 0.0f;
+	enum class Nest { None, Box, Sphere, Sound, Waypoints };
+	Nest nest = Nest::None;
 
 	auto flush = [&]()
 	{
 		if (open && hasPos && !setup)
 		{
+			const std::string key = descriptorKey(type);
+			if (pendingRange > 0.0f && !triggerSphere && !soundSphere)
+			{
+				current.hasSphere = true;
+				current.rangeSphere = true;
+				current.spherePosition = current.position;
+				current.sphereRadius = pendingRange;
+			}
+			if (current.hasSphere && !spherePosSet)
+				current.spherePosition = current.position;
+			if (isStackType(key))
+				current.waypoints.clear();
+
 			current.typeName = type;
 			current.modelFile = modelForType(type);
+			current.closePath = key == "PATH";
+			if (key == "WATERVOLUME")
+				current.kind = Ty1Kind::Water;
+			else if (current.hasBox || triggerSphere)
+				current.kind = Ty1Kind::Trigger;
+			else if (soundSphere)
+				current.kind = Ty1Kind::Sound;
+			else if (current.critter)
+				current.kind = Ty1Kind::Critter;
+			else if (!current.waypoints.empty())
+				current.kind = Ty1Kind::Patrol;
+			else
+				current.kind = Ty1Kind::Prop;
 			instances.push_back(current);
 		}
 		open = false;
@@ -377,6 +426,11 @@ std::vector<Ty1Instance> parseTy1Instances(
 		hasRot = false;
 		hasScale = false;
 		hasVisible = false;
+		triggerSphere = false;
+		soundSphere = false;
+		spherePosSet = false;
+		pendingRange = 0.0f;
+		nest = Nest::None;
 		current = {};
 	};
 
@@ -384,7 +438,11 @@ std::vector<Ty1Instance> parseTy1Instances(
 	std::string line;
 	while (std::getline(stream, line))
 	{
-		const std::string value = trimCopy(stripComment(line));
+		std::string raw = stripComment(line);
+		if (!raw.empty() && raw.back() == '\r')
+			raw.pop_back();
+		const bool indented = !raw.empty() && std::isspace(static_cast<unsigned char>(raw[0]));
+		const std::string value = trimCopy(raw);
 		if (value.size() >= 5 && lowerCopy(value.substr(0, 5)) == "name ")
 		{
 			flush();
@@ -413,7 +471,73 @@ std::vector<Ty1Instance> parseTy1Instances(
 			current.visible = true;
 		}
 
-		if (key == "pos" && !hasPos)
+		if (indented)
+		{
+			if (nest == Nest::Box)
+			{
+				if (key == "pos")
+					readVec3(rhs, current.boxPosition);
+				else if (key == "yaw")
+					readFloat(rhs, current.boxYaw);
+				else if (key == "pitch")
+					readFloat(rhs, current.boxPitch);
+				else if (key == "width")
+					readFloat(rhs, current.boxSize.x);
+				else if (key == "height")
+					readFloat(rhs, current.boxSize.y);
+				else if (key == "depth")
+					readFloat(rhs, current.boxSize.z);
+			}
+			else if (nest == Nest::Sphere || nest == Nest::Sound)
+			{
+				if (key == "pos")
+					spherePosSet = readVec3(rhs, current.spherePosition);
+				else if (key == "radius")
+					readFloat(rhs, current.sphereRadius);
+			}
+			else if (nest == Nest::Waypoints && key == "waypoint" && !isStackType(descriptorKey(type)))
+			{
+				glm::vec3 point(0.0f);
+				if (readVec3(rhs, point))
+					current.waypoints.push_back(point);
+			}
+			continue;
+		}
+
+		nest = Nest::None;
+		if (key == "box")
+		{
+			nest = Nest::Box;
+			current.hasBox = true;
+		}
+		else if (key == "sphere")
+		{
+			nest = Nest::Sphere;
+			current.hasSphere = true;
+			triggerSphere = true;
+		}
+		else if (key == "dummysphere")
+		{
+			nest = Nest::Sound;
+			current.hasSphere = true;
+			current.soundSphere = true;
+			soundSphere = true;
+		}
+		else if (key == "waypoints")
+		{
+			nest = Nest::Waypoints;
+		}
+		else if ((key == "range" || key == "radius") && pendingRange <= 0.0f)
+		{
+			readFloat(rhs, pendingRange);
+		}
+		else if (key == "pathwidth")
+		{
+			float width = 0.0f;
+			if (readFloat(rhs, width) && width > 0.0f)
+				current.pathWidth = width;
+		}
+		else if (key == "pos" && !hasPos)
 		{
 			hasPos = readVec3(rhs, current.position);
 		}
@@ -423,15 +547,24 @@ std::vector<Ty1Instance> parseTy1Instances(
 		}
 		else if (key == "scale" && !hasScale)
 		{
-			glm::vec3 value(1.0f);
-			if (!readVec3(rhs, value))
+			glm::vec3 parsed(1.0f);
+			if (!readVec3(rhs, parsed))
 				continue;
 			hasScale = true;
 			// Placed props stay near 1 (rocks reach about 17). A larger scale is the
-			// box a flock roams in, not the size of one animal.
-			const float largest = std::max(std::abs(value.x), std::max(std::abs(value.y), std::abs(value.z)));
+			// box a flock roams in, or the size of a water volume.
+			const float largest = std::max(std::abs(parsed.x), std::max(std::abs(parsed.y), std::abs(parsed.z)));
+			const glm::vec3 full(std::abs(parsed.x), std::abs(parsed.y), std::abs(parsed.z));
+			const std::string typeKey = descriptorKey(type);
 			if (largest <= 64.0f)
-				current.scale = value;
+				current.scale = parsed;
+			else if (typeKey == "WATERVOLUME")
+				current.roamSize = full;
+			else if (!isLogicOnly(typeKey))
+			{
+				current.critter = true;
+				current.roamSize = full;
+			}
 		}
 		else if (key == "bvisible" && !hasVisible)
 		{
