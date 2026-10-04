@@ -186,6 +186,7 @@
     <ClCompile Include="export\raw_exporter.cpp" />
     <ClCompile Include="gui\gui.cpp" />
     <ClCompile Include="loader\archive.cpp" />
+    <ClCompile Include="loader\ty1_level.cpp" />
     <ClCompile Include="config.cpp" />
     <ClCompile Include="grid.cpp" />
     <ClCompile Include="loader\assets\mdg.cpp" />
@@ -213,6 +214,7 @@
     <ClInclude Include="export\raw_exporter.h" />
     <ClInclude Include="gui\gui.h" />
     <ClInclude Include="loader\archive.h" />
+    <ClInclude Include="loader\ty1_level.h" />
     <ClInclude Include="grid.h" />
     <ClInclude Include="loader\assets\mdg.h" />
     <ClInclude Include="loader\assets\mdl2.h" />

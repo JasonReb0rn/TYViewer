@@ -72,6 +72,9 @@
     <ClCompile Include="loader\archive.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="loader\ty1_level.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="loader\assets\mdg.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -99,6 +102,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="assets\MDG3.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="loader\ty1_level.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="graphics\vertex.h">

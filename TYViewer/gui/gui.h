@@ -34,6 +34,13 @@ struct ModelEntry
 	EntryKind kind = EntryKind::Model;
 };
 
+struct LevelObjectItem
+{
+	std::string typeName;
+	std::string modelFile;
+	bool visible = true;
+};
+
 class Gui
 {
 public:
@@ -78,6 +85,9 @@ public:
 	void clearCurrentModel();
 	// Level view: one row per mesh across every loaded room model.
 	void setLevelModels(const std::vector<class Model*>& models, const std::string& name);
+	// Placed objects for the current level. Separate from the room-mesh list.
+	void setLevelObjects(const std::vector<LevelObjectItem>& objects);
+	void setOnLevelObjectToggled(std::function<void(int index, bool visible)> callback);
 	// Level (or other multi-mesh) view: names the button without enabling model export.
 	// canRecenter turns the recenter button on when room meshes are in the scene.
 	void setSceneLabel(const std::string& name, bool canRecenter);
@@ -92,10 +102,12 @@ public:
 	bool isInteracting() const
 	{
 		return dropdownOpen || hovering || activeSearchCategory >= 0 || materialSearchActive
-			|| materialListRect.contains(mouseX, mouseY);
+			|| objectSearchActive
+			|| materialListRect.contains(mouseX, mouseY)
+			|| (!levelObjectItems.empty() && objectListRect.contains(mouseX, mouseY));
 	}
 	// True when the GUI expects typed characters (e.g., search box focused)
-	bool isTextInputActive() const { return activeSearchCategory >= 0 || materialSearchActive; }
+	bool isTextInputActive() const { return activeSearchCategory >= 0 || materialSearchActive || objectSearchActive; }
 
 private:
 	// ---------------------------------------------------------------------
@@ -135,12 +147,18 @@ private:
 	void renderScrollbar();
 	void renderModelInfo();
 	void renderMaterialList();
+	void renderObjectList();
 	bool hasMaterialPanel() const;
 	int materialMeshCount() const;
 	class Mesh* materialMeshAt(int flatIndex);
 	void rebuildMaterialFilter();
 	void layoutMaterialList();
 	GuiRect materialSearchRect() const;
+	void clearObjectList();
+	void rebuildObjectFilter();
+	void layoutObjectList();
+	GuiRect objectSearchRect() const;
+	void setObjectVisible(int index, bool visible);
 
 	// Search/filtering helpers (submenu)
 	void markFilterDirty(int category);
@@ -170,6 +188,7 @@ private:
 	GuiRect submenuSearchRect;
 	GuiRect modelInfoRect;
 	GuiRect materialListRect;
+	GuiRect objectListRect;
 	
 	static constexpr int kCategoryCount = 4;
 
@@ -200,6 +219,16 @@ private:
 	float materialListScroll;
 	float maxMaterialListScroll;
 	int hoveredMaterialItem;
+
+	std::vector<LevelObjectItem> levelObjectItems;
+	std::string objectSearch;
+	bool objectSearchActive = false;
+	bool objectFilterDirty = true;
+	std::vector<int> objectFiltered;
+	float objectListScroll = 0.0f;
+	float maxObjectListScroll = 0.0f;
+	int hoveredObjectItem = -1;
+	std::function<void(int index, bool visible)> onLevelObjectToggled;
 	
 	bool dropdownOpen;
 	bool hovering;

@@ -3,11 +3,13 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <unordered_set>
 #include <vector>
 #include <filesystem>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/common.hpp>
 
 #include "export/obj_exporter.h"
 #include "export/raw_exporter.h"
@@ -401,8 +403,12 @@ void Application::initialize()
 		exportCurrentModelRaw();
 	});
 	gui->setOnRecenterCamera([this]() {
-		if (!models.empty())
+		if (!models.empty() || !levelObjects.empty())
 			frameCameraOnLoadedModels();
+	});
+	gui->setOnLevelObjectToggled([this](int index, bool visible) {
+		if (index >= 0 && index < static_cast<int>(levelObjects.size()))
+			levelObjects[static_cast<size_t>(index)].visible = visible;
 	});
 	gui->setOnCollisionToggle([this]() {
 		setCollisionMeshesVisible(!collisionMeshesVisible);
@@ -768,7 +774,36 @@ void Application::loadTy1Level(const std::string& levelName)
 		Debug::log("Loaded level room mesh: " + roomName);
 	}
 
-	if (models.empty())
+	std::string globalModelText;
+	std::vector<char> globalModel;
+	if (content.getActiveFileData("global.model", globalModel) && !globalModel.empty())
+		globalModelText.assign(globalModel.begin(), globalModel.end());
+	else
+		Debug::log("global.model missing; prop catalogs will be skipped");
+
+	levelObjects = parseTy1Instances(text, globalModelText, content.getModelList(0));
+	propModels.clear();
+	std::unordered_set<Model*> seenProps;
+	size_t propsWithMesh = 0;
+	for (Ty1Instance& instance : levelObjects)
+	{
+		if (instance.modelFile.empty())
+			continue;
+		Model* loaded = content.load<Model>(instance.modelFile);
+		instance.model = loaded;
+		if (loaded == nullptr)
+		{
+			Debug::log("Prop model missing: " + instance.modelFile + " (" + instance.typeName + ")");
+			continue;
+		}
+		propsWithMesh++;
+		if (seenProps.insert(loaded).second)
+			propModels.push_back(loaded);
+	}
+	Debug::log("TY1 level " + levelName + " objects: " + std::to_string(levelObjects.size())
+		+ " with mesh: " + std::to_string(propsWithMesh));
+
+	if (models.empty() && levelObjects.empty())
 	{
 		Debug::log("No room meshes in " + levelName);
 		if (gui)
@@ -786,7 +821,20 @@ void Application::loadTy1Level(const std::string& levelName)
 	if (gui)
 	{
 		gui->setLevelModels(models, levelName);
-		gui->showNotification("Loaded " + std::to_string(models.size()) + " room meshes", Gui::NotificationKind::Success, 3.0f);
+		std::vector<LevelObjectItem> items;
+		items.reserve(levelObjects.size());
+		for (const Ty1Instance& instance : levelObjects)
+		{
+			LevelObjectItem item;
+			item.typeName = instance.typeName;
+			item.modelFile = instance.modelFile;
+			item.visible = instance.visible;
+			items.push_back(item);
+		}
+		gui->setLevelObjects(items);
+		gui->showNotification(
+			"Loaded " + std::to_string(models.size()) + " room meshes, " + std::to_string(propsWithMesh) + " props",
+			Gui::NotificationKind::Success, 3.0f);
 	}
 }
 
@@ -993,6 +1041,25 @@ void Application::frameCameraOnModels(const std::vector<const Model*>& list, boo
 				}
 			}
 		}
+		if (!levelFraming)
+			return;
+		for (const Ty1Instance& instance : levelObjects)
+		{
+			if (!instance.visible || instance.model == nullptr)
+				continue;
+			const glm::mat4 world = ty1InstanceMatrix(instance);
+			for (const Mesh* mesh : instance.model->getMeshes())
+			{
+				if (!includeMesh(mesh, pass))
+					continue;
+				for (const Vertex& vertex : mesh->getVertices())
+				{
+					const glm::vec3 point(world * glm::vec4(glm::vec3(vertex.position), 1.0f));
+					sum += glm::dvec3(point);
+					++count;
+				}
+			}
+		}
 	};
 
 	int pass = levelFraming ? 0 : 2;
@@ -1037,6 +1104,29 @@ void Application::frameCameraOnModels(const std::vector<const Model*>& list, boo
 				if (inFrame)
 					radius = std::max(radius, distance);
 				sceneRadius = std::max(sceneRadius, distance);
+			}
+		}
+	}
+	if (levelFraming)
+	{
+		for (const Ty1Instance& instance : levelObjects)
+		{
+			if (!instance.visible || instance.model == nullptr)
+				continue;
+			const glm::mat4 world = ty1InstanceMatrix(instance);
+			for (const Mesh* mesh : instance.model->getMeshes())
+			{
+				if (mesh == nullptr)
+					continue;
+				const bool inFrame = includeMesh(mesh, pass);
+				for (const Vertex& vertex : mesh->getVertices())
+				{
+					const glm::vec3 point(world * glm::vec4(glm::vec3(vertex.position), 1.0f));
+					const float distance = glm::length(point - center);
+					if (inFrame)
+						radius = std::max(radius, distance);
+					sceneRadius = std::max(sceneRadius, distance);
+				}
 			}
 		}
 	}
@@ -1093,10 +1183,10 @@ void Application::frameCameraOnModels(const std::vector<const Model*>& list, boo
 void Application::setCollisionMeshesVisible(bool visible)
 {
 	bool any = false;
-	for (Model* model : models)
+	auto visit = [&](Model* model)
 	{
 		if (model == nullptr)
-			continue;
+			return;
 		for (Mesh* mesh : model->getMeshes())
 		{
 			if (isCollisionMesh(mesh, content))
@@ -1105,7 +1195,11 @@ void Application::setCollisionMeshesVisible(bool visible)
 				mesh->setEnabled(visible);
 			}
 		}
-	}
+	};
+	for (Model* model : models)
+		visit(model);
+	for (Model* model : propModels)
+		visit(model);
 	collisionMeshesVisible = any ? visible : true;
 	refreshCollisionToggle();
 }
@@ -1113,10 +1207,10 @@ void Application::setCollisionMeshesVisible(bool visible)
 void Application::refreshCollisionToggle()
 {
 	bool any = false;
-	for (const Model* model : models)
+	auto visit = [&](const Model* model)
 	{
-		if (model == nullptr)
-			continue;
+		if (model == nullptr || any)
+			return;
 		for (const Mesh* mesh : model->getMeshes())
 		{
 			if (isCollisionMesh(mesh, content))
@@ -1125,9 +1219,11 @@ void Application::refreshCollisionToggle()
 				break;
 			}
 		}
-		if (any)
-			break;
-	}
+	};
+	for (const Model* model : models)
+		visit(model);
+	for (const Model* model : propModels)
+		visit(model);
 
 	if (gui)
 		gui->setCollisionToggle(any, any && collisionMeshesVisible);
@@ -1136,6 +1232,8 @@ void Application::refreshCollisionToggle()
 void Application::clearModels()
 {
 	models.clear();
+	levelObjects.clear();
+	propModels.clear();
 	// Note: Models are managed by the Content system, so we don't delete them here
 	
 	// Clear GUI model info
@@ -1353,8 +1451,18 @@ void Application::render(Shader& shader)
 	// file order writes depth and hides the cliff that is stored in a later room.
 	for (auto& model : models)
 		model->drawMeshes(shader, false);
+	for (const Ty1Instance& instance : levelObjects)
+	{
+		if (instance.visible && instance.model != nullptr)
+			instance.model->drawMeshes(shader, false, ty1InstanceMatrix(instance));
+	}
 	for (auto& model : models)
 		model->drawMeshes(shader, true);
+	for (const Ty1Instance& instance : levelObjects)
+	{
+		if (instance.visible && instance.model != nullptr)
+			instance.model->drawMeshes(shader, true, ty1InstanceMatrix(instance));
+	}
 
 	glBlendEquation(GL_FUNC_ADD);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1407,6 +1515,31 @@ void Application::render(Shader& shader)
 			{
 				renderer.drawSphere(bone.defaultPosition, 2.0f, glm::vec4(1, 1, 1, 1));
 			}
+		}
+	}
+
+	if (drawBounds)
+	{
+		for (const Ty1Instance& instance : levelObjects)
+		{
+			if (!instance.visible || instance.model == nullptr)
+				continue;
+			const glm::mat4 world = ty1InstanceMatrix(instance);
+			const glm::vec3 corner = instance.model->bounds_crn;
+			const glm::vec3 size = instance.model->bounds_size;
+			glm::vec3 minCorner(std::numeric_limits<float>::max());
+			glm::vec3 maxCorner(-std::numeric_limits<float>::max());
+			for (int cornerIndex = 0; cornerIndex < 8; cornerIndex++)
+			{
+				const glm::vec3 local(
+					corner.x + ((cornerIndex & 1) ? size.x : 0.0f),
+					corner.y + ((cornerIndex & 2) ? size.y : 0.0f),
+					corner.z + ((cornerIndex & 4) ? size.z : 0.0f));
+				const glm::vec3 point(world * glm::vec4(local, 1.0f));
+				minCorner = glm::min(minCorner, point);
+				maxCorner = glm::max(maxCorner, point);
+			}
+			renderer.drawHollowBox(minCorner, maxCorner - minCorner, glm::vec4(1, 1, 1, 1));
 		}
 	}
 

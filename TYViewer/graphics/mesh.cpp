@@ -82,6 +82,11 @@ void Mesh::setup()
 
 void Mesh::draw(Shader& shader) const
 {
+	draw(shader, glm::mat4(1.0f));
+}
+
+void Mesh::draw(Shader& shader, const glm::mat4& world) const
+{
 	// Disabled mesh parts should be fully hidden (skip draw call).
 	if (!m_enabled)
 	{
@@ -117,7 +122,7 @@ void Mesh::draw(Shader& shader) const
 	
 	m_texture->bind();
 
-	shader.setUniformMat4("modelMatrix", getMatrix());
+	shader.setUniformMat4("modelMatrix", world * getMatrix());
 
 	glBindVertexArray(vao);
 

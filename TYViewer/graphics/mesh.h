@@ -33,6 +33,8 @@ public:
 	~Mesh();
 
 	virtual void draw(Shader& shader) const override;
+	// `world` is the placed instance. Room meshes pass identity.
+	void draw(Shader& shader, const glm::mat4& world) const;
 
 	// Raw vertex access (debug/overlay). Order matches parsed file order.
 	const std::vector<Vertex>& getVertices() const { return m_vertices; }

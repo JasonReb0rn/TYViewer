@@ -1,5 +1,7 @@
 #include "Model.h"
 
+#include <glm/gtc/matrix_transform.hpp>
+
 Model::Model(const std::vector<Mesh*>& meshes) :
 	meshes(meshes)
 {}
@@ -20,11 +22,16 @@ void Model::draw(Shader& shader) const
 
 void Model::drawMeshes(Shader& shader, bool transparentPass) const
 {
+	drawMeshes(shader, transparentPass, glm::mat4(1.0f));
+}
+
+void Model::drawMeshes(Shader& shader, bool transparentPass, const glm::mat4& world) const
+{
 	for (auto& mesh : meshes)
 	{
 		if (mesh->isTransparent() != transparentPass)
 			continue;
-		mesh->draw(shader);
+		mesh->draw(shader, world);
 	}
 }
 

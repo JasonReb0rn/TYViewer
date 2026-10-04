@@ -23,6 +23,7 @@
 
 #include "config.h"
 #include "gui/gui.h"
+#include "loader/ty1_level.h"
 
 class Application
 {
@@ -84,6 +85,9 @@ private:
 	Grid* grid;
 
 	std::vector<Model*> models;
+	std::vector<Ty1Instance> levelObjects;
+	// Unique prop models. Not drawn at the origin; instances reference them.
+	std::vector<Model*> propModels;
 	std::vector<Text*> labels;
 	Mesh* mesh;
 	

@@ -1,0 +1,444 @@
+#include "ty1_level.h"
+
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cctype>
+#include <cstring>
+#include <sstream>
+#include <unordered_map>
+#include <utility>
+#include <unordered_set>
+
+namespace
+{
+	std::string trimCopy(const std::string& value)
+	{
+		size_t start = 0;
+		while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start])))
+			start++;
+		size_t end = value.size();
+		while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1])))
+			end--;
+		return value.substr(start, end - start);
+	}
+
+	std::string lowerCopy(std::string value)
+	{
+		std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c)
+		{
+			return static_cast<char>(std::tolower(c));
+		});
+		return value;
+	}
+
+	std::string upperCopy(std::string value)
+	{
+		std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c)
+		{
+			return static_cast<char>(std::toupper(c));
+		});
+		return value;
+	}
+
+	std::string stripComment(const std::string& line)
+	{
+		const size_t comment = line.find("//");
+		std::string value = (comment == std::string::npos) ? line : line.substr(0, comment);
+		if (!value.empty() && value.back() == '\r')
+			value.pop_back();
+		return value;
+	}
+
+	std::string lettersOnly(const std::string& value)
+	{
+		std::string out;
+		out.reserve(value.size());
+		for (unsigned char c : value)
+		{
+			if (std::isalnum(c))
+				out.push_back(static_cast<char>(std::tolower(c)));
+		}
+		return out;
+	}
+
+	// The game drops a leading "static" before it looks up the descriptor.
+	std::string descriptorKey(const std::string& typeName)
+	{
+		std::string key = upperCopy(trimCopy(typeName));
+		if (key.size() > 6 && key.compare(0, 6, "STATIC") == 0)
+			key = key.substr(6);
+		return key;
+	}
+
+	bool startsWith(const std::string& value, const char* prefix)
+	{
+		const size_t n = std::strlen(prefix);
+		return value.size() >= n && value.compare(0, n, prefix) == 0;
+	}
+
+	// prop_0001_name / act_07_name / act1_11_name / item_01_name -> the name.
+	std::string assetSuffix(const std::string& stem)
+	{
+		std::string lower = lowerCopy(stem);
+		const char* prefixes[] = { "prop_", "act1_", "act_", "itemanim_", "item_" };
+		for (const char* prefix : prefixes)
+		{
+			if (!startsWith(lower, prefix))
+				continue;
+			size_t i = std::strlen(prefix);
+			if (i >= lower.size() || !std::isdigit(static_cast<unsigned char>(lower[i])))
+				continue;
+			while (i < lower.size() && std::isdigit(static_cast<unsigned char>(lower[i])))
+				i++;
+			if (i >= lower.size() || lower[i] != '_')
+				continue;
+			return lower.substr(i + 1);
+		}
+		return {};
+	}
+
+	bool isLodFile(const std::string& filename)
+	{
+		return lowerCopy(filename).find("lod") != std::string::npos;
+	}
+
+	bool isPrefixedAsset(const std::string& filename)
+	{
+		const std::string lower = lowerCopy(filename);
+		return startsWith(lower, "prop") || startsWith(lower, "act") || startsWith(lower, "item");
+	}
+
+	std::string pickModelFile(const std::vector<std::string>& files)
+	{
+		std::vector<std::string> pool;
+		pool.reserve(files.size());
+		for (const std::string& file : files)
+		{
+			if (std::find(pool.begin(), pool.end(), file) == pool.end())
+				pool.push_back(file);
+		}
+
+		std::vector<std::string> noLod;
+		for (const std::string& file : pool)
+		{
+			if (!isLodFile(file))
+				noLod.push_back(file);
+		}
+		if (!noLod.empty())
+			pool = std::move(noLod);
+
+		std::vector<std::string> prefixed;
+		for (const std::string& file : pool)
+		{
+			if (isPrefixedAsset(file))
+				prefixed.push_back(file);
+		}
+		if (prefixed.size() == 1)
+			return prefixed[0];
+		if (prefixed.size() > 1)
+			return {};
+		if (pool.size() == 1)
+			return pool[0];
+		return {};
+	}
+
+	// Gameplay markers. They stay in the object list and are not drawn.
+	bool isLogicOnly(const std::string& key)
+	{
+		static const char* kNames[] =
+		{
+			"TY", "DIALOG", "TRIGGERBOX", "TRIGGERSPHERE", "SOUNDPROP",
+			"SCRIPT", "PATH", "WATERVOLUME", "RESTART",
+		};
+		for (const char* name : kNames)
+		{
+			if (key == name)
+				return true;
+		}
+		return key.size() >= 6 && key.compare(0, 6, "CAMERA") == 0;
+	}
+
+	// Names the catalog does not list. These are the descriptor strings the game
+	// registers in code, plus a few props whose model stem is not the type name.
+	const char* extraModel(const std::string& key)
+	{
+		struct Pair
+		{
+			const char* type;
+			const char* model;
+		};
+		static const Pair kExtra[] =
+		{
+			{ "OPAL", "Prop_0270_FireOpal" },
+			{ "TASIGNPOST", "Prop_0393_SignPost" },
+			{ "DIRECTIONARROW", "prop_0124_arrow_01" },
+			{ "DIRECTIONARROW2", "prop_0400_arrow02" },
+			{ "CONSTRUCTIONSIGN", "prop_0080_construct_sign" },
+			{ "PICTUREFRAME", "Prop_0590_PickupFrame" },
+			{ "TORCH1", "prop_0011_torch" },
+			{ "CRATE", "Prop_0001_WoodenCrate_01" },
+			{ "B3CRATE", "Prop_0001_WoodenCrate_01_B3" },
+			{ "INVISICRATE", "Prop_0345_InvisibleCrate" },
+			{ "FRILLLIZARD", "Act_07_Frill" },
+			{ "FROG", "Act_34_Frog" },
+			{ "WHIRLYWIND", "prop_0340_Whirlwind" },
+			{ "REED1", "prop_0006_Reed_01" },
+			{ "REED2", "Prop_0007_Reed_02" },
+			{ "REED3", "prop_0008_Reed_03" },
+			{ "SNOWROO", "Act_41_snowroos" },
+			{ "WATERWHEEL", "prop_0388_Z1WaterWheel" },
+			{ "ELEVATOR1", "Prop_0108_Elevator" },
+			{ "FINISHLINE", "Prop_0088_FinishLine" },
+			{ "TIMEATTACKRING", "Prop_0413_TimeAttackRing" },
+		};
+		for (const Pair& pair : kExtra)
+		{
+			if (key == pair.type)
+				return pair.model;
+		}
+		return nullptr;
+	}
+
+	std::unordered_map<std::string, std::string> catalogFromGlobalModel(const std::string& text)
+	{
+		std::unordered_map<std::string, std::string> catalog;
+		std::vector<std::string> body;
+		bool inSection = false;
+
+		auto flush = [&]()
+		{
+			if (!inSection)
+				return;
+			int equations = 0;
+			std::vector<std::string> bare;
+			for (const std::string& line : body)
+			{
+				if (line.find('=') != std::string::npos)
+					equations++;
+				else
+					bare.push_back(line);
+			}
+			if (!bare.empty() && equations == 0)
+			{
+				for (const std::string& line : bare)
+				{
+					std::istringstream stream(line);
+					std::string descr;
+					std::string model;
+					if (!(stream >> descr >> model))
+						continue;
+					if (!descr.empty() && descr[0] == '[')
+						continue;
+					catalog[upperCopy(descr)] = model;
+				}
+			}
+			inSection = false;
+			body.clear();
+		};
+
+		std::istringstream stream(text);
+		std::string line;
+		while (std::getline(stream, line))
+		{
+			std::string value = trimCopy(stripComment(line));
+			if (value.size() >= 5 && lowerCopy(value.substr(0, 5)) == "name ")
+			{
+				flush();
+				const std::string section = trimCopy(value.substr(5));
+				inSection = !section.empty();
+				body.clear();
+				continue;
+			}
+			if (inSection && !value.empty())
+				body.push_back(value);
+		}
+		flush();
+		return catalog;
+	}
+
+	bool readVec3(const std::string& text, glm::vec3& out)
+	{
+		std::string cleaned = text;
+		for (char& c : cleaned)
+		{
+			if (c == ',')
+				c = ' ';
+		}
+		std::istringstream stream(cleaned);
+		float x = 0.0f;
+		float y = 0.0f;
+		float z = 0.0f;
+		if (!(stream >> x >> y >> z))
+			return false;
+		out = glm::vec3(x, y, z);
+		return true;
+	}
+
+	bool isHiddenValue(std::string value)
+	{
+		value = lowerCopy(trimCopy(value));
+		const size_t cut = value.find_first_of(", \t");
+		if (cut != std::string::npos)
+			value = value.substr(0, cut);
+		return value == "0" || value == "false" || value == "no";
+	}
+}
+
+glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance)
+{
+	// Transpose of (scale * Rx * Ry * Rz) with translation in the last row.
+	glm::mat4 matrix(1.0f);
+	matrix = glm::translate(matrix, instance.position);
+	matrix = glm::rotate(matrix, -instance.rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
+	matrix = glm::rotate(matrix, -instance.rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
+	matrix = glm::rotate(matrix, -instance.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
+	matrix = glm::scale(matrix, instance.scale);
+	return matrix;
+}
+
+std::vector<Ty1Instance> parseTy1Instances(
+	const std::string& levelText,
+	const std::string& globalModelText,
+	const std::vector<std::string>& mdlFiles)
+{
+	const std::unordered_map<std::string, std::string> catalog = catalogFromGlobalModel(globalModelText);
+
+	std::unordered_map<std::string, std::string> canonical;
+	std::unordered_map<std::string, std::vector<std::string>> byLetters;
+	for (const std::string& file : mdlFiles)
+	{
+		canonical[lowerCopy(file)] = file;
+		const size_t dot = file.find_last_of('.');
+		const std::string stem = (dot == std::string::npos) ? file : file.substr(0, dot);
+		byLetters[lettersOnly(stem)].push_back(file);
+		const std::string suffix = assetSuffix(stem);
+		if (!suffix.empty())
+			byLetters[lettersOnly(suffix)].push_back(file);
+	}
+
+	auto canonicalFile = [&](const std::string& token) -> std::string
+	{
+		if (token.empty())
+			return {};
+		std::string file = token;
+		if (lowerCopy(file).size() < 4 || lowerCopy(file).compare(lowerCopy(file).size() - 4, 4, ".mdl") != 0)
+			file += ".mdl";
+		const auto it = canonical.find(lowerCopy(file));
+		if (it == canonical.end())
+			return {};
+		return it->second;
+	};
+
+	auto modelForType = [&](const std::string& typeName) -> std::string
+	{
+		const std::string key = descriptorKey(typeName);
+		if (key.empty() || isLogicOnly(key))
+			return {};
+
+		const auto catalogIt = catalog.find(key);
+		if (catalogIt != catalog.end())
+			return canonicalFile(catalogIt->second);
+
+		if (const char* extra = extraModel(key))
+		{
+			const std::string file = canonicalFile(extra);
+			if (!file.empty())
+				return file;
+		}
+
+		const auto stemIt = byLetters.find(lettersOnly(key));
+		if (stemIt == byLetters.end())
+			return {};
+		return pickModelFile(stemIt->second);
+	};
+
+	std::vector<Ty1Instance> instances;
+	std::string type;
+	bool setup = false;
+	Ty1Instance current;
+	bool open = false;
+	bool hasPos = false;
+	bool hasRot = false;
+	bool hasScale = false;
+	bool hasVisible = false;
+
+	auto flush = [&]()
+	{
+		if (open && hasPos && !setup)
+		{
+			current.typeName = type;
+			current.modelFile = modelForType(type);
+			instances.push_back(current);
+		}
+		open = false;
+		hasPos = false;
+		hasRot = false;
+		hasScale = false;
+		hasVisible = false;
+		current = {};
+	};
+
+	std::istringstream stream(levelText);
+	std::string line;
+	while (std::getline(stream, line))
+	{
+		const std::string value = trimCopy(stripComment(line));
+		if (value.size() >= 5 && lowerCopy(value.substr(0, 5)) == "name ")
+		{
+			flush();
+			type = trimCopy(value.substr(5));
+			setup = lowerCopy(type) == "setup";
+			continue;
+		}
+		if (value.empty())
+		{
+			flush();
+			continue;
+		}
+		if (setup || type.empty())
+			continue;
+
+		const size_t eq = value.find('=');
+		if (eq == std::string::npos)
+			continue;
+
+		const std::string key = lowerCopy(trimCopy(value.substr(0, eq)));
+		const std::string rhs = trimCopy(value.substr(eq + 1));
+		if (!open)
+		{
+			open = true;
+			current.scale = glm::vec3(1.0f);
+			current.visible = true;
+		}
+
+		if (key == "pos" && !hasPos)
+		{
+			hasPos = readVec3(rhs, current.position);
+		}
+		else if (key == "rot" && !hasRot)
+		{
+			hasRot = readVec3(rhs, current.rotation);
+		}
+		else if (key == "scale" && !hasScale)
+		{
+			glm::vec3 value(1.0f);
+			if (!readVec3(rhs, value))
+				continue;
+			hasScale = true;
+			// Placed props stay near 1 (rocks reach about 17). A larger scale is the
+			// box a flock roams in, not the size of one animal.
+			const float largest = std::max(std::abs(value.x), std::max(std::abs(value.y), std::abs(value.z)));
+			if (largest <= 64.0f)
+				current.scale = value;
+		}
+		else if (key == "bvisible" && !hasVisible)
+		{
+			hasVisible = true;
+			current.visible = !isHiddenValue(rhs);
+		}
+	}
+	flush();
+	return instances;
+}
