@@ -97,6 +97,10 @@ void Shader::setUniform1f(const std::string& name, float v)
 {
 	glUniform1f(getUniformLocation(name), v);
 }
+void Shader::setUniform2f(const std::string& name, glm::vec2 v)
+{
+	glUniform2f(getUniformLocation(name), v.x, v.y);
+}
 void Shader::setUniform4f(const std::string& name, glm::vec4 v)
 {
 	glUniform4f(getUniformLocation(name), v.x, v.y, v.z, v.w);
@@ -131,6 +135,7 @@ Shader* Shader::createDefault()
 
 		uniform mat4 VPMatrix;
 		uniform mat4 modelMatrix;
+		uniform vec2 clipOffset;
 
 		out vec4 v_colour;
 		out vec2 v_texcoord;
@@ -138,6 +143,7 @@ Shader* Shader::createDefault()
 		void main()
 		{
 			gl_Position = VPMatrix * modelMatrix * position;
+			gl_Position.xy += clipOffset * gl_Position.w;
 			v_colour = colour;
 			v_texcoord = texcoord;
 		}
@@ -152,16 +158,25 @@ Shader* Shader::createDefault()
 		uniform sampler2D diffuseTexture;
 		uniform vec4 tintColour;
 		uniform float alphaRef;
+		uniform int solidColour;
 
 		out vec4 color;
 
 		void main()
 		{
 			vec4 texColor = texture(diffuseTexture, v_texcoord);
-			color = texColor * v_colour * tintColour;
-			if (color.a < alphaRef)
+			vec4 shaded = texColor * v_colour * tintColour;
+			if (solidColour != 0)
 			{
-				discard;
+				if (texColor.a < alphaRef)
+					discard;
+				color = tintColour;
+			}
+			else
+			{
+				if (shaded.a < alphaRef)
+					discard;
+				color = shaded;
 			}
 		}
 	)";

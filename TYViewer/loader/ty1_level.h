@@ -22,7 +22,12 @@ struct Ty1Instance
 {
 	std::string typeName;
 	std::string modelFile;
+	// Second mesh at the same transform. Caged bilbies use this for the cage.
+	std::string extraModelFile;
+	// Character label from `type = N,name`, such as grandma.
+	std::string variantLabel;
 	class Model* model = nullptr;
+	class Model* extraModel = nullptr;
 	glm::vec3 position{ 0.0f, 0.0f, 0.0f };
 	// Pitch, yaw, roll in radians, as stored in the level.
 	glm::vec3 rotation{ 0.0f, 0.0f, 0.0f };

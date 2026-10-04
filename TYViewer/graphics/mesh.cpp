@@ -82,10 +82,10 @@ void Mesh::setup()
 
 void Mesh::draw(Shader& shader) const
 {
-	draw(shader, glm::mat4(1.0f));
+	draw(shader, glm::mat4(1.0f), MeshDrawStyle{});
 }
 
-void Mesh::draw(Shader& shader, const glm::mat4& world) const
+void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& style) const
 {
 	// Disabled mesh parts should be fully hidden (skip draw call).
 	if (!m_enabled)
@@ -95,29 +95,34 @@ void Mesh::draw(Shader& shader, const glm::mat4& world) const
 
 	shader.bind();
 
-	// Opaque keeps the default blend and writes depth. Transparent modes are
-	// drawn in a later pass and must not punch a hole through the world.
-	glBlendEquation(GL_FUNC_ADD);
-	glDepthMask(GL_TRUE);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-	if (m_blend == MeshBlend::Additive)
+	// A solid pass is the selection outline. The caller owns depth, stencil, and blend.
+	if (!style.solid)
 	{
-		glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-		glDepthMask(GL_FALSE);
-	}
-	else if (m_blend == MeshBlend::Subtractive)
-	{
-		glBlendEquation(GL_FUNC_REVERSE_SUBTRACT);
-		glBlendFunc(GL_ONE, GL_ONE);
-		glDepthMask(GL_FALSE);
-	}
-	else if (m_blend == MeshBlend::Alpha)
-	{
-		glDepthMask(GL_FALSE);
+		// Opaque keeps the default blend and writes depth. Transparent modes are
+		// drawn in a later pass and must not punch a hole through the world.
+		glBlendEquation(GL_FUNC_ADD);
+		glDepthMask(GL_TRUE);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		if (m_blend == MeshBlend::Additive)
+		{
+			glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+			glDepthMask(GL_FALSE);
+		}
+		else if (m_blend == MeshBlend::Subtractive)
+		{
+			glBlendEquation(GL_FUNC_REVERSE_SUBTRACT);
+			glBlendFunc(GL_ONE, GL_ONE);
+			glDepthMask(GL_FALSE);
+		}
+		else if (m_blend == MeshBlend::Alpha)
+		{
+			glDepthMask(GL_FALSE);
+		}
 	}
 
-	// Normal white tint (material/texture decides the look).
-	shader.setUniform4f("tintColour", glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+	shader.setUniform4f("tintColour", style.solid ? style.tint : glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+	shader.setUniform2f("clipOffset", style.solid ? style.clipOffset : glm::vec2(0.0f));
+	shader.setUniform1i("solidColour", style.solid ? 1 : 0);
 	shader.setUniform1f("alphaRef", m_alphaRef);
 	
 	m_texture->bind();

@@ -21,6 +21,14 @@ enum class MeshBlend
 	Subtractive
 };
 
+// solid skips the mesh's blend and depth setup so a stencil outline can own that state.
+struct MeshDrawStyle
+{
+	glm::vec4 tint{ 1.0f, 1.0f, 1.0f, 1.0f };
+	glm::vec2 clipOffset{ 0.0f, 0.0f };
+	bool solid = false;
+};
+
 class Mesh : public Drawable, public Transformable
 {
 public:
@@ -34,7 +42,7 @@ public:
 
 	virtual void draw(Shader& shader) const override;
 	// `world` is the placed instance. Room meshes pass identity.
-	void draw(Shader& shader, const glm::mat4& world) const;
+	void draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& style = {}) const;
 
 	// Raw vertex access (debug/overlay). Order matches parsed file order.
 	const std::vector<Vertex>& getVertices() const { return m_vertices; }

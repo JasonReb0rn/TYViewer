@@ -791,20 +791,27 @@ void Application::loadTy1Level(const std::string& levelName)
 	propModels.clear();
 	std::unordered_set<Model*> seenProps;
 	size_t propsWithMesh = 0;
-	for (Ty1Instance& instance : levelObjects)
+	auto takeProp = [&](const std::string& file, Model*& slot, const std::string& typeName)
 	{
-		if (instance.modelFile.empty())
-			continue;
-		Model* loaded = content.load<Model>(instance.modelFile);
-		instance.model = loaded;
+		if (file.empty())
+			return false;
+		Model* loaded = content.load<Model>(file);
+		slot = loaded;
 		if (loaded == nullptr)
 		{
-			Debug::log("Prop model missing: " + instance.modelFile + " (" + instance.typeName + ")");
-			continue;
+			Debug::log("Prop model missing: " + file + " (" + typeName + ")");
+			return false;
 		}
-		propsWithMesh++;
 		if (seenProps.insert(loaded).second)
 			propModels.push_back(loaded);
+		return true;
+	};
+	for (Ty1Instance& instance : levelObjects)
+	{
+		const bool gotModel = takeProp(instance.modelFile, instance.model, instance.typeName);
+		const bool gotExtra = takeProp(instance.extraModelFile, instance.extraModel, instance.typeName);
+		if (gotModel || gotExtra)
+			propsWithMesh++;
 	}
 	Debug::log("TY1 level " + levelName + " objects: " + std::to_string(levelObjects.size())
 		+ " with mesh: " + std::to_string(propsWithMesh));
@@ -834,6 +841,12 @@ void Application::loadTy1Level(const std::string& levelName)
 			LevelObjectItem item;
 			item.typeName = instance.typeName;
 			item.modelFile = instance.modelFile;
+			if (!instance.variantLabel.empty())
+			{
+				item.modelFile = instance.variantLabel;
+				if (!instance.modelFile.empty())
+					item.modelFile += "  " + instance.modelFile;
+			}
 			item.visible = instance.visible;
 			if (instance.kind == Ty1Kind::Critter)
 				item.kindLabel = "critter";
@@ -1023,6 +1036,15 @@ void Application::frameCameraOnLoadedModels()
 	frameCameraOnModels(list, viewingLevel);
 }
 
+template <typename Fn>
+static void eachPlacedModel(const Ty1Instance& instance, Fn&& visit)
+{
+	if (instance.model != nullptr)
+		visit(*instance.model);
+	if (instance.extraModel != nullptr)
+		visit(*instance.extraModel);
+}
+
 void Application::frameCameraOnModels(const std::vector<const Model*>& list, bool levelFraming)
 {
 	const float kDefaultFar = 30000.0f;
@@ -1063,20 +1085,23 @@ void Application::frameCameraOnModels(const std::vector<const Model*>& list, boo
 			return;
 		for (const Ty1Instance& instance : levelObjects)
 		{
-			if (!instance.visible || instance.model == nullptr)
+			if (!instance.visible || (instance.model == nullptr && instance.extraModel == nullptr))
 				continue;
 			const glm::mat4 world = ty1InstanceMatrix(instance);
-			for (const Mesh* mesh : instance.model->getMeshes())
+			eachPlacedModel(instance, [&](const Model& placed)
 			{
-				if (!includeMesh(mesh, pass))
-					continue;
-				for (const Vertex& vertex : mesh->getVertices())
+				for (const Mesh* mesh : placed.getMeshes())
 				{
-					const glm::vec3 point(world * glm::vec4(glm::vec3(vertex.position), 1.0f));
-					sum += glm::dvec3(point);
-					++count;
+					if (!includeMesh(mesh, pass))
+						continue;
+					for (const Vertex& vertex : mesh->getVertices())
+					{
+						const glm::vec3 point(world * glm::vec4(glm::vec3(vertex.position), 1.0f));
+						sum += glm::dvec3(point);
+						++count;
+					}
 				}
-			}
+			});
 		}
 	};
 
@@ -1129,23 +1154,26 @@ void Application::frameCameraOnModels(const std::vector<const Model*>& list, boo
 	{
 		for (const Ty1Instance& instance : levelObjects)
 		{
-			if (!instance.visible || instance.model == nullptr)
+			if (!instance.visible || (instance.model == nullptr && instance.extraModel == nullptr))
 				continue;
 			const glm::mat4 world = ty1InstanceMatrix(instance);
-			for (const Mesh* mesh : instance.model->getMeshes())
+			eachPlacedModel(instance, [&](const Model& placed)
 			{
-				if (mesh == nullptr)
-					continue;
-				const bool inFrame = includeMesh(mesh, pass);
-				for (const Vertex& vertex : mesh->getVertices())
+				for (const Mesh* mesh : placed.getMeshes())
 				{
-					const glm::vec3 point(world * glm::vec4(glm::vec3(vertex.position), 1.0f));
-					const float distance = glm::length(point - center);
-					if (inFrame)
-						radius = std::max(radius, distance);
-					sceneRadius = std::max(sceneRadius, distance);
+					if (mesh == nullptr)
+						continue;
+					const bool inFrame = includeMesh(mesh, pass);
+					for (const Vertex& vertex : mesh->getVertices())
+					{
+						const glm::vec3 point(world * glm::vec4(glm::vec3(vertex.position), 1.0f));
+						const float distance = glm::length(point - center);
+						if (inFrame)
+							radius = std::max(radius, distance);
+						sceneRadius = std::max(sceneRadius, distance);
+					}
 				}
-			}
+			});
 		}
 	}
 	if (radius < 0.05f)
@@ -1207,9 +1235,9 @@ void Application::frameCameraOnInstance(int index)
 	glm::dvec3 sum(0.0);
 	size_t count = 0;
 	const glm::mat4 world = ty1InstanceMatrix(instance);
-	if (instance.model != nullptr)
+	eachPlacedModel(instance, [&](const Model& placed)
 	{
-		for (const Mesh* mesh : instance.model->getMeshes())
+		for (const Mesh* mesh : placed.getMeshes())
 		{
 			if (mesh == nullptr)
 				continue;
@@ -1220,7 +1248,7 @@ void Application::frameCameraOnInstance(int index)
 				++count;
 			}
 		}
-	}
+	});
 
 	glm::vec3 center = instance.position;
 	float radius = 80.0f;
@@ -1228,16 +1256,19 @@ void Application::frameCameraOnInstance(int index)
 	{
 		center = glm::vec3(sum / static_cast<double>(count));
 		radius = 0.0f;
-		for (const Mesh* mesh : instance.model->getMeshes())
+		eachPlacedModel(instance, [&](const Model& placed)
 		{
-			if (mesh == nullptr)
-				continue;
-			for (const Vertex& vertex : mesh->getVertices())
+			for (const Mesh* mesh : placed.getMeshes())
 			{
-				const glm::vec3 point(world * glm::vec4(glm::vec3(vertex.position), 1.0f));
-				radius = std::max(radius, glm::length(point - center));
+				if (mesh == nullptr)
+					continue;
+				for (const Vertex& vertex : mesh->getVertices())
+				{
+					const glm::vec3 point(world * glm::vec4(glm::vec3(vertex.position), 1.0f));
+					radius = std::max(radius, glm::length(point - center));
+				}
 			}
-		}
+		});
 		if (radius < 0.05f)
 			radius = 0.05f;
 	}
@@ -1543,6 +1574,100 @@ void Application::update(float dt)
 	}
 }
 
+void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& instance)
+{
+	if (instance.model == nullptr && instance.extraModel == nullptr)
+		return;
+
+	const int width = static_cast<int>(Config::windowResolutionX);
+	const int height = static_cast<int>(Config::windowResolutionY);
+	if (width <= 0 || height <= 0)
+		return;
+
+	GLint polygonMode[2] = { GL_FILL, GL_FILL };
+	glGetIntegerv(GL_POLYGON_MODE, polygonMode);
+	GLint depthFunc = GL_LESS;
+	glGetIntegerv(GL_DEPTH_FUNC, &depthFunc);
+	const GLboolean depthTest = glIsEnabled(GL_DEPTH_TEST);
+	GLboolean depthMask = GL_TRUE;
+	glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
+
+	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+	glEnable(GL_DEPTH_TEST);
+	glEnable(GL_BLEND);
+	glBlendEquation(GL_FUNC_ADD);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glEnable(GL_STENCIL_TEST);
+	glStencilMask(0xFF);
+	glClear(GL_STENCIL_BUFFER_BIT);
+
+	// Equal depth marks the pixels the mesh already wrote. A closer wall stays empty.
+	glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+	glDepthMask(GL_FALSE);
+	glDepthFunc(GL_LEQUAL);
+	glStencilFunc(GL_ALWAYS, 1, 0xFF);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+
+	const glm::mat4 world = ty1InstanceMatrix(instance);
+	auto drawParts = [&](const MeshDrawStyle& style)
+	{
+		eachPlacedModel(instance, [&](Model& placed)
+		{
+			placed.drawMeshes(shader, false, world, style);
+			placed.drawMeshes(shader, true, world, style);
+		});
+	};
+
+	MeshDrawStyle mark;
+	mark.solid = true;
+	drawParts(mark);
+
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+	glDisable(GL_DEPTH_TEST);
+
+	// Two pixels is 4/size in NDC. Eight shifts fill the ring, including the diagonals.
+	const float ax = 4.0f / static_cast<float>(width);
+	const float ay = 4.0f / static_cast<float>(height);
+	const float dx = ax * 0.70710678f;
+	const float dy = ay * 0.70710678f;
+	const glm::vec2 ring[8] =
+	{
+		glm::vec2(ax, 0.0f), glm::vec2(-ax, 0.0f), glm::vec2(0.0f, ay), glm::vec2(0.0f, -ay),
+		glm::vec2(dx, dy), glm::vec2(dx, -dy), glm::vec2(-dx, dy), glm::vec2(-dx, -dy)
+	};
+
+	MeshDrawStyle rim;
+	rim.solid = true;
+	rim.tint = glm::vec4(1.0f, 0.5f, 0.05f, 1.0f);
+	for (const glm::vec2& offset : ring)
+	{
+		rim.clipOffset = offset;
+		drawParts(rim);
+	}
+
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	glDepthMask(GL_TRUE);
+	glDepthFunc(depthFunc);
+	glStencilMask(0xFF);
+	glStencilFunc(GL_ALWAYS, 0, 0xFF);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+	glDisable(GL_STENCIL_TEST);
+	if (depthTest)
+		glEnable(GL_DEPTH_TEST);
+	else
+		glDisable(GL_DEPTH_TEST);
+	glDepthMask(depthMask);
+	glPolygonMode(GL_FRONT, polygonMode[0]);
+	glPolygonMode(GL_BACK, polygonMode[1]);
+
+	shader.bind();
+	shader.setUniform2f("clipOffset", glm::vec2(0.0f));
+	shader.setUniform1i("solidColour", 0);
+	shader.setUniform4f("tintColour", glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+}
+
 void Application::render(Shader& shader)
 {
 	renderer.clear(glm::vec4(Config::backgroundR, Config::backgroundG, Config::backgroundB, 1.0f));
@@ -1572,16 +1697,29 @@ void Application::render(Shader& shader)
 		model->drawMeshes(shader, false);
 	for (const Ty1Instance& instance : levelObjects)
 	{
-		if (instance.visible && instance.model != nullptr)
-			instance.model->drawMeshes(shader, false, ty1InstanceMatrix(instance));
+		if (!instance.visible)
+			continue;
+		const glm::mat4 world = ty1InstanceMatrix(instance);
+		eachPlacedModel(instance, [&](Model& placed)
+		{
+			placed.drawMeshes(shader, false, world);
+		});
 	}
 	for (auto& model : models)
 		model->drawMeshes(shader, true);
 	for (const Ty1Instance& instance : levelObjects)
 	{
-		if (instance.visible && instance.model != nullptr)
-			instance.model->drawMeshes(shader, true, ty1InstanceMatrix(instance));
+		if (!instance.visible)
+			continue;
+		const glm::mat4 world = ty1InstanceMatrix(instance);
+		eachPlacedModel(instance, [&](Model& placed)
+		{
+			placed.drawMeshes(shader, true, world);
+		});
 	}
+
+	if (selectedLevelObject >= 0 && selectedLevelObject < static_cast<int>(levelObjects.size()))
+		drawSelectedObjectOutline(shader, levelObjects[static_cast<size_t>(selectedLevelObject)]);
 
 	glBlendEquation(GL_FUNC_ADD);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1590,6 +1728,8 @@ void Application::render(Shader& shader)
 	// Reset tint color to white after drawing models (avoid shader state leaking into debug draws).
 	shader.bind();
 	shader.setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
+	shader.setUniform2f("clipOffset", glm::vec2(0.0f));
+	shader.setUniform1i("solidColour", 0);
 	shader.setUniform1f("alphaRef", 0.01f);
 
 	for (auto& label : labels)
@@ -1641,24 +1781,27 @@ void Application::render(Shader& shader)
 	{
 		for (const Ty1Instance& instance : levelObjects)
 		{
-			if (!instance.visible || instance.model == nullptr)
+			if (!instance.visible)
 				continue;
 			const glm::mat4 world = ty1InstanceMatrix(instance);
-			const glm::vec3 corner = instance.model->bounds_crn;
-			const glm::vec3 size = instance.model->bounds_size;
-			glm::vec3 minCorner(std::numeric_limits<float>::max());
-			glm::vec3 maxCorner(-std::numeric_limits<float>::max());
-			for (int cornerIndex = 0; cornerIndex < 8; cornerIndex++)
+			eachPlacedModel(instance, [&](const Model& placed)
 			{
-				const glm::vec3 local(
-					corner.x + ((cornerIndex & 1) ? size.x : 0.0f),
-					corner.y + ((cornerIndex & 2) ? size.y : 0.0f),
-					corner.z + ((cornerIndex & 4) ? size.z : 0.0f));
-				const glm::vec3 point(world * glm::vec4(local, 1.0f));
-				minCorner = glm::min(minCorner, point);
-				maxCorner = glm::max(maxCorner, point);
-			}
-			renderer.drawHollowBox(minCorner, maxCorner - minCorner, glm::vec4(1, 1, 1, 1));
+				const glm::vec3 corner = placed.bounds_crn;
+				const glm::vec3 size = placed.bounds_size;
+				glm::vec3 minCorner(std::numeric_limits<float>::max());
+				glm::vec3 maxCorner(-std::numeric_limits<float>::max());
+				for (int cornerIndex = 0; cornerIndex < 8; cornerIndex++)
+				{
+					const glm::vec3 local(
+						corner.x + ((cornerIndex & 1) ? size.x : 0.0f),
+						corner.y + ((cornerIndex & 2) ? size.y : 0.0f),
+						corner.z + ((cornerIndex & 4) ? size.z : 0.0f));
+					const glm::vec3 point(world * glm::vec4(local, 1.0f));
+					minCorner = glm::min(minCorner, point);
+					maxCorner = glm::max(maxCorner, point);
+				}
+				renderer.drawHollowBox(minCorner, maxCorner - minCorner, glm::vec4(1, 1, 1, 1));
+			});
 		}
 	}
 
@@ -1736,6 +1879,9 @@ void Application::render(Shader& shader)
 				renderer.drawLineStrip(left, patrolColour);
 				renderer.drawLineStrip(right, patrolColour);
 			}
+			const size_t markerCount = (instance.closePath && path.size() >= 2) ? path.size() - 1 : path.size();
+			for (size_t pointIndex = 0; pointIndex < markerCount; pointIndex++)
+				renderer.drawSphere(path[pointIndex], 18.0f, patrolColour, 8);
 		}
 	}
 

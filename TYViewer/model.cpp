@@ -22,16 +22,16 @@ void Model::draw(Shader& shader) const
 
 void Model::drawMeshes(Shader& shader, bool transparentPass) const
 {
-	drawMeshes(shader, transparentPass, glm::mat4(1.0f));
+	drawMeshes(shader, transparentPass, glm::mat4(1.0f), MeshDrawStyle{});
 }
 
-void Model::drawMeshes(Shader& shader, bool transparentPass, const glm::mat4& world) const
+void Model::drawMeshes(Shader& shader, bool transparentPass, const glm::mat4& world, const MeshDrawStyle& style) const
 {
 	for (auto& mesh : meshes)
 	{
 		if (mesh->isTransparent() != transparentPass)
 			continue;
-		mesh->draw(shader, world);
+		mesh->draw(shader, world, style);
 	}
 }
 

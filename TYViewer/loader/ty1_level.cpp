@@ -149,7 +149,7 @@ namespace
 	{
 		static const char* kNames[] =
 		{
-			"TY", "DIALOG", "TRIGGERBOX", "TRIGGERSPHERE", "SOUNDPROP",
+			"DIALOG", "TRIGGERBOX", "TRIGGERSPHERE", "SOUNDPROP",
 			"SCRIPT", "PATH", "WATERVOLUME", "RESTART",
 		};
 		for (const char* name : kNames)
@@ -171,7 +171,10 @@ namespace
 		};
 		static const Pair kExtra[] =
 		{
+			{ "TY", "Act_01_ty" },
 			{ "OPAL", "Prop_0270_FireOpal" },
+			{ "SIGNPOST", "Prop_0005_signpost" },
+			{ "EXTRALIFE", "Prop_0534_Lifeup" },
 			{ "TASIGNPOST", "Prop_0393_SignPost" },
 			{ "DIRECTIONARROW", "prop_0124_arrow_01" },
 			{ "DIRECTIONARROW2", "prop_0400_arrow02" },
@@ -182,6 +185,12 @@ namespace
 			{ "B3CRATE", "Prop_0001_WoodenCrate_01_B3" },
 			{ "INVISICRATE", "Prop_0345_InvisibleCrate" },
 			{ "FRILLLIZARD", "Act_07_Frill" },
+			{ "SWIMMINGCROC", "Act_02_croc" },
+			{ "BURNINGLOG", "prop_0372_FlameLog" },
+			{ "BUNYIPELDER", "act_86_ElderBunyip" },
+			{ "THUNDEGGCOLLECTOR", "Prop_0403_ThundEggGun" },
+			{ "THUNDEREGGCOLLECTOR", "Prop_0403_ThundEggGun" },
+			{ "AIRPLATFORM", "Prop_0099_Platform" },
 			{ "FROG", "Act_34_Frog" },
 			{ "WHIRLYWIND", "prop_0340_Whirlwind" },
 			{ "REED1", "prop_0006_Reed_01" },
@@ -301,6 +310,20 @@ namespace
 	{
 		return key == "CRATE" || key == "B3CRATE" || key == "INVISICRATE";
 	}
+
+	// `type = N,label` on CAGEDBILBY. Dad has no dad-named mesh; Act_04_Bilby is the remaining one.
+	const char* cagedBilbyModel(const std::string& label)
+	{
+		if (label == "mum")
+			return "Act_26_bilbymum";
+		if (label == "girl")
+			return "Act_50_Bilbygirl";
+		if (label == "boy")
+			return "Act_49_BilbyBoy";
+		if (label == "grandma")
+			return "Act_43_BilbyGrandma";
+		return "Act_04_Bilby";
+	}
 }
 
 glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance)
@@ -406,7 +429,16 @@ std::vector<Ty1Instance> parseTy1Instances(
 
 			current.typeName = type;
 			current.modelFile = modelForType(type);
+			if (key == "CAGEDBILBY")
+			{
+				current.modelFile = canonicalFile(cagedBilbyModel(current.variantLabel));
+				current.extraModelFile = canonicalFile("Prop_0044_cage");
+			}
 			current.closePath = key == "PATH";
+			// A water dragon is one creature at a point. It has no roam scale, so the
+			// large-scale test never marks it.
+			if (key == "WATERDRAGON")
+				current.critter = true;
 			if (key == "WATERVOLUME")
 				current.kind = Ty1Kind::Water;
 			else if (current.hasBox || triggerSphere)
@@ -530,6 +562,16 @@ std::vector<Ty1Instance> parseTy1Instances(
 		else if ((key == "range" || key == "radius") && pendingRange <= 0.0f)
 		{
 			readFloat(rhs, pendingRange);
+		}
+		else if (key == "type" && descriptorKey(type) == "CAGEDBILBY")
+		{
+			std::string label = rhs;
+			const size_t comma = label.find(',');
+			if (comma != std::string::npos)
+				label = trimCopy(label.substr(comma + 1));
+			else
+				label.clear();
+			current.variantLabel = lowerCopy(label);
 		}
 		else if (key == "pathwidth")
 		{

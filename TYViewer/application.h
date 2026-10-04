@@ -101,6 +101,7 @@ private:
 private:
 	void frameCameraOnModels(const std::vector<const Model*>& list, bool levelFraming);
 	void frameCameraOnInstance(int index);
+	void drawSelectedObjectOutline(Shader& shader, const Ty1Instance& instance);
 	void refreshCollisionToggle();
 
 	// ------------------------------------------------------------------

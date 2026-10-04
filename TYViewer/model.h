@@ -34,7 +34,7 @@ public:
 	virtual void draw(Shader& shader) const override;
 	// transparentPass false draws depth-writing meshes. true draws the rest, in file order.
 	void drawMeshes(Shader& shader, bool transparentPass) const;
-	void drawMeshes(Shader& shader, bool transparentPass, const glm::mat4& world) const;
+	void drawMeshes(Shader& shader, bool transparentPass, const glm::mat4& world, const MeshDrawStyle& style = {}) const;
 	
 	// For GUI access
 	const std::vector<Mesh*>& getMeshes() const { return meshes; }
