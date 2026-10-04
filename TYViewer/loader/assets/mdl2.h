@@ -52,7 +52,8 @@ public:
 	};
 
 public:
-	bool load(const char* buffer, size_t offset);
+	// fileSize is the byte length of buffer. String pointers and segment spans are checked against it.
+	bool load(const char* buffer, size_t offset, size_t fileSize);
 	bool loadTY2(const char* buffer, size_t offset); // Load TY 2 format with relaxed signature check
 	bool loadTY2MDL3(const char* buffer, size_t offset); // Load TY 2 MDL3 format (newer structure)
 
@@ -87,4 +88,7 @@ private:
 	Subobject parse_subobject(const char* buffer, size_t offset);
 	Mesh parse_mesh(const char* buffer, size_t offset);
 	Segment parse_segment(const char* buffer, size_t offset, size_t& size);
+
+	// Set by load(). Zero means the TY2 path, which does not have a file length.
+	size_t fileBytes = 0;
 };

@@ -4,14 +4,49 @@
 #include "util/stringext.h"
 #include "debug.h"
 
+#include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
-bool mdl2::load(const char* buffer, size_t offset)
+namespace
+{
+	bool rangeFits(size_t offset, size_t count, size_t fileSize)
+	{
+		return count <= fileSize && offset <= fileSize - count;
+	}
+
+	// Empty when the pointer is outside the file or the text has no terminating zero.
+	std::string readCString(const char* buffer, size_t fileSize, uint32_t ptr)
+	{
+		if (static_cast<size_t>(ptr) >= fileSize)
+			return {};
+
+		const char* start = buffer + ptr;
+		const void* nul = memchr(start, '\0', fileSize - ptr);
+		if (nul == nullptr)
+			return {};
+
+		return std::string(start, static_cast<const char*>(nul));
+	}
+
+	// 52 + verts*12 + 4 + verts*4 + 4 + verts*8 + 4 + verts*4.
+	bool segmentByteSpan(uint32_t vertexCount, size_t& span)
+	{
+		const size_t maxVerts = (std::numeric_limits<size_t>::max() - 64) / 28;
+		if (static_cast<size_t>(vertexCount) > maxVerts)
+			return false;
+		span = 64 + static_cast<size_t>(vertexCount) * 28;
+		return true;
+	}
+}
+
+bool mdl2::load(const char* buffer, size_t offset, size_t fileSize)
 {
 	isMDL3Format = false; // TY 1 format
-	
-	if (from_bytes<uint32_t>(buffer, 0) != 843859021)
+	fileBytes = fileSize;
+
+	if (fileSize < 80 || from_bytes<uint32_t>(buffer, 0) != 843859021)
 	{
 		// Signature check
 		return false;
@@ -33,10 +68,20 @@ bool mdl2::load(const char* buffer, size_t offset)
 		from_bytes<float>(buffer, offset + 64), from_bytes<float>(buffer, offset + 68), from_bytes<float>(buffer, offset + 72)
 	};
 
-	name = nts(buffer, from_bytes<uint32_t>(buffer, 68));
+	name = readCString(buffer, fileSize, from_bytes<uint32_t>(buffer, 68));
 
-	subobjects = std::vector<Subobject>(subobject_count);
-	for (unsigned int i = 0; i < subobject_count; i++)
+	size_t readableSubs = subobject_count;
+	if (subobject_offset >= fileSize || 80 > fileSize - subobject_offset)
+		readableSubs = 0;
+	else
+	{
+		const size_t fit = (fileSize - subobject_offset) / 80;
+		if (readableSubs > fit)
+			readableSubs = fit;
+	}
+
+	subobjects = std::vector<Subobject>(readableSubs);
+	for (unsigned int i = 0; i < readableSubs; i++)
 	{
 		subobjects[i] = parse_subobject(buffer, offset + subobject_offset);
 
@@ -48,6 +93,7 @@ bool mdl2::load(const char* buffer, size_t offset)
 
 bool mdl2::loadTY2(const char* buffer, size_t offset)
 {
+	fileBytes = 0;
 	// First try MDL3 format (newer TY 2 structure)
 	if (loadTY2MDL3(buffer, offset))
 	{
@@ -271,9 +317,15 @@ bool mdl2::loadTY2MDL3(const char* buffer, size_t offset)
 
 mdl2::Subobject mdl2::parse_subobject(const char* buffer, size_t offset)
 {
-	// Basic bounds check - ensure we can at least read the header (72 bytes minimum)
-	// Note: This is a minimal check; full validation would require buffer size
-	if (offset > 1000000) // Sanity check - offset way too large
+	if (fileBytes != 0)
+	{
+		if (!rangeFits(offset, 80, fileBytes))
+		{
+			Debug::log("parse_subobject: header outside file at " + std::to_string(offset));
+			return { {}, "", "", 0, {} };
+		}
+	}
+	else if (offset > 1000000)
 	{
 		Debug::log("parse_subobject: Offset too large: " + std::to_string(offset));
 		throw std::runtime_error("Invalid subobject offset");
@@ -286,13 +338,24 @@ mdl2::Subobject mdl2::parse_subobject(const char* buffer, size_t offset)
 		from_bytes<float>(buffer, offset + 32), from_bytes<float>(buffer, offset + 36), from_bytes<float>(buffer, offset + 40)
 	};
 
-	std::string name = nts(buffer, from_bytes<uint32_t>(buffer, offset + 48));
-	std::string material = nts(buffer, from_bytes<uint32_t>(buffer, offset + 52));
+	const uint32_t namePtr = from_bytes<uint32_t>(buffer, offset + 48);
+	const uint32_t materialPtr = from_bytes<uint32_t>(buffer, offset + 52);
+	std::string name = (fileBytes == 0) ? nts(buffer, namePtr) : readCString(buffer, fileBytes, namePtr);
+	std::string material = (fileBytes == 0) ? nts(buffer, materialPtr) : readCString(buffer, fileBytes, materialPtr);
 
 	unsigned int triangle_count = from_bytes<uint32_t>(buffer, offset + 56);
 
 	unsigned int mesh_count = from_bytes<uint16_t>(buffer, offset + 66);
 	size_t mesh_offset = from_bytes<uint32_t>(buffer, offset + 68);
+
+	if (fileBytes != 0 && mesh_count > 0)
+	{
+		if (mesh_offset > fileBytes || mesh_count > (fileBytes - mesh_offset) / 16)
+		{
+			Debug::log("parse_subobject: mesh table outside file for '" + name + "', skipping meshes");
+			mesh_count = 0;
+		}
+	}
 
 	std::vector<Mesh> meshes(mesh_count);
 	for (unsigned int i = 0; i < mesh_count; i++)
@@ -307,16 +370,42 @@ mdl2::Subobject mdl2::parse_subobject(const char* buffer, size_t offset)
 
 mdl2::Mesh mdl2::parse_mesh(const char* buffer, size_t offset)
 {
-	std::string material = nts(buffer, from_bytes<uint32_t>(buffer, offset));
+	if (fileBytes != 0 && !rangeFits(offset, 16, fileBytes))
+		return { "", {} };
+
+	const uint32_t materialPtr = from_bytes<uint32_t>(buffer, offset);
+	std::string material = (fileBytes == 0) ? nts(buffer, materialPtr) : readCString(buffer, fileBytes, materialPtr);
 	uint32_t segment_offset = from_bytes<uint32_t>(buffer, offset + 4);
 
 	unsigned int segment_count = from_bytes<uint32_t>(buffer, offset + 12);
+
+	if (fileBytes != 0)
+	{
+		if (segment_count > fileBytes)
+			return { material, {} };
+
+		size_t cursor = segment_offset;
+		for (unsigned int i = 0; i < segment_count; i++)
+		{
+			if (!rangeFits(cursor, 16, fileBytes))
+				return { material, {} };
+
+			const uint32_t vertexCount = from_bytes<uint32_t>(buffer, cursor + 12);
+			size_t span = 0;
+			if (!segmentByteSpan(vertexCount, span) || !rangeFits(cursor, span, fileBytes))
+				return { material, {} };
+
+			cursor += span;
+		}
+	}
 
 	std::vector<Segment> segments(segment_count);
 	for (unsigned int i = 0; i < segment_count; i++)
 	{
 		size_t size = 0;
 		segments[i] = parse_segment(buffer, segment_offset, size);
+		if (fileBytes != 0 && size == 0)
+			return { material, {} };
 
 		segment_offset += static_cast<uint32_t>(size);
 	}
@@ -326,6 +415,23 @@ mdl2::Mesh mdl2::parse_mesh(const char* buffer, size_t offset)
 
 mdl2::Segment mdl2::parse_segment(const char* buffer, size_t offset, size_t& size)
 {
+	if (fileBytes != 0)
+	{
+		if (!rangeFits(offset, 16, fileBytes))
+		{
+			size = 0;
+			return { {} };
+		}
+
+		const uint32_t vertexCount = from_bytes<uint32_t>(buffer, offset + 12);
+		size_t span = 0;
+		if (!segmentByteSpan(vertexCount, span) || !rangeFits(offset, span, fileBytes))
+		{
+			size = 0;
+			return { {} };
+		}
+	}
+
 	unsigned int amount_of_vertices = from_bytes<uint32_t>(buffer, offset + 12);
 	std::vector<Vertex> vertices(amount_of_vertices);
 

@@ -1,5 +1,6 @@
 #include "content.h"
 #include <algorithm>
+#include <cctype>
 
 void Content::initialize()
 {
@@ -30,6 +31,41 @@ std::vector<std::string> Content::getModelList(int archiveIndex)
 	modelList = arc->getFilesByExtension("mdl");
 	
 	return modelList;
+}
+
+std::vector<std::string> Content::getLevelList(int archiveIndex)
+{
+	std::vector<std::string> levelList;
+
+	if (archiveIndex < 0 || archiveIndex > 1 || archives[archiveIndex] == nullptr)
+		return levelList;
+
+	Archive* arc = archives[archiveIndex];
+	if (archiveIndex == 0)
+	{
+		levelList = arc->getFilesByExtension("lv2");
+	}
+	else
+	{
+		std::vector<std::string> bniFiles = arc->getFilesByExtension("bni");
+		for (const std::string& name : bniFiles)
+		{
+			std::string lower = name;
+			std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+			if (lower.find(".lv3.") != std::string::npos)
+				levelList.push_back(name);
+		}
+	}
+
+	std::sort(levelList.begin(), levelList.end(), [](const std::string& a, const std::string& b)
+	{
+		std::string al = a;
+		std::string bl = b;
+		std::transform(al.begin(), al.end(), al.begin(), ::tolower);
+		std::transform(bl.begin(), bl.end(), bl.begin(), ::tolower);
+		return al < bl;
+	});
+	return levelList;
 }
 
 void Content::setActiveArchive(int archiveIndex)

@@ -158,24 +158,22 @@ Successfully created model: P0486_B1FlowerPot.mdl with N meshes
    - V still needs flipping (`v = 1.0 - rawV`).
 
 ### OBSERVED / INFERRED (Material naming conventions)
-The TY2 PC pipeline appears to separate **mesh geometry** (MDG) from **material/texture slots** (MDL3 metadata). The strings that show up as “materials” in TYViewer are currently sourced from the MDL3 texture-name list and should be treated as **material slot identifiers**, not strictly as unique diffuse texture filenames.
+The TY2 PC pipeline separates **mesh geometry** (MDG) from **material slots** (MDL3 texture-name list). The ObjectLookupTable already pairs each mesh with the right slot. A slot name is not always the DDS filename, and a suffix is not always “the same atlas.”
 
-In practice, multiple “material names” often reuse the *same* underlying texture atlas, and the suffix encodes **render-state or variation**, not a different image.
+Texture resolution, in order, only uses a candidate when that file exists:
 
-- **Trailing digits**: e.g. `A049_Elle01`
-  - **Status**: **Not “tint”** (prior assumption was incorrect).
-  - **Current best guess**: some kind of **variant/pass identifier** (render-state, layering, or slot reuse), but **unknown**.
-- **`Glass` suffix**: e.g. `A049_ElleGlass`
-  - **Likely meaning**: semi-transparent rendering (alpha blend / alpha test / depth-write differences).
-  - **Evidence**: still uses the same atlas, but should render with transparency semantics.
-- **`Spec` suffix**: e.g. `...Spec`
-  - **Likely meaning**: specular/shinier material state (lighting/specular parameters), not necessarily a different diffuse map.
-- **`Overlay` suffix**: e.g. `...Overlay`
-  - **Observed behavior**: a black/white overlay texture rendered on top of the model on separate geometry.
-  - **Likely meaning**: clipped “lightmap” / baked lighting overlay pass (alpha-tested / masked overlay rather than a full transparency blend).
-  - **Note**: TYViewer currently does not implement special overlay compositing; this should be handled as a separate render pass later.
+1. **Exact DDS**: `A120_FireBunyip` → `a120_firebunyip.dds`, `a039_Orchid` → `a039_orchid.dds`, `A049_Elle` → `a049_elle.dds`.
+2. **`Z` sort prefix**: one token of the form `_Z` + an uppercase word. `A120_ZBlueSpec` → `a120_bluespec.dds` (64×64, its own image). This is the only such material name in the PC archive. The mesh UVs cover the full 0–1 square, so it is not a window of the bunyip atlas. The DDS is DXT1 (no alpha); blend state for that glass is still unknown.
+3. **Trailing digits, only if that file exists**: `A049_Elle01` → `A049_Elle`. This is not a tint. Digits are not always the same image: `A001_Ty01.dds` and `A001_Ty02.dds` are separate files, so the stripped name is used only when the exact name is missing and the stripped file is present.
+4. **`Glass` suffix, only if that file exists**: `A049_ElleGlass` → `A049_Elle`. Elle glass UVs are a small window of that atlas.
+5. **Unique shared DDS**: strip the leading model id, and a leading `A` when the next letter is lowercase. `A120_AworkerKoala` → `a110_worker_koala.dds` (the worker koala diffuse; the bunyip mesh is that character, UVs cover 0–1). Accepted only when exactly one DDS contains the normalized token, and the DDS does not add a `spec` / `env` / `skymap` suffix the material name lacks.
+6. **Atlas window**: if both UV spans are under 0.5, bind the model diffuse. Elle eyes sit in about u 0.25–0.29, v 0.72–0.75 of `a049_elle.dds`, and there is no `A049_ElleEye.dds`.
+7. **Unresolved**: do not substitute the model diffuse or the previous texture. Orchid eyes and shine cards span almost the whole square, and `Data_PC.rkv` has no `a039_OrchidEye.dds` or `a039_Orchidshine.dds` (only `a039_orchid.dds`). Those slots stay on the missing texture.
 
-**Important**: These are naming conventions observed in real model sets, and are not yet backed by a fully decoded “material definition” structure. Long term, we should map these suffixes to real render-state fields (likely from MDL3/MDG header bits), rather than relying on string heuristics.
+- **`Spec`**: sometimes its own image (`a120_bluespec.dds`), sometimes only a name with no file. Not automatically the body atlas.
+- **`Overlay`**: a black/white overlay on separate geometry, likely a masked lightmap pass. TYViewer does not composite overlays yet.
+
+**Important**: Suffix meaning is not one rule. A small UV window with no DDS shares the model atlas (Elle eye/glass). A full-range unwrap needs its own file (blue spec, koala) or stays unresolved (Orchid eye/shine). Render-state fields for glass/spec blending are still not decoded.
 
 ### UNKNOWN/UNCLEAR:
 1. **Vertex Colors**: Stored with the same +1 shift as UVs
@@ -268,3 +266,43 @@ The PC format is **completely different** from PS2 format:
 - Vertex block start is `fileSize - 12 - totalVertices * 48` (no pattern scan)
 - Collision meshes use `CM_` textures and are skipped for rendering
 - **UVs**: float32 UVs are one record ahead of their position (plus V flip), including across meshes and the 12-byte tail
+
+## Level files
+
+There is no decoded instance format yet. The viewer can list both games' levels. A TY1 level opens as its room meshes only. A TY2 chunk is logged and not drawn.
+
+### TY 1: `.lv2` (plaintext MapEd)
+
+`Data_PC.rkv` contains 33 `.lv2` files (`a1.lv2` … `e4.lv2`, `z1.lv2`, `z2.lv2`, plus `*ex.lv2`). A main level is a Krome MapEd script, "Data File version 2". The `name setup` block names the terrain models:
+
+- `ground = room_a1_01.mdl`
+- `envcube = env_a1.mdl`
+- `overlay_* = room_a1_02.mdl, ...` (extra comma-separated tokens are flags or material names, not models)
+
+Those `.mdl` files are in the same archive, already in world space, and are what the viewer loads. Later `name TY` / `name STATICBRIDGEFLAT1` / `name OPAL` blocks are placed instances (`pos`, `rot`, `scale`). The type name is not a filename (`staticbridgeflat1.mdl` does not exist). Instance placement is not implemented. `*ex.lv2` files are often instance lists with no setup block, so they have no room mesh to draw. `.scn` and `.cam` are not levels.
+
+A subobject material pointer of `0xFFFFFFFF` means there is no material string. `Env_B1.mdl` (`Dome`, `Moon`) and `env_b2.mdl` (`Plane01`) use that sentinel. The mesh materials after it (`Ty_B1_Env_*`, `TY_B2_Env_*`) are real. Reading the sentinel as a string walks off the end of the file.
+
+White level collision is not only `Collide_*`. The same shells are also named `Collision`, `Collsion`, `Colide`, or `collde`. Untextured parts whose names start with `C_` / `C ` or contain `invis` are collision too; textured `invis_*` parts (B2 snow, grass, and ice) are visible level art. Meshes on `T0103_01_*` (any suffix; only `t0103_01.dds` exists), a material named `Collision`, or `Material #*` draw with the white fallback texture and are collision.
+
+Other white patches on B2, C1, E2, Z1, and Z2 are level art, not a missed collision flag. The material is a variant of a DDS that is in the archive: `TY_C2_010_a` → `ty_c2_010.dds`, `TY_C1_008a` → `ty_c1_008.dds`, `TY_Z2_003_grass` → `ty_z2_003.dds`, and the same for `_nograss`, `_no_grass`, `_lessgrass`, `_reed`, `_overlay`, and a trailing `_` + letter. The loader uses that base texture. Hiding the mesh removes the terrain. `T0103_01_*` is not remapped, so collision stays white when the toggle is on.
+
+### TY 2: `*.lv3.bni` (binary, Data File version 3.0)
+
+There is no bare `.lv3` in the PC archive. Levels are 145 `*.lv3.bni` chunks (`ra1_chunk_01.lv3.bni`, `ra1_chunk_env.lv3.bni`, …, plus `world.lv3.bni`), about 38 zone prefixes. `levels.ini.bni` is the level manifest (`startChunk`, `envChunk`, `ground`), not a level, and is not listed.
+
+The `.bni` wrapper is not compression. The original file follows a 0x44-byte header:
+
+```
++0x00  char path[32]     e.g. "Data\Levels\ra1_chunk_01.lv3"
++0x20  uint32            constant 100
++0x24  uint32            record count
+                          rq2_chunk_env = 13, world = 231, ra1_chunk_01 = 2292
++0x28  uint32            payload size (fileSize - 0x44)
++0x2C  uint32            string-table offset within the payload
+                          "HEADER" / "Data File version 3.0" begins here
++0x30  uint32            count * 16 (end of a 16-byte record table)
++0x44  payload           the .lv3 (or .ini) bytes
+```
+
+Editor strings in the payload are "TheEditor" or "Sire", "Data File version 3.0". Prop names are embedded as text (`P0156_CollideProp`, `P0022_Gumtree1`, `Prop_0092_DunnyRoll`) and match existing `.mdl` / `.mdg` models, but the 16-byte records that would place them are not decoded. Selecting a chunk logs the header, the version string, and a short prop-name sample. It does not render.

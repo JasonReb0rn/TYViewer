@@ -44,9 +44,14 @@ public:
 	
 	// Model management
 	void loadModel(const std::string& modelName, int archiveIndex);
+	void loadTy1Level(const std::string& levelName);
+	void inspectTy2Level(const std::string& levelName);
 	void clearModels();
 	void exportCurrentModel();
 	void exportCurrentModelRaw();
+	void frameCameraOnModel(const Model* model);
+	void frameCameraOnLoadedModels();
+	void setCollisionMeshesVisible(bool visible);
 	
 	// Input forwarding to GUI
 	void onMouseButton(int button, int action, double x, double y);
@@ -63,6 +68,8 @@ private:
 	bool drawVertexIds = false;
 
 	bool wireframe = false;
+	bool viewingLevel = false;
+	bool collisionMeshesVisible = true;
 
 	GLFWwindow* window;
 
@@ -87,6 +94,9 @@ private:
 	int currentModelArchiveIndex = 0;
 
 private:
+	void frameCameraOnModels(const std::vector<const Model*>& list, bool levelFraming);
+	void refreshCollisionToggle();
+
 	// ------------------------------------------------------------------
 	// Screen-space vertex index overlay ("V")
 	// ------------------------------------------------------------------

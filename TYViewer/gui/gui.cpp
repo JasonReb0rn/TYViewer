@@ -65,13 +65,9 @@ Gui::Gui() :
 	dropdownOpen(false),
 	hovering(false),
 	submenuOpen(false),
-	hoveredCategory(0),
+	hoveredCategory(-1),
 	hoveredSubmenuItem(-1),
-	activeSearchCategory(0),
-	ty1Search(""),
-	ty2Search(""),
-	ty1FilterDirty(true),
-	ty2FilterDirty(true),
+	activeSearchCategory(-1),
 	mouseX(0.0f),
 	mouseY(0.0f),
 	scrollOffset(0.0f),
@@ -90,6 +86,14 @@ Gui::Gui() :
 	textVBO(0),
 	fontTexture(0)
 {
+	categories[0].label = "TY 1 Models";
+	categories[0].hoverColor = glm::vec4(0.2f, 0.4f, 0.7f, 1.0f);
+	categories[1].label = "TY 2 Models";
+	categories[1].hoverColor = glm::vec4(0.7f, 0.35f, 0.2f, 1.0f);
+	categories[2].label = "TY 1 Levels";
+	categories[2].hoverColor = glm::vec4(0.2f, 0.55f, 0.35f, 1.0f);
+	categories[3].label = "TY 2 Levels";
+	categories[3].hoverColor = glm::vec4(0.55f, 0.3f, 0.7f, 1.0f);
 }
 
 Gui::~Gui()
@@ -166,6 +170,8 @@ void Gui::initialize(int width, int height)
 	// Export buttons next to the model selector
 	exportButtonRect = {buttonRect.x + buttonRect.width + 10.0f, 10.0f, 90.0f, 30.0f};
 	exportRawButtonRect = {exportButtonRect.x + exportButtonRect.width + 10.0f, 10.0f, 110.0f, 30.0f};
+	recenterButtonRect = {exportRawButtonRect.x + exportRawButtonRect.width + 10.0f, 10.0f, 30.0f, 30.0f};
+	collisionButtonRect = {recenterButtonRect.x + recenterButtonRect.width + 10.0f, 10.0f, 96.0f, 30.0f};
 	
 	// Model info panel on the right
 	modelInfoRect = {(float)width - 310.0f, 10.0f, 300.0f, 150.0f};
@@ -431,29 +437,46 @@ void Gui::createFontTexture()
 void Gui::setModelList(const std::vector<ModelEntry>& modelList)
 {
 	models = modelList;
-	ty1Models.clear();
-	ty2Models.clear();
+	for (int i = 0; i < kCategoryCount; i++)
+		categories[i].entries.clear();
 	
-	for (const auto& model : models)
+	for (const auto& entry : models)
 	{
-		if (model.archiveName == "TY1")
-			ty1Models.push_back(model);
-		else if (model.archiveName == "TY2")
-			ty2Models.push_back(model);
+		int index = -1;
+		if (entry.archiveName == "TY1" && entry.kind == EntryKind::Model)
+			index = 0;
+		else if (entry.archiveName == "TY2" && entry.kind == EntryKind::Model)
+			index = 1;
+		else if (entry.archiveName == "TY1" && entry.kind == EntryKind::Level)
+			index = 2;
+		else if (entry.archiveName == "TY2" && entry.kind == EntryKind::Level)
+			index = 3;
+
+		if (index >= 0)
+			categories[index].entries.push_back(entry);
 	}
-	
-	// Simple dropdown with just 2 category items
+
+	layoutDropdown();
+	for (int i = 0; i < kCategoryCount; i++)
+		markFilterDirty(i);
+}
+
+void Gui::layoutDropdown()
+{
 	int categoryCount = 0;
-	if (!ty1Models.empty()) categoryCount++;
-	if (!ty2Models.empty()) categoryCount++;
-	
-	// Calculate height: tight padding + items
+	for (int i = 0; i < kCategoryCount; i++)
+	{
+		if (!categories[i].entries.empty())
+			categoryCount++;
+	}
+
 	float dropdownHeight = (categoryCount * 30.0f) + 6.0f; // 3px top + 3px bottom padding
 	dropdownRect = {buttonRect.x, buttonRect.y + buttonRect.height + 2.0f, 200.0f, dropdownHeight};
-	
-	// Submenu will be calculated dynamically when hovering
-	markFilterDirty(1);
-	markFilterDirty(2);
+}
+
+bool Gui::hasCategory(int index) const
+{
+	return index >= 0 && index < kCategoryCount;
 }
 
 void Gui::setOnModelSelected(std::function<void(const ModelEntry&)> callback)
@@ -469,6 +492,11 @@ void Gui::setOnExportRequested(std::function<void()> callback)
 void Gui::setOnExportRawRequested(std::function<void()> callback)
 {
 	onExportRawRequested = callback;
+}
+
+void Gui::setOnRecenterCamera(std::function<void()> callback)
+{
+	onRecenterCamera = callback;
 }
 
 void Gui::resize(int width, int height)
@@ -538,6 +566,8 @@ void Gui::render()
 	renderButton();
 	renderExportButton();
 	renderExportRawButton();
+	renderRecenterButton();
+	renderCollisionButton();
 	renderNotificationBanner();
 	
 	if (dropdownOpen)
@@ -664,11 +694,113 @@ void Gui::renderExportRawButton()
 	drawText("Export Raw", exportRawButtonRect.x + 12.0f, exportRawButtonRect.y + 11.0f, textColor);
 }
 
+void Gui::renderRecenterButton()
+{
+	glUseProgram(shaderProgram);
+	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
+	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+	const bool enabled = (currentModel != nullptr || sceneLoaded);
+	const bool hovered = recenterButtonRect.contains(mouseX, mouseY);
+
+	glm::vec4 bgColor;
+	glm::vec4 border = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+	glm::vec4 iconColor;
+	if (!enabled)
+	{
+		bgColor = glm::vec4(0.12f, 0.12f, 0.12f, 0.75f);
+		iconColor = glm::vec4(0.45f, 0.45f, 0.45f, 1.0f);
+	}
+	else if (hovered)
+	{
+		bgColor = glm::vec4(0.32f, 0.32f, 0.32f, 0.95f);
+		iconColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+	}
+	else
+	{
+		bgColor = glm::vec4(0.2f, 0.2f, 0.2f, 0.9f);
+		iconColor = glm::vec4(0.92f, 0.92f, 0.92f, 1.0f);
+	}
+
+	const float x = recenterButtonRect.x;
+	const float y = recenterButtonRect.y;
+	const float s = recenterButtonRect.width;
+	drawRect(x, y, s, recenterButtonRect.height, bgColor);
+	drawRect(x, y, s, 2.0f, border);
+	drawRect(x, y + recenterButtonRect.height - 2.0f, s, 2.0f, border);
+	drawRect(x, y, 2.0f, recenterButtonRect.height, border);
+	drawRect(x + s - 2.0f, y, 2.0f, recenterButtonRect.height, border);
+
+	// Four corner brackets, like a framing reticle.
+	const float m = 8.0f;
+	const float a = 7.0f;
+	const float t = 2.0f;
+	drawRect(x + m, y + m, a, t, iconColor);
+	drawRect(x + m, y + m, t, a, iconColor);
+	drawRect(x + s - m - a, y + m, a, t, iconColor);
+	drawRect(x + s - m - t, y + m, t, a, iconColor);
+	drawRect(x + m, y + s - m - t, a, t, iconColor);
+	drawRect(x + m, y + s - m - a, t, a, iconColor);
+	drawRect(x + s - m - a, y + s - m - t, a, t, iconColor);
+	drawRect(x + s - m - t, y + s - m - a, t, a, iconColor);
+}
+
+void Gui::renderCollisionButton()
+{
+	glUseProgram(shaderProgram);
+	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
+	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+	const bool hovered = collisionAvailable && collisionButtonRect.contains(mouseX, mouseY);
+
+	glm::vec4 bgColor;
+	glm::vec4 textColor;
+	if (!collisionAvailable)
+	{
+		bgColor = glm::vec4(0.12f, 0.12f, 0.12f, 0.75f);
+		textColor = glm::vec4(0.45f, 0.45f, 0.45f, 1.0f);
+	}
+	else if (collisionVisible)
+	{
+		bgColor = hovered ? glm::vec4(0.35f, 0.55f, 0.32f, 0.98f) : glm::vec4(0.22f, 0.42f, 0.22f, 0.95f);
+		textColor = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
+	}
+	else
+	{
+		bgColor = hovered ? glm::vec4(0.32f, 0.32f, 0.32f, 0.95f) : glm::vec4(0.18f, 0.18f, 0.18f, 0.9f);
+		textColor = glm::vec4(0.75f, 0.75f, 0.75f, 1.0f);
+	}
+
+	const float x = collisionButtonRect.x;
+	const float y = collisionButtonRect.y;
+	const float w = collisionButtonRect.width;
+	const float h = collisionButtonRect.height;
+	drawRect(x, y, w, h, bgColor);
+	drawRect(x, y, w, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(x, y + h - 2.0f, w, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(x, y, 2.0f, h, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(x + w - 2.0f, y, 2.0f, h, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+
+	const char* label = collisionVisible ? "Col: On" : "Col: Off";
+	drawText(label, x + 12.0f, y + 11.0f, textColor);
+}
+
+void Gui::setOnCollisionToggle(std::function<void()> callback)
+{
+	onCollisionToggle = callback;
+}
+
+void Gui::setCollisionToggle(bool available, bool visible)
+{
+	collisionAvailable = available;
+	collisionVisible = visible;
+}
+
 void Gui::renderNotificationBanner()
 {
-	// Banner sits to the right of the export buttons.
+	// Banner sits to the right of the recenter button.
 	const float kPad = 10.0f;
-	const float x = exportRawButtonRect.x + exportRawButtonRect.width + kPad;
+	const float x = collisionButtonRect.x + collisionButtonRect.width + kPad;
 	const float y = exportRawButtonRect.y;
 	const float h = exportRawButtonRect.height;
 	const float maxW = (float)windowWidth - x - kPad;
@@ -739,32 +871,23 @@ void Gui::renderDropdown()
 	drawRect(dropdownRect.x + dropdownRect.width - 2.0f, dropdownRect.y, 2.0f, dropdownRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
 	
 	float yOffset = dropdownRect.y + 3.0f;
-	
-	// TY1 category
-	if (!ty1Models.empty())
+	const glm::vec4 idleColor(0.3f, 0.3f, 0.3f, 1.0f);
+
+	for (int i = 0; i < kCategoryCount; i++)
 	{
-		// Blue when hovered, gray when not
-		glm::vec4 bgColor = (hoveredCategory == 1) ? glm::vec4(0.2f, 0.4f, 0.7f, 1.0f) : glm::vec4(0.3f, 0.3f, 0.3f, 1.0f);
+		if (categories[i].entries.empty())
+			continue;
+
+		glm::vec4 bgColor = (hoveredCategory == i) ? categories[i].hoverColor : idleColor;
 		drawRect(dropdownRect.x + 5.0f, yOffset, dropdownRect.width - 10.0f, 25.0f, bgColor);
-		
-		std::string categoryText = "TY 1 Models (" + std::to_string(ty1Models.size()) + ") >";
+
+		std::string categoryText = categories[i].label + " (" + std::to_string(categories[i].entries.size()) + ") >";
 		drawText(categoryText, dropdownRect.x + 10.0f, yOffset + 9.0f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
 		yOffset += 30.0f;
-	}
-	
-	// CRITICAL: Rebind the shader for rectangles after drawText switched to text shader
-	glUseProgram(shaderProgram);
-	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
-	
-	// TY2 category
-	if (!ty2Models.empty())
-	{
-		// Orange when hovered, gray when not
-		glm::vec4 bgColor = (hoveredCategory == 2) ? glm::vec4(0.7f, 0.35f, 0.2f, 1.0f) : glm::vec4(0.3f, 0.3f, 0.3f, 1.0f);
-		drawRect(dropdownRect.x + 5.0f, yOffset, dropdownRect.width - 10.0f, 25.0f, bgColor);
-		
-		std::string categoryText = "TY 2 Models (" + std::to_string(ty2Models.size()) + ") >";
-		drawText(categoryText, dropdownRect.x + 10.0f, yOffset + 9.0f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+
+		// drawText switches programs; rectangles need the GUI shader again.
+		glUseProgram(shaderProgram);
+		glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
 	}
 }
 
@@ -803,7 +926,7 @@ void Gui::renderSubmenu()
 	drawRect(submenuSearchRect.x, submenuSearchRect.y, 2.0f, submenuSearchRect.height, searchBorder);
 	drawRect(submenuSearchRect.x + submenuSearchRect.width - 2.0f, submenuSearchRect.y, 2.0f, submenuSearchRect.height, searchBorder);
 
-	std::string searchText = (hoveredCategory == 1) ? ty1Search : ty2Search;
+	std::string searchText = hasCategory(hoveredCategory) ? categories[hoveredCategory].search : std::string();
 	if (searchText.empty())
 		searchText = "Search...";
 	else if (searchActive)
@@ -822,8 +945,11 @@ void Gui::renderSubmenu()
 
 	// Filtered model list (scrolls beneath the search bar)
 	rebuildFilteredIndicesIfNeeded(hoveredCategory);
-	const std::vector<ModelEntry>* modelList = (hoveredCategory == 1) ? &ty1Models : &ty2Models;
-	const std::vector<int>& filtered = (hoveredCategory == 1) ? ty1FilteredIndices : ty2FilteredIndices;
+	const std::vector<ModelEntry>* modelList = hasCategory(hoveredCategory) ? &categories[hoveredCategory].entries : nullptr;
+	const std::vector<int>* filteredPtr = hasCategory(hoveredCategory) ? &categories[hoveredCategory].filteredIndices : nullptr;
+	if (modelList == nullptr || filteredPtr == nullptr)
+		return;
+	const std::vector<int>& filtered = *filteredPtr;
 
 	const float listTop = submenuRect.y + kTopPad + kSearchHeight + kSearchGap;
 	const float listBottom = submenuRect.y + submenuRect.height - kBottomPad;
@@ -875,8 +1001,8 @@ void Gui::renderSubmenu()
 
 void Gui::markFilterDirty(int category)
 {
-	if (category == 1) ty1FilterDirty = true;
-	if (category == 2) ty2FilterDirty = true;
+	if (hasCategory(category))
+		categories[category].filterDirty = true;
 }
 
 char Gui::normalizeSearchChar(char c)
@@ -911,32 +1037,28 @@ bool Gui::containsCaseInsensitive(const std::string& haystack, const std::string
 
 void Gui::rebuildFilteredIndicesIfNeeded(int category)
 {
-	if (category != 1 && category != 2)
+	if (!hasCategory(category))
 		return;
 
-	std::vector<ModelEntry>* list = (category == 1) ? &ty1Models : &ty2Models;
-	std::vector<int>* out = (category == 1) ? &ty1FilteredIndices : &ty2FilteredIndices;
-	bool* dirty = (category == 1) ? &ty1FilterDirty : &ty2FilterDirty;
-	const std::string& query = (category == 1) ? ty1Search : ty2Search;
-
-	if (!(*dirty))
+	Category& cat = categories[category];
+	if (!cat.filterDirty)
 		return;
 
-	out->clear();
-	out->reserve(list->size());
+	cat.filteredIndices.clear();
+	cat.filteredIndices.reserve(cat.entries.size());
 
-	for (int i = 0; i < (int)list->size(); i++)
+	for (int i = 0; i < (int)cat.entries.size(); i++)
 	{
-		if (containsCaseInsensitive((*list)[i].name, query))
-			out->push_back(i);
+		if (containsCaseInsensitive(cat.entries[i].name, cat.search))
+			cat.filteredIndices.push_back(i);
 	}
 
-	*dirty = false;
+	cat.filterDirty = false;
 }
 
 void Gui::updateSubmenuScrollBounds()
 {
-	if (!submenuOpen || (hoveredCategory != 1 && hoveredCategory != 2))
+	if (!submenuOpen || !hasCategory(hoveredCategory))
 	{
 		maxScroll = 0.0f;
 		if (scrollOffset < 0.0f) scrollOffset = 0.0f;
@@ -950,7 +1072,7 @@ void Gui::updateSubmenuScrollBounds()
 	const float kItemHeight = 25.0f;
 
 	rebuildFilteredIndicesIfNeeded(hoveredCategory);
-	const std::vector<int>& filtered = (hoveredCategory == 1) ? ty1FilteredIndices : ty2FilteredIndices;
+	const std::vector<int>& filtered = categories[hoveredCategory].filteredIndices;
 
 	// IMPORTANT: submenu height must expand/shrink with filter results.
 	// Without this, filtering down to a few items makes the submenu tiny, and clearing the query
@@ -968,6 +1090,52 @@ void Gui::updateSubmenuScrollBounds()
 	maxScroll = std::max(0.0f, (float)filtered.size() * kItemHeight - listHeight);
 	if (scrollOffset < 0.0f) scrollOffset = 0.0f;
 	if (scrollOffset > maxScroll) scrollOffset = maxScroll;
+}
+
+void Gui::hoverCategory(int index)
+{
+	if (!hasCategory(index) || categories[index].entries.empty())
+		return;
+
+	if (hoveredCategory != index)
+	{
+		hoveredCategory = index;
+		submenuOpen = true;
+		scrollOffset = 0.0f;
+
+		const float kTopPad = 5.0f;
+		const float kBottomPad = 5.0f;
+		const float kSearchHeight = 25.0f;
+		const float kSearchGap = 5.0f;
+		const float kItemHeight = 25.0f;
+
+		rebuildFilteredIndicesIfNeeded(index);
+		float contentHeight = kTopPad + kSearchHeight + kSearchGap + ((float)categories[index].filteredIndices.size() * kItemHeight) + kBottomPad;
+		float maxSubmenuHeight = windowHeight * 0.7f;
+		float submenuHeight = (contentHeight < maxSubmenuHeight) ? contentHeight : maxSubmenuHeight;
+
+		submenuRect = {dropdownRect.x + dropdownRect.width + 2.0f, dropdownRect.y, 350.0f, submenuHeight};
+		updateSubmenuScrollBounds();
+
+		if (!currentModelName.empty())
+		{
+			const std::vector<int>& filtered = categories[index].filteredIndices;
+			for (size_t pos = 0; pos < filtered.size(); pos++)
+			{
+				int idx = filtered[pos];
+				if (categories[index].entries[idx].name == currentModelName)
+				{
+					scrollOffset = (float)pos * kItemHeight;
+					updateSubmenuScrollBounds();
+					break;
+				}
+			}
+		}
+	}
+	else
+	{
+		hoveredCategory = index;
+	}
 }
 
 void Gui::drawRect(float x, float y, float width, float height, const glm::vec4& color)
@@ -1024,14 +1192,30 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				return;
 			}
 
+			if (recenterButtonRect.contains(x, y))
+			{
+				if ((currentModel || sceneLoaded) && onRecenterCamera)
+				{
+					onRecenterCamera();
+				}
+				return;
+			}
+
+			if (collisionButtonRect.contains(x, y))
+			{
+				if (collisionAvailable && onCollisionToggle)
+					onCollisionToggle();
+				return;
+			}
+
 			if (buttonRect.contains(x, y))
 			{
 				dropdownOpen = !dropdownOpen;
 				submenuOpen = false;
 				scrollOffset = 0.0f;
-				hoveredCategory = 0;
+				hoveredCategory = -1;
 				hoveredSubmenuItem = -1;
-				activeSearchCategory = 0;
+				activeSearchCategory = -1;
 			}
 			else if (submenuOpen && submenuRect.contains(x, y))
 			{
@@ -1052,8 +1236,10 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 
 				// Clicking in the list area selects an item (based on filtered list)
 				rebuildFilteredIndicesIfNeeded(hoveredCategory);
-				const std::vector<ModelEntry>* modelList = (hoveredCategory == 1) ? &ty1Models : &ty2Models;
-				const std::vector<int>& filtered = (hoveredCategory == 1) ? ty1FilteredIndices : ty2FilteredIndices;
+				if (!hasCategory(hoveredCategory))
+					return;
+				const std::vector<ModelEntry>& modelList = categories[hoveredCategory].entries;
+				const std::vector<int>& filtered = categories[hoveredCategory].filteredIndices;
 
 				const float listTop = submenuRect.y + kTopPad + kSearchHeight + kSearchGap;
 				const float listBottom = submenuRect.y + submenuRect.height - kBottomPad;
@@ -1068,7 +1254,7 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 
 				if (itemPos >= 0 && itemPos < (int)filtered.size())
 				{
-					const ModelEntry& entry = (*modelList)[filtered[itemPos]];
+					const ModelEntry& entry = modelList[filtered[itemPos]];
 
 					if (onModelSelected)
 					{
@@ -1087,9 +1273,9 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 
 					dropdownOpen = false;
 					submenuOpen = false;
-					hoveredCategory = 0;
+					hoveredCategory = -1;
 					hoveredSubmenuItem = -1;
-					activeSearchCategory = 0;
+					activeSearchCategory = -1;
 				}
 			}
 			else if (dropdownOpen && dropdownRect.contains(x, y))
@@ -1150,9 +1336,9 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				// Clicked outside, close everything
 				dropdownOpen = false;
 				submenuOpen = false;
-				hoveredCategory = 0;
+				hoveredCategory = -1;
 				hoveredSubmenuItem = -1;
-				activeSearchCategory = 0;
+				activeSearchCategory = -1;
 			}
 		}
 	}
@@ -1163,7 +1349,7 @@ void Gui::onMouseMove(float x, float y)
 	mouseX = x;
 	mouseY = y;
 	
-	hovering = buttonRect.contains(x, y) || exportButtonRect.contains(x, y) || exportRawButtonRect.contains(x, y) ||
+	hovering = buttonRect.contains(x, y) || exportButtonRect.contains(x, y) || exportRawButtonRect.contains(x, y) || recenterButtonRect.contains(x, y) || collisionButtonRect.contains(x, y) ||
 		(dropdownOpen && dropdownRect.contains(x, y)) || (submenuOpen && submenuRect.contains(x, y));
 	
 	// Track hovered submenu item
@@ -1180,7 +1366,9 @@ void Gui::onMouseMove(float x, float y)
 		const float kItemHeight = 25.0f;
 
 		rebuildFilteredIndicesIfNeeded(hoveredCategory);
-		const std::vector<int>& filtered = (hoveredCategory == 1) ? ty1FilteredIndices : ty2FilteredIndices;
+		if (!hasCategory(hoveredCategory))
+			return;
+		const std::vector<int>& filtered = categories[hoveredCategory].filteredIndices;
 
 		const float listTop = submenuRect.y + kTopPad + kSearchHeight + kSearchGap;
 		const float listBottom = submenuRect.y + submenuRect.height - kBottomPad;
@@ -1220,150 +1408,29 @@ void Gui::onMouseMove(float x, float y)
 	
 	if (dropdownOpen && dropdownRect.contains(x, y))
 	{
-		// Check which category is being hovered
 		float relativeY = y - dropdownRect.y;
-		
-		int categoryIndex = 0;
 		float yPos = 5.0f;
-		
-		// Check TY1
-		if (!ty1Models.empty())
+
+		for (int i = 0; i < kCategoryCount; i++)
 		{
+			if (categories[i].entries.empty())
+				continue;
+
 			if (relativeY >= yPos && relativeY < yPos + 25.0f)
 			{
-				// Always set hoveredCategory to 1 when hovering over TY1
-				// Only recalculate submenu if we just started hovering
-				if (hoveredCategory != 1)
-				{
-					hoveredCategory = 1;
-					submenuOpen = true;
-					scrollOffset = 0.0f;
-					
-					// Calculate submenu position and size
-					// Always align submenu with the top of the dropdown for easier mouse access
-					float submenuYPos = dropdownRect.y;
-					
-					// Use 70% of window height for submenu
-					float maxSubmenuHeight = windowHeight * 0.7f;
-
-					const float kTopPad = 5.0f;
-					const float kBottomPad = 5.0f;
-					const float kSearchHeight = 25.0f;
-					const float kSearchGap = 5.0f;
-					const float kItemHeight = 25.0f;
-
-					rebuildFilteredIndicesIfNeeded(1);
-					float contentHeight = kTopPad + kSearchHeight + kSearchGap + ((float)ty1FilteredIndices.size() * kItemHeight) + kBottomPad;
-					float submenuHeight = (contentHeight < maxSubmenuHeight) ? contentHeight : maxSubmenuHeight;
-
-					submenuRect = {dropdownRect.x + dropdownRect.width + 2.0f, submenuYPos, 350.0f, submenuHeight};
-					updateSubmenuScrollBounds();
-					
-					// Auto-scroll to selected model if one exists in this category
-					if (!currentModelName.empty())
-					{
-						Debug::log("Looking for current model in TY1: " + currentModelName);
-						// Find the position of the current model in the FILTERED TY1 list
-						for (size_t pos = 0; pos < ty1FilteredIndices.size(); pos++)
-						{
-							int idx = ty1FilteredIndices[pos];
-							if (ty1Models[idx].name == currentModelName)
-							{
-								// Place the selected item at the TOP of the visible area
-								float itemPosition = (float)pos * kItemHeight;
-								scrollOffset = itemPosition;
-								
-								// Clamp to valid scroll range
-								updateSubmenuScrollBounds();
-								
-								Debug::log("Auto-scrolled TY1 submenu to model: " + currentModelName + " at filtered position " + std::to_string(pos) + " (scroll=" + std::to_string(scrollOffset) + ")");
-								break;
-							}
-						}
-					}
-				}
-				else
-				{
-					// Already hovering over TY1, just make sure it stays set
-					hoveredCategory = 1;
-				}
+				hoverCategory(i);
 				return;
 			}
 			yPos += 30.0f;
-		}
-		
-		// Check TY2
-		if (!ty2Models.empty())
-		{
-			if (relativeY >= yPos && relativeY < yPos + 25.0f)
-			{
-				// Always set hoveredCategory to 2 when hovering over TY2
-				// Only recalculate submenu if we just started hovering
-				if (hoveredCategory != 2)
-				{
-					hoveredCategory = 2;
-					submenuOpen = true;
-					scrollOffset = 0.0f;
-					
-					// Calculate submenu position and size
-					// Always align submenu with the top of the dropdown for easier mouse access
-					float submenuYPos = dropdownRect.y;
-					
-					// Use 70% of window height for submenu
-					float maxSubmenuHeight = windowHeight * 0.7f;
-
-					const float kTopPad = 5.0f;
-					const float kBottomPad = 5.0f;
-					const float kSearchHeight = 25.0f;
-					const float kSearchGap = 5.0f;
-					const float kItemHeight = 25.0f;
-
-					rebuildFilteredIndicesIfNeeded(2);
-					float contentHeight = kTopPad + kSearchHeight + kSearchGap + ((float)ty2FilteredIndices.size() * kItemHeight) + kBottomPad;
-					float submenuHeight = (contentHeight < maxSubmenuHeight) ? contentHeight : maxSubmenuHeight;
-
-					submenuRect = {dropdownRect.x + dropdownRect.width + 2.0f, submenuYPos, 350.0f, submenuHeight};
-					updateSubmenuScrollBounds();
-					
-					// Auto-scroll to selected model if one exists in this category
-					if (!currentModelName.empty())
-					{
-						Debug::log("Looking for current model in TY2: " + currentModelName);
-						// Find the position of the current model in the FILTERED TY2 list
-						for (size_t pos = 0; pos < ty2FilteredIndices.size(); pos++)
-						{
-							int idx = ty2FilteredIndices[pos];
-							if (ty2Models[idx].name == currentModelName)
-							{
-								// Place the selected item at the TOP of the visible area
-								float itemPosition = (float)pos * kItemHeight;
-								scrollOffset = itemPosition;
-								
-								// Clamp to valid scroll range
-								updateSubmenuScrollBounds();
-								
-								Debug::log("Auto-scrolled TY2 submenu to model: " + currentModelName + " at filtered position " + std::to_string(pos) + " (scroll=" + std::to_string(scrollOffset) + ")");
-								break;
-							}
-						}
-					}
-				}
-				else
-				{
-					// Already hovering over TY2, just make sure it stays set
-					hoveredCategory = 2;
-				}
-				return;
-			}
 		}
 	}
 	else if (dropdownOpen && !dropdownRect.contains(x, y) && (!submenuOpen || !submenuRect.contains(x, y)))
 	{
 		// Mouse is outside both dropdown and submenu - close everything
 		submenuOpen = false;
-		hoveredCategory = 0;
+		hoveredCategory = -1;
 		hoveredSubmenuItem = -1;
-		activeSearchCategory = 0;
+		activeSearchCategory = -1;
 	}
 }
 
@@ -1401,9 +1468,9 @@ void Gui::onKeyPress(int key)
 	if (!submenuOpen) return;
 
 	// Search bar editing (special keys)
-	if (activeSearchCategory == 1 || activeSearchCategory == 2)
+	if (hasCategory(activeSearchCategory))
 	{
-		std::string& search = (activeSearchCategory == 1) ? ty1Search : ty2Search;
+		std::string& search = categories[activeSearchCategory].search;
 
 		if (key == GLFW_KEY_BACKSPACE)
 		{
@@ -1418,7 +1485,7 @@ void Gui::onKeyPress(int key)
 		}
 		if (key == GLFW_KEY_ESCAPE || key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER)
 		{
-			activeSearchCategory = 0;
+			activeSearchCategory = -1;
 			return;
 		}
 	}
@@ -1459,7 +1526,7 @@ void Gui::onKeyPress(int key)
 void Gui::onChar(unsigned int codepoint)
 {
 	if (!submenuOpen) return;
-	if (activeSearchCategory != 1 && activeSearchCategory != 2) return;
+	if (!hasCategory(activeSearchCategory)) return;
 
 	// Limit to basic printable ASCII for now (matches built-in font range)
 	if (codepoint < 32 || codepoint > 126)
@@ -1469,7 +1536,7 @@ void Gui::onChar(unsigned int codepoint)
 	if (c < 32 || c > 126)
 		return;
 
-	std::string& search = (activeSearchCategory == 1) ? ty1Search : ty2Search;
+	std::string& search = categories[activeSearchCategory].search;
 
 	// Hard cap to keep things reasonable
 	if (search.size() >= 96)
@@ -1485,6 +1552,7 @@ void Gui::setCurrentModel(Model* model, const std::string& modelName)
 {
 	currentModel = model;
 	currentModelName = modelName;
+	sceneLoaded = false;
 	materialListScroll = 0.0f;
 	hoveredMaterialItem = -1;
 	
@@ -1508,9 +1576,20 @@ void Gui::setCurrentModel(Model* model, const std::string& modelName)
 	}
 }
 
+void Gui::setSceneLabel(const std::string& name, bool canRecenter)
+{
+	currentModel = nullptr;
+	currentModelName = name;
+	sceneLoaded = canRecenter;
+	materialListScroll = 0.0f;
+	hoveredMaterialItem = -1;
+	materialListRect = {(float)windowWidth - 310.0f, 170.0f, 300.0f, 200.0f};
+}
+
 void Gui::clearCurrentModel()
 {
 	currentModel = nullptr;
+	sceneLoaded = false;
 	materialListScroll = 0.0f;
 	hoveredMaterialItem = -1;
 	

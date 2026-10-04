@@ -1,0 +1,22 @@
+---
+description: Where TYViewer.exe is built and how to compile it
+alwaysApply: true
+---
+
+# Build output
+
+The app you run is always:
+
+`C:\repos\TYViewer\x64\Debug\TYViewer.exe`
+
+That folder is the Debug x64 runtime directory (exe, pdb, `glfw3.dll`, `res\`, `config.cfg`). Release x64 goes to `C:\repos\TYViewer\x64\Release\TYViewer.exe`.
+
+Do not build or run `C:\repos\TYViewer\TYViewer\x64\`. That path is not an output directory. Object files, tlogs, and a second exe used to land there when `TYViewer.vcxproj` was built by itself.
+
+Compile the solution, Debug|x64:
+
+```
+msbuild C:\repos\TYViewer\TYViewer.sln /p:Configuration=Debug /p:Platform=x64
+```
+
+`OutDir` is `$(ProjectDir)..\$(Platform)\$(Configuration)\`. `IntDir` is `TYViewer\obj\$(Platform)\$(Configuration)\`. Both are set in `TYViewer.vcxproj`, so a direct project build still writes the exe to `C:\repos\TYViewer\x64\Debug\`.

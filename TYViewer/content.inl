@@ -180,7 +180,7 @@ inline Model* Content::load(const std::string& name)
 					else
 					{
 						Debug::log("TY 2 format failed, trying TY 1 format...");
-						loaded = mdl.load(data.data(), 0);
+						loaded = mdl.load(data.data(), 0, data.size());
 					}
 				}
 				catch (const std::exception& e)
@@ -197,7 +197,7 @@ inline Model* Content::load(const std::string& name)
 			else
 			{
 				// Try TY 1 format
-				loaded = mdl.load(data.data(), 0);
+				loaded = mdl.load(data.data(), 0, data.size());
 			}
 
 			if (!loaded)
@@ -888,7 +888,14 @@ inline Model* Content::load(const std::string& name)
 								vertices.push_back(v);
 							}
 
-							for (unsigned int i = 0; i < segment.vertices.size() - 2; i++)
+							const size_t segmentVerts = segment.vertices.size();
+							if (segmentVerts < 2)
+							{
+								triangleIndex += static_cast<int>(segmentVerts);
+								continue;
+							}
+
+							for (unsigned int i = 0; i + 2 < segmentVerts; i++)
 							{
 								indices.push_back(0 + triangleIndex);
 								indices.push_back(2 + triangleIndex);
@@ -899,7 +906,90 @@ inline Model* Content::load(const std::string& name)
 							triangleIndex += 2;
 						}
 
-					Texture* texture = load<Texture>(mesh.material + ".dds");
+					if (vertices.empty())
+						continue;
+
+					// Exact DDS first. Level art often uses a variant of a texture that does
+					// exist: TY_C2_010_a, TY_C1_008a, TY_Z2_003_grass, TY_*_nograss.
+					// Those slots were drawing the white fallback and looking like collision.
+					// Collision placeholders (T0103_01_*, Material #, Collision) stay white.
+					auto tryTy1Texture = [&](const std::string& texName) -> Texture*
+					{
+						if (texName.empty())
+							return defaultTexture;
+						return load<Texture>(texName + ".dds");
+					};
+
+					auto endsWithIgnoreCase = [](const std::string& value, const std::string& suffix) -> bool
+					{
+						if (suffix.empty() || value.size() < suffix.size())
+							return false;
+						const size_t start = value.size() - suffix.size();
+						for (size_t i = 0; i < suffix.size(); i++)
+						{
+							const unsigned char a = static_cast<unsigned char>(value[start + i]);
+							const unsigned char b = static_cast<unsigned char>(suffix[i]);
+							const char al = (a >= 'A' && a <= 'Z') ? static_cast<char>(a - 'A' + 'a') : static_cast<char>(a);
+							const char bl = (b >= 'A' && b <= 'Z') ? static_cast<char>(b - 'A' + 'a') : static_cast<char>(b);
+							if (al != bl)
+								return false;
+						}
+						return true;
+					};
+
+					Texture* texture = tryTy1Texture(mesh.material);
+					if (texture == defaultTexture && !mesh.material.empty())
+					{
+						std::string lowerMat = mesh.material;
+						for (char& ch : lowerMat)
+						{
+							const unsigned char u = static_cast<unsigned char>(ch);
+							if (u >= 'A' && u <= 'Z')
+								ch = static_cast<char>(u - 'A' + 'a');
+						}
+
+						const bool collisionPlaceholder =
+							lowerMat.rfind("t0103_01_", 0) == 0 ||
+							lowerMat == "collision" ||
+							lowerMat.rfind("material #", 0) == 0;
+
+						if (!collisionPlaceholder)
+						{
+							std::vector<std::string> candidates;
+							const char* words[] = { "_nograss", "_no_grass", "_lessgrass", "_grass", "_reed", "_overlay" };
+							for (const char* word : words)
+							{
+								const std::string suffix(word);
+								if (endsWithIgnoreCase(mesh.material, suffix) && mesh.material.size() > suffix.size())
+									candidates.push_back(mesh.material.substr(0, mesh.material.size() - suffix.size()));
+							}
+
+							const std::string& mat = mesh.material;
+							if (mat.size() >= 2)
+							{
+								const unsigned char last = static_cast<unsigned char>(mat.back());
+								const unsigned char prev = static_cast<unsigned char>(mat[mat.size() - 2]);
+								const bool lastLetter = (last >= 'A' && last <= 'Z') || (last >= 'a' && last <= 'z');
+								const bool prevDigit = prev >= '0' && prev <= '9';
+								if (mat[mat.size() - 2] == '_' && lastLetter)
+									candidates.push_back(mat.substr(0, mat.size() - 2));
+								if (lastLetter && prevDigit)
+									candidates.push_back(mat.substr(0, mat.size() - 1));
+							}
+
+							for (const std::string& candidate : candidates)
+							{
+								Texture* fallback = tryTy1Texture(candidate);
+								if (fallback != defaultTexture)
+								{
+									Debug::log("TY1: Texture fallback: " + mesh.material + " -> " + candidate);
+									texture = fallback;
+									break;
+								}
+							}
+						}
+					}
+
 					if (texture == defaultTexture)
 					{
 						std::cout << "Failed to load texture: '" + mesh.material + "' !" << std::endl

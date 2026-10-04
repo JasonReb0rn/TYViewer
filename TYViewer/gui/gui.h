@@ -19,11 +19,18 @@ struct GuiRect
 	}
 };
 
+enum class EntryKind
+{
+	Model,
+	Level
+};
+
 struct ModelEntry
 {
 	std::string name;
 	std::string archiveName; // "TY1" or "TY2"
-	int archiveIndex; // 0 for TY1, 1 for TY2
+	int archiveIndex = 0; // 0 for TY1, 1 for TY2
+	EntryKind kind = EntryKind::Model;
 };
 
 class Gui
@@ -57,10 +64,17 @@ public:
 	void setOnModelSelected(std::function<void(const ModelEntry&)> callback);
 	void setOnExportRequested(std::function<void()> callback);
 	void setOnExportRawRequested(std::function<void()> callback);
+	void setOnRecenterCamera(std::function<void()> callback);
+	void setOnCollisionToggle(std::function<void()> callback);
+	// available: the scene has collision meshes. visible: those meshes are drawn.
+	void setCollisionToggle(bool available, bool visible);
 	
 	// Model debugging
 	void setCurrentModel(class Model* model, const std::string& modelName);
 	void clearCurrentModel();
+	// Level (or other multi-mesh) view: names the button without enabling model export.
+	// canRecenter turns the recenter button on when room meshes are in the scene.
+	void setSceneLabel(const std::string& name, bool canRecenter);
 	
 	// Input handling
 	void onMouseButton(int button, int action, float x, float y);
@@ -69,9 +83,9 @@ public:
 	void onKeyPress(int key);
 	void onChar(unsigned int codepoint);
 
-	bool isInteracting() const { return dropdownOpen || hovering || activeSearchCategory != 0; }
+	bool isInteracting() const { return dropdownOpen || hovering || activeSearchCategory >= 0; }
 	// True when the GUI expects typed characters (e.g., search box focused)
-	bool isTextInputActive() const { return activeSearchCategory != 0; }
+	bool isTextInputActive() const { return activeSearchCategory >= 0; }
 
 private:
 	// ---------------------------------------------------------------------
@@ -104,6 +118,8 @@ private:
 	void renderButton();
 	void renderExportButton();
 	void renderExportRawButton();
+	void renderRecenterButton();
+	void renderCollisionButton();
 	void renderNotificationBanner();
 	void renderScrollbar();
 	void renderModelInfo();
@@ -113,6 +129,9 @@ private:
 	void markFilterDirty(int category);
 	void rebuildFilteredIndicesIfNeeded(int category);
 	void updateSubmenuScrollBounds();
+	void layoutDropdown();
+	void hoverCategory(int index);
+	bool hasCategory(int index) const;
 	static bool containsCaseInsensitive(const std::string& haystack, const std::string& needle);
 	static char normalizeSearchChar(char c);
 	
@@ -125,6 +144,8 @@ private:
 	GuiRect buttonRect;
 	GuiRect exportButtonRect;
 	GuiRect exportRawButtonRect;
+	GuiRect recenterButtonRect;
+	GuiRect collisionButtonRect;
 	GuiRect notificationRect;
 	GuiRect dropdownRect;
 	GuiRect submenuRect;
@@ -132,12 +153,24 @@ private:
 	GuiRect modelInfoRect;
 	GuiRect materialListRect;
 	
+	static constexpr int kCategoryCount = 4;
+
+	struct Category
+	{
+		std::string label;
+		glm::vec4 hoverColor = glm::vec4(0.3f, 0.3f, 0.3f, 1.0f);
+		std::vector<ModelEntry> entries;
+		std::string search;
+		bool filterDirty = true;
+		std::vector<int> filteredIndices;
+	};
+
 	std::vector<ModelEntry> models;
-	std::vector<ModelEntry> ty1Models;
-	std::vector<ModelEntry> ty2Models;
+	Category categories[kCategoryCount];
 	
 	ModelEntry* selectedModel;
 	std::string currentModelName;
+	bool sceneLoaded = false;
 	
 	// Current model for debugging
 	class Model* currentModel;
@@ -148,17 +181,11 @@ private:
 	bool dropdownOpen;
 	bool hovering;
 	bool submenuOpen;
-	int hoveredCategory; // 0 = none, 1 = TY1, 2 = TY2
+	int hoveredCategory; // -1 = none, otherwise index into categories
 	int hoveredSubmenuItem; // Index in filtered submenu list, -1 if none
 
-	// Search bar state (one per submenu)
-	int activeSearchCategory; // 0 = none, 1 = TY1, 2 = TY2
-	std::string ty1Search;
-	std::string ty2Search;
-	bool ty1FilterDirty;
-	bool ty2FilterDirty;
-	std::vector<int> ty1FilteredIndices; // indices into ty1Models
-	std::vector<int> ty2FilteredIndices; // indices into ty2Models
+	// Search bar state. -1 = none, otherwise index into categories.
+	int activeSearchCategory;
 	
 	float mouseX, mouseY; // Track current mouse position
 	
@@ -168,6 +195,10 @@ private:
 	std::function<void(const ModelEntry&)> onModelSelected;
 	std::function<void()> onExportRequested;
 	std::function<void()> onExportRawRequested;
+	std::function<void()> onRecenterCamera;
+	std::function<void()> onCollisionToggle;
+	bool collisionAvailable = false;
+	bool collisionVisible = false;
 
 	// Notification state
 	bool notificationActive = false;

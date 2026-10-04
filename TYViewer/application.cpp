@@ -1,5 +1,8 @@
 #include "application.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <vector>
 #include <filesystem>
 
@@ -9,6 +12,12 @@
 #include "export/obj_exporter.h"
 #include "export/raw_exporter.h"
 #include "util/folder_picker.h"
+#include "util/bitconverter.h"
+#include "util/stringext.h"
+
+#include <cctype>
+#include <cstring>
+#include <sstream>
 
 std::string Application::APPLICATION_PATH = "";
 std::string Application::ARCHIVE_PATH = "";
@@ -327,43 +336,60 @@ void Application::initialize()
 	// Initialize screen-space debug overlay (vertex indices)
 	initializeVertexIdOverlay();
 	
-	// Scan archives for models and populate GUI
+	// Scan archives for models and levels and populate GUI
 	std::vector<ModelEntry> modelEntries;
+
+	auto addEntries = [&](const std::vector<std::string>& names, const char* archiveName, int archiveIndex, EntryKind kind)
+	{
+		for (const auto& entryName : names)
+		{
+			ModelEntry entry;
+			entry.name = entryName;
+			entry.archiveName = archiveName;
+			entry.archiveIndex = archiveIndex;
+			entry.kind = kind;
+			modelEntries.push_back(entry);
+		}
+	};
 	
 	if (ty1Loaded)
 	{
 		std::vector<std::string> ty1Models = content.getModelList(0);
 		Debug::log("Found " + std::to_string(ty1Models.size()) + " models in TY1 archive");
-		for (const auto& modelName : ty1Models)
-		{
-			ModelEntry entry;
-			entry.name = modelName;
-			entry.archiveName = "TY1";
-			entry.archiveIndex = 0;
-			modelEntries.push_back(entry);
-		}
+		addEntries(ty1Models, "TY1", 0, EntryKind::Model);
+
+		std::vector<std::string> ty1Levels = content.getLevelList(0);
+		Debug::log("Found " + std::to_string(ty1Levels.size()) + " levels in TY1 archive");
+		addEntries(ty1Levels, "TY1", 0, EntryKind::Level);
 	}
 	
 	if (ty2Loaded)
 	{
 		std::vector<std::string> ty2Models = content.getModelList(1);
 		Debug::log("Found " + std::to_string(ty2Models.size()) + " models in TY2 archive");
-		for (const auto& modelName : ty2Models)
-		{
-			ModelEntry entry;
-			entry.name = modelName;
-			entry.archiveName = "TY2";
-			entry.archiveIndex = 1;
-			modelEntries.push_back(entry);
-		}
+		addEntries(ty2Models, "TY2", 1, EntryKind::Model);
+
+		std::vector<std::string> ty2Levels = content.getLevelList(1);
+		Debug::log("Found " + std::to_string(ty2Levels.size()) + " levels in TY2 archive");
+		addEntries(ty2Levels, "TY2", 1, EntryKind::Level);
 	}
 	
 	gui->setModelList(modelEntries);
 	
-	// Set callback for model selection
+	// Set callback for model and level selection
 	gui->setOnModelSelected([this](const ModelEntry& entry) {
-		Debug::log("Model selected: " + entry.name + " from " + entry.archiveName);
-		loadModel(entry.name, entry.archiveIndex);
+		Debug::log("Selected: " + entry.name + " from " + entry.archiveName);
+		if (entry.kind == EntryKind::Level)
+		{
+			if (entry.archiveIndex == 0)
+				loadTy1Level(entry.name);
+			else
+				inspectTy2Level(entry.name);
+		}
+		else
+		{
+			loadModel(entry.name, entry.archiveIndex);
+		}
 	});
 
 	// Set callback for exporting the currently-loaded model
@@ -372,6 +398,13 @@ void Application::initialize()
 	});
 	gui->setOnExportRawRequested([this]() {
 		exportCurrentModelRaw();
+	});
+	gui->setOnRecenterCamera([this]() {
+		if (!models.empty())
+			frameCameraOnLoadedModels();
+	});
+	gui->setOnCollisionToggle([this]() {
+		setCollisionMeshesVisible(!collisionMeshesVisible);
 	});
 	
 	// Load initial model if specified in config
@@ -391,6 +424,7 @@ void Application::loadModel(const std::string& modelName, int archiveIndex)
 {
 	// Clear existing models
 	clearModels();
+	viewingLevel = false;
 	
 	// Set active archive
 	content.setActiveArchive(archiveIndex);
@@ -414,6 +448,9 @@ void Application::loadModel(const std::string& modelName, int archiveIndex)
 		{
 			gui->setCurrentModel(loadedModel, modelName);
 		}
+
+		frameCameraOnModel(loadedModel);
+		setCollisionMeshesVisible(true);
 	}
 	else
 	{
@@ -422,6 +459,344 @@ void Application::loadModel(const std::string& modelName, int archiveIndex)
 		{
 			gui->showNotification("Failed to load: " + modelName, Gui::NotificationKind::Error, 4.0f);
 		}
+		refreshCollisionToggle();
+	}
+}
+
+namespace
+{
+	std::string trimCopy(std::string value)
+	{
+		size_t start = 0;
+		while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start])))
+			start++;
+		size_t end = value.size();
+		while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1])))
+			end--;
+		return value.substr(start, end - start);
+	}
+
+	std::string lowerCopy(std::string value)
+	{
+		std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c)
+		{
+			return static_cast<char>(std::tolower(c));
+		});
+		return value;
+	}
+
+	bool isCollisionStem(const std::string& part)
+	{
+		// Collide / Collision / Colide / Collsion / collde.
+		return part.find("collid") != std::string::npos
+			|| part.find("collis") != std::string::npos
+			|| part.find("colid") != std::string::npos
+			|| part.find("colls") != std::string::npos
+			|| part.find("colld") != std::string::npos;
+	}
+
+	bool isCollisionMaterialName(const std::string& material)
+	{
+		const std::string lower = lowerCopy(material);
+		// Suffixed default Max material. The unsuffixed t0103_01.dds is a real texture.
+		if (lower.rfind("t0103_01_", 0) == 0)
+			return true;
+		if (lower == "collision")
+			return true;
+		return lower.rfind("material #", 0) == 0;
+	}
+
+	bool isUntexturedCollisionPrefix(const std::string& part)
+	{
+		return part.find("invis") != std::string::npos
+			|| part.rfind("c_", 0) == 0
+			|| part.rfind("c ", 0) == 0;
+	}
+
+	bool isCollisionMesh(const Mesh* mesh, Content& content)
+	{
+		if (mesh == nullptr)
+			return false;
+
+		const std::string part = lowerCopy(mesh->getPartName());
+		const std::string material = mesh->getMaterialName();
+		if (isCollisionStem(part) || isCollisionMaterialName(material))
+			return true;
+		if (!isUntexturedCollisionPrefix(part))
+			return false;
+		return !content.hasActiveFile(material + ".dds");
+	}
+
+	bool isEnvPartName(const std::string& name)
+	{
+		return lowerCopy(name).rfind("env", 0) == 0;
+	}
+
+	bool sameName(const std::string& a, const std::string& b)
+	{
+		return lowerCopy(a) == lowerCopy(b);
+	}
+
+	void appendMdlNames(const std::string& value, std::vector<std::string>& out)
+	{
+		const std::string lower = lowerCopy(value);
+		size_t pos = 0;
+		while (pos < lower.size())
+		{
+			const size_t ext = lower.find(".mdl", pos);
+			if (ext == std::string::npos)
+				break;
+
+			size_t start = ext;
+			while (start > 0)
+			{
+				const unsigned char prev = static_cast<unsigned char>(value[start - 1]);
+				if (std::isspace(prev) || value[start - 1] == ',' || value[start - 1] == '=')
+					break;
+				start--;
+			}
+
+			const std::string name = trimCopy(value.substr(start, ext + 4 - start));
+			if (!name.empty())
+			{
+				bool seen = false;
+				for (const std::string& existing : out)
+				{
+					if (sameName(existing, name))
+					{
+						seen = true;
+						break;
+					}
+				}
+				if (!seen)
+					out.push_back(name);
+			}
+			pos = ext + 4;
+		}
+	}
+
+	std::vector<std::string> roomModelsFromLv2(const std::string& text)
+	{
+		std::vector<std::string> names;
+		std::istringstream stream(text);
+		std::string line;
+		while (std::getline(stream, line))
+		{
+			if (!line.empty() && line.back() == '\r')
+				line.pop_back();
+
+			const size_t comment = line.find("//");
+			if (comment != std::string::npos)
+				line = line.substr(0, comment);
+
+			const size_t eq = line.find('=');
+			if (eq == std::string::npos)
+				continue;
+
+			const std::string key = lowerCopy(trimCopy(line.substr(0, eq)));
+			const bool take = (key == "ground" || key == "envcube" || key.rfind("overlay", 0) == 0);
+			if (!take)
+				continue;
+
+			appendMdlNames(line.substr(eq + 1), names);
+		}
+		return names;
+	}
+
+	bool looksLikePropName(const std::string& name)
+	{
+		if (name.size() < 4 || name.size() > 64)
+			return false;
+		if (name.find('_') == std::string::npos || name.find(' ') != std::string::npos)
+			return false;
+		if ((name[0] == 'P' || name[0] == 'p') && std::isdigit(static_cast<unsigned char>(name[1])))
+			return true;
+		return lowerCopy(name).rfind("prop", 0) == 0;
+	}
+
+	std::string versionStringIn(const char* data, size_t size)
+	{
+		const char needle[] = "Data File version";
+		const size_t needleLen = sizeof(needle) - 1;
+		for (size_t i = 0; i + needleLen <= size; i++)
+		{
+			if (std::memcmp(data + i, needle, needleLen) != 0)
+				continue;
+
+			size_t start = i;
+			while (start > 0)
+			{
+				const unsigned char prev = static_cast<unsigned char>(data[start - 1]);
+				if (prev < 32 || prev >= 127)
+					break;
+				start--;
+			}
+			size_t end = i + needleLen;
+			while (end < size)
+			{
+				const unsigned char next = static_cast<unsigned char>(data[end]);
+				if (next < 32 || next >= 127)
+					break;
+				end++;
+			}
+			return std::string(data + start, data + end);
+		}
+		return {};
+	}
+
+	std::vector<std::string> propNamesIn(const char* data, size_t size)
+	{
+		std::vector<std::string> names;
+		for (size_t i = 0; i < size; )
+		{
+			const unsigned char c = static_cast<unsigned char>(data[i]);
+			if (c < 32 || c >= 127)
+			{
+				i++;
+				continue;
+			}
+
+			size_t j = i;
+			while (j < size)
+			{
+				const unsigned char d = static_cast<unsigned char>(data[j]);
+				if (d < 32 || d >= 127)
+					break;
+				j++;
+			}
+
+			const bool terminated = (j == size) || data[j] == '\0';
+			if (terminated && j > i)
+			{
+				const std::string name(data + i, data + j);
+				if (looksLikePropName(name))
+				{
+					bool seen = false;
+					for (const std::string& existing : names)
+					{
+						if (sameName(existing, name))
+						{
+							seen = true;
+							break;
+						}
+					}
+					if (!seen)
+						names.push_back(name);
+				}
+			}
+			i = j + 1;
+		}
+		return names;
+	}
+}
+
+void Application::loadTy1Level(const std::string& levelName)
+{
+	clearModels();
+	content.setActiveArchive(0);
+	currentModelArchiveIndex = 0;
+	currentModelName = levelName;
+
+	std::vector<char> data;
+	if (!content.getActiveFileData(levelName, data) || data.empty())
+	{
+		Debug::log("Failed to read TY1 level: " + levelName);
+		if (gui)
+		{
+			gui->setSceneLabel(levelName, false);
+			gui->showNotification("Failed to read: " + levelName, Gui::NotificationKind::Error, 4.0f);
+		}
+		return;
+	}
+
+	const std::string text(data.begin(), data.end());
+	const std::vector<std::string> roomNames = roomModelsFromLv2(text);
+	Debug::log("TY1 level " + levelName + " room meshes: " + std::to_string(roomNames.size()));
+
+	for (const std::string& roomName : roomNames)
+	{
+		Model* loaded = content.load<Model>(roomName);
+		if (loaded == nullptr)
+		{
+			Debug::log("Level room mesh missing: " + roomName);
+			continue;
+		}
+		models.push_back(loaded);
+		Debug::log("Loaded level room mesh: " + roomName);
+	}
+
+	if (models.empty())
+	{
+		Debug::log("No room meshes in " + levelName);
+		if (gui)
+		{
+			gui->setSceneLabel(levelName, false);
+			gui->showNotification("No room meshes in " + levelName, Gui::NotificationKind::Info, 4.0f);
+		}
+		refreshCollisionToggle();
+		return;
+	}
+
+	viewingLevel = true;
+	setCollisionMeshesVisible(false);
+	frameCameraOnLoadedModels();
+	if (gui)
+	{
+		gui->setSceneLabel(levelName, true);
+		gui->showNotification("Loaded " + std::to_string(models.size()) + " room meshes", Gui::NotificationKind::Success, 3.0f);
+	}
+}
+
+void Application::inspectTy2Level(const std::string& levelName)
+{
+	clearModels();
+	viewingLevel = false;
+	content.setActiveArchive(1);
+	currentModelArchiveIndex = 1;
+	currentModelName = levelName;
+
+	std::vector<char> data;
+	if (!content.getActiveFileData(levelName, data) || data.size() < 0x44)
+	{
+		Debug::log("Failed to read TY2 level chunk: " + levelName);
+		if (gui)
+		{
+			gui->setSceneLabel(levelName, false);
+			gui->showNotification("Failed to read: " + levelName, Gui::NotificationKind::Error, 4.0f);
+		}
+		return;
+	}
+
+	const std::string path = nts(data.data(), 0, 32);
+	const uint32_t constant = from_bytes<uint32_t>(data.data(), 0x20);
+	const uint32_t recordCount = from_bytes<uint32_t>(data.data(), 0x24);
+	const uint32_t payloadSize = from_bytes<uint32_t>(data.data(), 0x28);
+	const uint32_t stringOffset = from_bytes<uint32_t>(data.data(), 0x2C);
+	const uint32_t recordBytes = from_bytes<uint32_t>(data.data(), 0x30);
+
+	const char* payload = data.data() + 0x44;
+	const size_t payloadLen = data.size() - 0x44;
+	const std::string version = versionStringIn(payload, payloadLen);
+	const std::vector<std::string> props = propNamesIn(payload, payloadLen);
+
+	Debug::log("TY2 level " + levelName + " (not drawn)");
+	Debug::log("  path: " + path);
+	Debug::log("  constant: " + std::to_string(constant));
+	Debug::log("  records: " + std::to_string(recordCount));
+	Debug::log("  payload bytes: " + std::to_string(payloadSize) + " (file payload " + std::to_string(payloadLen) + ")");
+	Debug::log("  string table offset: " + std::to_string(stringOffset));
+	Debug::log("  record bytes: " + std::to_string(recordBytes));
+	Debug::log("  version: " + (version.empty() ? std::string("(not found)") : version));
+	Debug::log("  prop names: " + std::to_string(props.size()));
+
+	const size_t sampleCount = std::min<size_t>(props.size(), 8);
+	for (size_t i = 0; i < sampleCount; i++)
+		Debug::log("    " + props[i]);
+
+	if (gui)
+	{
+		gui->setSceneLabel(levelName, false);
+		gui->showNotification("Listed, not drawn: " + levelName, Gui::NotificationKind::Info, 4.0f);
 	}
 }
 
@@ -522,6 +897,199 @@ void Application::exportCurrentModelRaw()
 	}
 }
 
+void Application::frameCameraOnModel(const Model* model)
+{
+	std::vector<const Model*> one;
+	if (model != nullptr)
+		one.push_back(model);
+	frameCameraOnModels(one, false);
+}
+
+void Application::frameCameraOnLoadedModels()
+{
+	std::vector<const Model*> list;
+	list.reserve(models.size());
+	for (const Model* model : models)
+		list.push_back(model);
+	frameCameraOnModels(list, viewingLevel);
+}
+
+void Application::frameCameraOnModels(const std::vector<const Model*>& list, bool levelFraming)
+{
+	const float kDefaultFar = 30000.0f;
+
+	auto includeMesh = [&](const Mesh* mesh, int pass) -> bool
+	{
+		if (mesh == nullptr)
+			return false;
+		if (!levelFraming || pass >= 2)
+			return true;
+		const bool collision = isCollisionMesh(mesh, content);
+		const bool env = isEnvPartName(mesh->getPartName());
+		if (pass == 0)
+			return !collision && !env;
+		return !env;
+	};
+
+	auto accumulate = [&](int pass, glm::dvec3& sum, size_t& count)
+	{
+		sum = glm::dvec3(0.0);
+		count = 0;
+		for (const Model* model : list)
+		{
+			if (model == nullptr)
+				continue;
+			for (const Mesh* mesh : model->getMeshes())
+			{
+				if (!includeMesh(mesh, pass))
+					continue;
+				for (const Vertex& vertex : mesh->getVertices())
+				{
+					sum += glm::dvec3(vertex.position);
+					++count;
+				}
+			}
+		}
+	};
+
+	int pass = levelFraming ? 0 : 2;
+	glm::dvec3 sum(0.0);
+	size_t count = 0;
+	accumulate(pass, sum, count);
+	if (levelFraming && count == 0)
+	{
+		pass = 1;
+		accumulate(pass, sum, count);
+	}
+	if (count == 0)
+	{
+		pass = 2;
+		accumulate(pass, sum, count);
+	}
+
+	if (count == 0)
+	{
+		camera.setPosition(glm::vec3(0.0f, 0.0f, -100.0f));
+		camera.setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
+		camera.setClipPlaneFar(kDefaultFar);
+		return;
+	}
+
+	const glm::vec3 center(sum / static_cast<double>(count));
+
+	float radius = 0.0f;
+	float sceneRadius = 0.0f;
+	for (const Model* model : list)
+	{
+		if (model == nullptr)
+			continue;
+		for (const Mesh* mesh : model->getMeshes())
+		{
+			if (mesh == nullptr)
+				continue;
+			const bool inFrame = includeMesh(mesh, pass);
+			for (const Vertex& vertex : mesh->getVertices())
+			{
+				const float distance = glm::length(glm::vec3(vertex.position) - center);
+				if (inFrame)
+					radius = std::max(radius, distance);
+				sceneRadius = std::max(sceneRadius, distance);
+			}
+		}
+	}
+	if (radius < 0.05f)
+		radius = 0.05f;
+
+	float aspect = camera.getAspectRatio();
+	if (aspect < 0.01f)
+		aspect = 16.0f / 9.0f;
+
+	const float vFov = glm::radians(camera.getFieldOfView());
+	const float hFov = 2.0f * std::atan(std::tan(vFov * 0.5f) * aspect);
+	float sinHalf = std::sin(std::min(vFov, hFov) * 0.5f);
+	if (sinHalf < 0.001f)
+		sinHalf = 0.001f;
+
+	// Sit just outside the bounding sphere so small, normal, and huge models all fill the view.
+	float dist = (radius / sinHalf) * 1.2f;
+	if (levelFraming)
+	{
+		// The skybox is huge. Even the playable terrain spans the whole map, so fitting
+		// all of it puts the eye minutes of flight away. Stay near the terrain instead.
+		const float cap = 6000.0f;
+		if (dist > cap)
+			dist = cap;
+	}
+	const float lift = dist * 0.12f;
+
+	const glm::vec3 worldCam = center + glm::vec3(0.0f, lift, dist);
+	// Eye is stored with world Z negated; render() flips Z before the view matrix.
+	const glm::vec3 eye(worldCam.x, worldCam.y, -worldCam.z);
+	const glm::vec3 look(center.x, center.y, -center.z);
+
+	glm::vec3 dir = look - eye;
+	const float dirLen = glm::length(dir);
+	if (dirLen < 0.0001f)
+		dir = glm::vec3(0.0f, 0.0f, 1.0f);
+	else
+		dir /= dirLen;
+
+	float pitch = glm::degrees(std::asin(glm::clamp(dir.y, -1.0f, 1.0f)));
+	const float yaw = glm::degrees(std::atan2(dir.z, dir.x));
+	if (pitch > 89.0f)
+		pitch = 89.0f;
+	if (pitch < -89.0f)
+		pitch = -89.0f;
+
+	camera.setPosition(eye);
+	camera.setRotation(glm::vec3(yaw, pitch, 0.0f));
+	const float farRadius = std::max(radius, sceneRadius);
+	camera.setClipPlaneFar(std::max(kDefaultFar, dist + farRadius * 3.0f + 50.0f));
+}
+
+void Application::setCollisionMeshesVisible(bool visible)
+{
+	bool any = false;
+	for (Model* model : models)
+	{
+		if (model == nullptr)
+			continue;
+		for (Mesh* mesh : model->getMeshes())
+		{
+			if (isCollisionMesh(mesh, content))
+			{
+				any = true;
+				mesh->setEnabled(visible);
+			}
+		}
+	}
+	collisionMeshesVisible = any ? visible : true;
+	refreshCollisionToggle();
+}
+
+void Application::refreshCollisionToggle()
+{
+	bool any = false;
+	for (const Model* model : models)
+	{
+		if (model == nullptr)
+			continue;
+		for (const Mesh* mesh : model->getMeshes())
+		{
+			if (isCollisionMesh(mesh, content))
+			{
+				any = true;
+				break;
+			}
+		}
+		if (any)
+			break;
+	}
+
+	if (gui)
+		gui->setCollisionToggle(any, any && collisionMeshesVisible);
+}
+
 void Application::clearModels()
 {
 	models.clear();
@@ -531,6 +1099,7 @@ void Application::clearModels()
 	if (gui)
 	{
 		gui->clearCurrentModel();
+		gui->setCollisionToggle(false, false);
 	}
 }
 void Application::run()
@@ -659,6 +1228,11 @@ void Application::update(float dt)
 	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_4))
 	{
 		drawBones = !drawBones;
+	}
+
+	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_C))
+	{
+		setCollisionMeshesVisible(!collisionMeshesVisible);
 	}
 
 	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_F))

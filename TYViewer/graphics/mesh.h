@@ -34,6 +34,9 @@ public:
 	std::string getMaterialName() const { return m_materialName; }
 	// Human-facing "mesh part"/component/subobject name (when available).
 	std::string getPartName() const { return m_partName; }
+	// Meshes created from one TY1 subobject share a group. -1 means ungrouped.
+	void setSubobjectGroup(int group) { m_subobjectGroup = group; }
+	int getSubobjectGroup() const { return m_subobjectGroup; }
 	void setEnabled(bool enabled) { m_enabled = enabled; }
 	bool isEnabled() const { return m_enabled; }
 	
@@ -63,5 +66,6 @@ private:
 	Texture* m_texture;
 	std::string m_materialName;
 	std::string m_partName;
+	int m_subobjectGroup = -1;
 	bool m_enabled;
 };

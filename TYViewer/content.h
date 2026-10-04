@@ -47,12 +47,25 @@ public:
 	
 	// Get list of all .mdl files from a specific archive
 	std::vector<std::string> getModelList(int archiveIndex);
+	// TY1: .lv2 files. TY2: *.lv3.bni chunks (not other .bni files).
+	std::vector<std::string> getLevelList(int archiveIndex);
 	
 	// Set active archive for loading
 	void setActiveArchive(int archiveIndex);
 	int getActiveArchive() const { return activeArchiveIndex; }
 	// Read raw bytes from the currently-active archive (useful for exporters/tools).
 	bool getActiveFileData(const std::string& name, std::vector<char>& data) const;
+	// True when the active archive contains a file with this name (case-insensitive).
+	bool hasActiveFile(const std::string& name) const
+	{
+		if (activeArchiveIndex < 0 || activeArchiveIndex > 1)
+			return false;
+		Archive* archive = archives[activeArchiveIndex];
+		if (archive == NULL)
+			return false;
+		File file;
+		return archive->getFile(name, file) && file.size != 0;
+	}
 
 	template<typename T>
 	T* load(const std::string& name)
