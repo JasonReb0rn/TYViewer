@@ -475,7 +475,8 @@ mdl2::Segment mdl2::parse_segment(const char* buffer, size_t offset, size_t& siz
 		size_t p = offset + 52 + (amount_of_vertices * 12) + 4 + (amount_of_vertices * 4) + 4 + (i * 8);
 
 		float x = from_bytes<int16_t>(buffer, p) / 4096.0f;
-		float y = std::abs((from_bytes<int16_t>(buffer, p + 2) / 4096.0f) - 1.0f);
+		// V is flipped. Do not abs(): stored V above 1 is a later tile, and abs mirrors it.
+		float y = 1.0f - (from_bytes<int16_t>(buffer, p + 2) / 4096.0f);
 
 		vertices[i].texcoord[0] = x;
 		vertices[i].texcoord[1] = y;

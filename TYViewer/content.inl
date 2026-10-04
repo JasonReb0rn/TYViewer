@@ -1007,6 +1007,30 @@ inline Model* Content::load(const std::string& name)
 					Mesh* meshPart = new Mesh(vertices, indices, texture, mesh.material, subobj.name);
 					meshPart->setBlend(materialDraw.blend);
 					meshPart->setAlphaRef(materialDraw.alphaRef);
+					// TY_B3_001 is opaque dirt. Room_b3_08 cliff sheets (Object02–Object05)
+					// store the fade in vertex alpha (0 or 128). Drawn with the dirt they
+					// write depth and hide the rock in a later room.
+					if (materialDraw.blend == MeshBlend::Opaque)
+					{
+						std::string matKey = mesh.material;
+						for (char& ch : matKey)
+						{
+							const unsigned char u = static_cast<unsigned char>(ch);
+							if (u >= 'A' && u <= 'Z')
+								ch = static_cast<char>(u - 'A' + 'a');
+						}
+						if (matKey == "ty_b3_001")
+						{
+							for (const Vertex& vert : vertices)
+							{
+								if (vert.colour[3] < 0.99f)
+								{
+									meshPart->setBlend(MeshBlend::Alpha);
+									break;
+								}
+							}
+						}
+					}
 					meshes.push_back(meshPart);
 					}
 				}
