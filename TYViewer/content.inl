@@ -1005,6 +1005,7 @@ inline Model* Content::load(const std::string& name)
 							<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;
 					}
 					Mesh* meshPart = new Mesh(vertices, indices, texture, mesh.material, subobj.name);
+					meshPart->setContent(this);
 					meshPart->setBlend(materialDraw.blend);
 					meshPart->setAlphaRef(materialDraw.alphaRef);
 					// TY_B3_001 is opaque dirt. Room_b3_08 cliff sheets (Object02–Object05)

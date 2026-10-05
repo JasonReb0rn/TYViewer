@@ -27,6 +27,8 @@
 
 #include "debug.h"
 
+#include <glm/mat3x3.hpp>
+
 
 #define MDL2_SUBMESH_SIZE 80
 
@@ -83,6 +85,17 @@ public:
 	template<>
 	Font* load<Font>(const std::string& name);
 
+	// global.mad texture-matrix animation. The modes are mutually exclusive in the game.
+	enum class Ty1UvAnim
+	{
+		None = 0,
+		Scroll,
+		Animate,
+		Rotate,
+		SinRotate,
+		EnvScroll
+	};
+
 	// TY1 global.mad entry. Unknown names stay opaque with no texture alias.
 	struct Ty1MaterialDraw
 	{
@@ -95,8 +108,27 @@ public:
 		// global.mad "masked 1" / "aref". Cutout cards (tree walls) discard below this.
 		bool masked = false;
 		float alphaRef = 0.01f;
+		// scroll / animate / rotate / sinrotate / envscroll parameters, in file order.
+		Ty1UvAnim uvAnim = Ty1UvAnim::None;
+		float uvParam[6] = {};
+		// ManuallyScrollTextures. Rates are UV units per second at 60 Hz.
+		// lockU replaces U every tick (SetMatrixX) before the scroll is added.
+		bool manualScroll = false;
+		float manualDu = 0.0f;
+		float manualDv = 0.0f;
+		bool lockU = false;
+		float lockedU = 0.0f;
 	};
 	Ty1MaterialDraw lookupTy1Material(const std::string& materialName);
+	// Playback clock for ty1UvMatrix. Yaw and pitch are radians.
+	void setTy1AnimClock(float timeSeconds, float yawRadians, float pitchRadians);
+	float ty1AnimTime() const { return ty1AnimTimeSeconds; }
+	float ty1AnimYaw() const { return ty1AnimYawRadians; }
+	float ty1AnimPitch() const { return ty1AnimPitchRadians; }
+	// Game texture matrix, conjugated through the TY1 mesh V flip, as a mat3.
+	glm::mat3 ty1UvMatrix(const std::string& materialName, float timeSeconds, float yawRadians, float pitchRadians) const;
+	// Animated sheets keep the texels past the mesh UV island instead of tiling them.
+	bool ty1UvClamped(const std::string& materialName) const;
 
 private:
 	void createDefaultTexture();
@@ -112,6 +144,9 @@ private:
 
 	bool ty1MaterialsReady = false;
 	std::unordered_map<std::string, Ty1MaterialDraw> ty1Materials;
+	float ty1AnimTimeSeconds = 0.0f;
+	float ty1AnimYawRadians = 0.0f;
+	float ty1AnimPitchRadians = 0.0f;
 };
 
 #include "content.inl"

@@ -3,6 +3,10 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
+#include <glm/mat3x3.hpp>
+
+#include "content.h"
+
 Mesh::Mesh() :
 	Drawable(),
 	Transformable(glm::vec3(0, 0, 0)),
@@ -126,8 +130,19 @@ void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& sty
 	shader.setUniform2f("clipOffset", style.solid ? style.clipOffset : glm::vec2(0.0f));
 	shader.setUniform1i("solidColour", style.solid ? 1 : 0);
 	shader.setUniform1f("alphaRef", m_alphaRef);
+	const glm::mat3 uv = m_content
+		? m_content->ty1UvMatrix(m_materialName, m_content->ty1AnimTime(), m_content->ty1AnimYaw(), m_content->ty1AnimPitch())
+		: glm::mat3(1.0f);
+	shader.setUniformMat3("uvMatrix", uv);
 	
 	m_texture->bind();
+	// Animated sheets have paint past the UV island. Repeating tiles that border
+	// back onto the surface. Clamp shows the edge texel instead. Other materials
+	// still tile, and wrap is set every draw because textures are shared.
+	const bool clampUv = m_content && m_content->ty1UvClamped(m_materialName);
+	const GLint wrap = clampUv ? GL_CLAMP_TO_EDGE : GL_REPEAT;
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
 
 	shader.setUniformMat4("modelMatrix", world * getMatrix());
 

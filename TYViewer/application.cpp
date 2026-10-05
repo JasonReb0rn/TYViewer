@@ -319,6 +319,7 @@ void Application::initialize()
 	shader->setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
 	shader->setUniform1f("alphaRef", 0.01f);
 	shader->setUniform1i("diffuseTexture", 0);
+	shader->setUniformMat3("uvMatrix", glm::mat3(1.0f));
 
 	basic = content.load<Shader>("standard.shader");
 	if (basic == nullptr)
@@ -1539,6 +1540,12 @@ void Application::onChar(unsigned int codepoint)
 
 void Application::update(float dt)
 {
+	ty1AnimTime += dt;
+	content.setTy1AnimClock(
+		ty1AnimTime,
+		glm::radians(camera.getRotation().x),
+		glm::radians(camera.getRotation().y));
+
 	float mouseInputX = Mouse::getMouseDelta().x;
 	float mouseInputY = Mouse::getMouseDelta().y;
 
@@ -1761,6 +1768,7 @@ void Application::render(Shader& shader)
 
 	shader.bind();
 	shader.setUniformMat4("VPMatrix", vpmatrix);
+	shader.setUniformMat3("uvMatrix", glm::mat3(1.0f));
 
 	// Opaque world first, then alpha and additive sheets. A waterfall drawn in
 	// file order writes depth and hides the cliff that is stored in a later room.
@@ -1802,6 +1810,7 @@ void Application::render(Shader& shader)
 	shader.setUniform2f("clipOffset", glm::vec2(0.0f));
 	shader.setUniform1i("solidColour", 0);
 	shader.setUniform1f("alphaRef", 0.01f);
+	shader.setUniformMat3("uvMatrix", glm::mat3(1.0f));
 
 	for (auto& label : labels)
 	{
@@ -1811,6 +1820,7 @@ void Application::render(Shader& shader)
 	basic->bind();
 	basic->setUniformMat4("VPMatrix", vpmatrix);
 	basic->setUniformMat4("modelMatrix", glm::mat4(1.0f));
+	basic->setUniformMat3("uvMatrix", glm::mat3(1.0f));
 	// Also reset tint for basic shader (they might share the same shader program)
 	basic->setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
 

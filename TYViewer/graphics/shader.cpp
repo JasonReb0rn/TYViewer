@@ -109,6 +109,10 @@ void Shader::setUniformMat4(const std::string& name, glm::mat4 mat)
 {
 	glUniformMatrix4fv(getUniformLocation(name), 1, GL_FALSE, &mat[0][0]);
 }
+void Shader::setUniformMat3(const std::string& name, glm::mat3 mat)
+{
+	glUniformMatrix3fv(getUniformLocation(name), 1, GL_FALSE, &mat[0][0]);
+}
 
 int Shader::getUniformLocation(const std::string& name)
 {
@@ -135,6 +139,7 @@ Shader* Shader::createDefault()
 
 		uniform mat4 VPMatrix;
 		uniform mat4 modelMatrix;
+		uniform mat3 uvMatrix;
 		uniform vec2 clipOffset;
 
 		out vec4 v_colour;
@@ -145,7 +150,7 @@ Shader* Shader::createDefault()
 			gl_Position = VPMatrix * modelMatrix * position;
 			gl_Position.xy += clipOffset * gl_Position.w;
 			v_colour = colour;
-			v_texcoord = texcoord;
+			v_texcoord = (uvMatrix * vec3(texcoord, 1.0)).xy;
 		}
 	)";
 

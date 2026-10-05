@@ -11,6 +11,8 @@
 #include "drawable.h"
 #include "transformable.h"
 
+class Content;
+
 // How a mesh composites. Opaque stays in the depth-writing pass.
 // Alpha, additive, and subtractive are drawn after every opaque mesh.
 enum class MeshBlend
@@ -67,6 +69,8 @@ public:
 	// Fragments below this alpha are discarded. Masked cards use the material aref.
 	void setAlphaRef(float alphaRef) { m_alphaRef = alphaRef; }
 	float getAlphaRef() const { return m_alphaRef; }
+	// TY1 materials look up their UV animation from this. Null stays untransformed.
+	void setContent(Content* content) { m_content = content; }
 	bool isTransparent() const { return m_blend != MeshBlend::Opaque; }
 	
 	// NOTE: UI/debug code expects `int`, but containers use `size_t`.
@@ -100,4 +104,5 @@ private:
 	bool m_defaultEnabled = true;
 	MeshBlend m_blend = MeshBlend::Opaque;
 	float m_alphaRef = 0.01f;
+	Content* m_content = nullptr;
 };

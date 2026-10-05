@@ -31,6 +31,7 @@ public:
 	void setUniform2f(const std::string& name, glm::vec2 v);
 	void setUniform4f(const std::string& name, glm::vec4 v);
 	void setUniformMat4(const std::string& name, glm::mat4 mat);
+	void setUniformMat3(const std::string& name, glm::mat3 mat);
 
 	static Shader* createDefault();
 
