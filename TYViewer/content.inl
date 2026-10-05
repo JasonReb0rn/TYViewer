@@ -1008,9 +1008,14 @@ inline Model* Content::load(const std::string& name)
 					meshPart->setContent(this);
 					meshPart->setBlend(materialDraw.blend);
 					meshPart->setAlphaRef(materialDraw.alphaRef);
-					// TY_B3_001 is opaque dirt. Room_b3_08 cliff sheets (Object02–Object05)
+					// TY_B3_001 is opaque dirt. Room_b3_08 cliff sheets (Object02-Object05)
 					// store the fade in vertex alpha (0 or 128). Drawn with the dirt they
-					// write depth and hide the rock in a later room.
+					// write depth and hide the rock in a later room. The same room's
+					// Object08 / Object09 / Gangplanks edges fade the same way on
+					// TY_B3_058 and its co-located materials (ty_b3_028, TY_B3_006,
+					// TY_B3_047); left opaque, those edges cut a hole through the world
+					// instead of blending over it. Room_b3_04's TY_B3_058 cave walls are
+					// solid (alpha 128 only) and are unaffected.
 					if (materialDraw.blend == MeshBlend::Opaque)
 					{
 						std::string matKey = mesh.material;
@@ -1020,7 +1025,8 @@ inline Model* Content::load(const std::string& name)
 							if (u >= 'A' && u <= 'Z')
 								ch = static_cast<char>(u - 'A' + 'a');
 						}
-						if (matKey == "ty_b3_001")
+						if (matKey == "ty_b3_001" || matKey == "ty_b3_058" ||
+							matKey == "ty_b3_028" || matKey == "ty_b3_006" || matKey == "ty_b3_047")
 						{
 							for (const Vertex& vert : vertices)
 							{

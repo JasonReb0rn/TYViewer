@@ -873,7 +873,7 @@ void Application::loadTy1Level(const std::string& levelName)
 	else
 		Debug::log("global.model missing; prop catalogs will be skipped");
 
-	levelObjects = parseTy1Instances(text, globalModelText, content.getModelList(0));
+	levelObjects = parseTy1Instances(text, globalModelText, content.getModelList(0), levelName);
 	levelObjectIds = ty1IdIndex(levelObjects);
 	propModels.clear();
 	std::unordered_set<Model*> seenProps;
@@ -1136,6 +1136,7 @@ void Application::computeInstanceWorldBounds()
 		instance.hasAabb = false;
 		glm::vec3 minCorner(std::numeric_limits<float>::max());
 		glm::vec3 maxCorner(-std::numeric_limits<float>::max());
+		float billboardRadius = 0.0f;
 		const glm::mat4 world = ty1InstanceMatrix(instance);
 		eachPlacedModel(instance, [&](const Model& placed)
 		{
@@ -1147,9 +1148,16 @@ void Application::computeInstanceWorldBounds()
 					corner.x + ((cornerIndex & 1) ? size.x : 0.0f),
 					corner.y + ((cornerIndex & 2) ? size.y : 0.0f),
 					corner.z + ((cornerIndex & 4) ? size.z : 0.0f));
-				const glm::vec3 point(world * glm::vec4(local, 1.0f));
-				minCorner = glm::min(minCorner, point);
-				maxCorner = glm::max(maxCorner, point);
+				if (instance.billboard)
+				{
+					billboardRadius = std::max(billboardRadius, glm::length(local * instance.scale));
+				}
+				else
+				{
+					const glm::vec3 point(world * glm::vec4(local, 1.0f));
+					minCorner = glm::min(minCorner, point);
+					maxCorner = glm::max(maxCorner, point);
+				}
 			}
 			instance.hasAabb = true;
 		});
@@ -1158,8 +1166,19 @@ void Application::computeInstanceWorldBounds()
 			// Pad a little so a point-sized prop (zero-volume bounds) doesn't sit
 			// exactly on a frustum edge and flicker as the camera turns.
 			const glm::vec3 pad(1.0f);
-			instance.worldAabbMin = minCorner - pad;
-			instance.worldAabbMax = maxCorner + pad;
+			if (instance.billboard)
+			{
+				// The gem turns with the camera. A cube around the mesh radius
+				// stays valid for every facing.
+				const glm::vec3 half(billboardRadius);
+				instance.worldAabbMin = instance.position - half - pad;
+				instance.worldAabbMax = instance.position + half + pad;
+			}
+			else
+			{
+				instance.worldAabbMin = minCorner - pad;
+				instance.worldAabbMax = maxCorner + pad;
+			}
 		}
 	}
 }
@@ -1798,7 +1817,8 @@ void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& i
 	glStencilFunc(GL_ALWAYS, 1, 0xFF);
 	glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
 
-	const glm::mat4 world = ty1InstanceMatrix(instance);
+	const glm::mat4 cameraView = camera.getViewMatrix();
+	const glm::mat4 world = ty1InstanceMatrix(instance, &cameraView);
 	auto drawParts = [&](const MeshDrawStyle& style)
 	{
 		eachPlacedModel(instance, [&](Model& placed)
@@ -1869,10 +1889,10 @@ void Application::render(Shader& shader)
 	else
 		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
-	// Display as a left-handed coordinate system.
-	glm::mat4 view;
-	view = camera.getViewMatrix();
-	view = glm::scale(view, glm::vec3(1.0f, 1.0f, -1.0f));
+	// Display as a left-handed coordinate system. `cameraView` is the stored
+	// eye (world Z negated). The scale maps prop world space into that eye.
+	const glm::mat4 cameraView = camera.getViewMatrix();
+	glm::mat4 view = glm::scale(cameraView, glm::vec3(1.0f, 1.0f, -1.0f));
 
 	glm::mat4 projection;
 	projection = camera.getProjectionMatrix();
@@ -1903,7 +1923,7 @@ void Application::render(Shader& shader)
 			RenderStats::instancesCulled++;
 			continue;
 		}
-		instanceWorld[index] = ty1InstanceMatrix(instance);
+		instanceWorld[index] = ty1InstanceMatrix(instance, &cameraView);
 		instanceDrawable[index] = true;
 		RenderStats::instancesVisited++;
 	}
@@ -2052,7 +2072,7 @@ void Application::render(Shader& shader)
 		{
 			if (!instance.visible)
 				continue;
-			const glm::mat4 world = ty1InstanceMatrix(instance);
+			const glm::mat4 world = ty1InstanceMatrix(instance, &cameraView);
 			eachPlacedModel(instance, [&](const Model& placed)
 			{
 				const glm::vec3 corner = placed.bounds_crn;

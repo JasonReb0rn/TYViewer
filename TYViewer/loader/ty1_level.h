@@ -53,6 +53,8 @@ struct Ty1Instance
 	glm::vec3 rotation{ 0.0f, 0.0f, 0.0f };
 	glm::vec3 scale{ 1.0f, 1.0f, 1.0f };
 	bool visible = true;
+	// Gem::Draw copies the camera rotation each frame. Level rot is not used.
+	bool billboard = false;
 	Ty1Kind kind = Ty1Kind::Prop;
 
 	// World-space box across `model` and `extraModel`, computed once after a level's
@@ -112,11 +114,15 @@ std::vector<Ty1InfoLine> describeTy1Instance(
 
 // Krome stores this as a row-vector matrix (scale, then pitch, yaw, roll, translation
 // in the last row). The returned matrix is that transform for a column-vector shader.
-glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance);
+// A billboard ignores level rot. `cameraView` is Camera::getViewMatrix (eye Z negated,
+// before render flips Z). Null keeps the stored rotation.
+glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance, const glm::mat4* cameraView = nullptr);
 
 // `globalModelText` is the archive file global.model. `mdlFiles` is every .mdl name.
-// Instances with no mesh keep an empty modelFile and still appear in the list.
+// `levelFile` is the .lv2 name (`a1.lv2`, `a1ex.lv2`). It picks the opal and thunder
+// egg mesh. Instances with no mesh keep an empty modelFile and still appear in the list.
 std::vector<Ty1Instance> parseTy1Instances(
 	const std::string& levelText,
 	const std::string& globalModelText,
-	const std::vector<std::string>& mdlFiles);
+	const std::vector<std::string>& mdlFiles,
+	const std::string& levelFile);

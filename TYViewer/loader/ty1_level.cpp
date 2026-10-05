@@ -1,6 +1,8 @@
 #include "ty1_level.h"
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/mat3x3.hpp>
+#include <glm/matrix.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -172,7 +174,6 @@ namespace
 		static const Pair kExtra[] =
 		{
 			{ "TY", "Act_01_ty" },
-			{ "OPAL", "Prop_0270_FireOpal" },
 			{ "SIGNPOST", "Prop_0005_signpost" },
 			{ "EXTRALIFE", "Prop_0534_Lifeup" },
 			{ "TASIGNPOST", "Prop_0393_SignPost" },
@@ -316,6 +317,62 @@ namespace
 		return key == "CRATE" || key == "B3CRATE" || key == "INVISICRATE";
 	}
 
+	// Level id from `a1.lv2` or `a1ex.lv2`: drop the path, extension, and a trailing "ex".
+	std::string levelIdFromFile(const std::string& levelFile)
+	{
+		std::string name = levelFile;
+		const size_t slash = name.find_last_of("/\\");
+		if (slash != std::string::npos)
+			name = name.substr(slash + 1);
+		const size_t dot = name.find_last_of('.');
+		if (dot != std::string::npos)
+			name = name.substr(0, dot);
+		name = lowerCopy(name);
+		if (name.size() > 2 && name.compare(name.size() - 2, 2, "ex") == 0)
+			name = name.substr(0, name.size() - 2);
+		return name;
+	}
+
+	// Opal and thunder egg meshes for one level. The .lv2 type name is the same in
+	// every world; the game picks the mesh from the level id. An id that is not in
+	// the table keeps the fire pair. Rainbow thunder eggs stay the red mesh.
+	struct CollectibleModels
+	{
+		const char* opal = "Prop_0270_FireOpal";
+		const char* egg = "Prop_0084_ThunderEgg";
+	};
+
+	CollectibleModels collectibleModels(const std::string& levelFile)
+	{
+		CollectibleModels models;
+		const std::string id = levelIdFromFile(levelFile);
+		if (id.size() != 2 || id[1] < '1' || id[1] > '4')
+			return models;
+
+		const char zone = id[0];
+		const char index = id[1];
+		if (zone == 'z')
+			models.opal = "Prop_0218_RainbowScale";
+		else if (zone == 'b' || (zone == 'd' && index == '4'))
+		{
+			models.opal = "prop_0380_IceOpal";
+			models.egg = "prop_0573_bluethunderegg";
+		}
+		else if (zone == 'c' || (zone == 'd' && index != '4'))
+		{
+			models.opal = "prop_0382_AirOpal";
+			models.egg = "prop_0571_greenthunderegg";
+		}
+		else if (zone == 'e')
+		{
+			models.opal = "Prop_0381_EarthOpal";
+			models.egg = "prop_0572_ylwthunderegg";
+		}
+		else if (zone != 'a')
+			return CollectibleModels{};
+		return models;
+	}
+
 	// `type = N,label` on CAGEDBILBY. Dad has no dad-named mesh; Act_04_Bilby is the remaining one.
 	const char* cagedBilbyModel(const std::string& label)
 	{
@@ -377,14 +434,28 @@ namespace
 	}
 }
 
-glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance)
+glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance, const glm::mat4* cameraView)
 {
 	// Transpose of (scale * Rx * Ry * Rz) with translation in the last row.
 	glm::mat4 matrix(1.0f);
 	matrix = glm::translate(matrix, instance.position);
-	matrix = glm::rotate(matrix, -instance.rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
-	matrix = glm::rotate(matrix, -instance.rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
-	matrix = glm::rotate(matrix, -instance.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
+	if (instance.billboard && cameraView != nullptr)
+	{
+		// Inverse of the view rotation is camera right, up, and back in the
+		// Z-negated space Camera stores. Flip each axis Z into prop world space.
+		const glm::mat3 facing = glm::transpose(glm::mat3(*cameraView));
+		glm::mat4 rotation(1.0f);
+		rotation[0] = glm::vec4(facing[0].x, facing[0].y, -facing[0].z, 0.0f);
+		rotation[1] = glm::vec4(facing[1].x, facing[1].y, -facing[1].z, 0.0f);
+		rotation[2] = glm::vec4(facing[2].x, facing[2].y, -facing[2].z, 0.0f);
+		matrix *= rotation;
+	}
+	else
+	{
+		matrix = glm::rotate(matrix, -instance.rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
+		matrix = glm::rotate(matrix, -instance.rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
+		matrix = glm::rotate(matrix, -instance.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
+	}
 	matrix = glm::scale(matrix, instance.scale);
 	return matrix;
 }
@@ -392,8 +463,10 @@ glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance)
 std::vector<Ty1Instance> parseTy1Instances(
 	const std::string& levelText,
 	const std::string& globalModelText,
-	const std::vector<std::string>& mdlFiles)
+	const std::vector<std::string>& mdlFiles,
+	const std::string& levelFile)
 {
+	const CollectibleModels collectibles = collectibleModels(levelFile);
 	const std::unordered_map<std::string, std::string> catalog = catalogFromGlobalModel(globalModelText);
 
 	std::unordered_map<std::string, std::string> canonical;
@@ -480,6 +553,13 @@ std::vector<Ty1Instance> parseTy1Instances(
 
 			current.typeName = type;
 			current.modelFile = modelForType(type);
+			if (key == "OPAL")
+			{
+				current.modelFile = canonicalFile(collectibles.opal);
+				current.billboard = true;
+			}
+			else if (key == "THUNDEREGG")
+				current.modelFile = canonicalFile(collectibles.egg);
 			if (key == "CAGEDBILBY")
 			{
 				current.modelFile = canonicalFile(cagedBilbyModel(current.variantLabel));
