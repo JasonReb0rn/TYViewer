@@ -67,7 +67,8 @@ struct Ty1Instance
 	float boxPitch = 0.0f;
 	glm::vec3 boxSize{ 0.0f, 0.0f, 0.0f };
 
-	// Trigger sphere, sound radius, or an enemy `range` / dive `radius`.
+	// Trigger sphere, sound radius, an enemy `range` / dive `radius`,
+	// or the restart approach sphere. That radius is 500 and is not in the file.
 	bool hasSphere = false;
 	bool soundSphere = false;
 	bool rangeSphere = false;

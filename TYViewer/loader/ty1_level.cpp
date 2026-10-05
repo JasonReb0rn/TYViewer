@@ -150,7 +150,7 @@ namespace
 		static const char* kNames[] =
 		{
 			"DIALOG", "TRIGGERBOX", "TRIGGERSPHERE", "SOUNDPROP",
-			"SCRIPT", "PATH", "WATERVOLUME", "RESTART",
+			"SCRIPT", "PATH", "WATERVOLUME",
 		};
 		for (const char* name : kNames)
 		{
@@ -186,6 +186,10 @@ namespace
 			{ "INVISICRATE", "Prop_0345_InvisibleCrate" },
 			{ "FRILLLIZARD", "Act_07_Frill" },
 			{ "SWIMMINGCROC", "Act_02_croc" },
+			{ "MUDCRAB", "act_03_muddie" },
+			{ "RHINORUNNER", "Act_36_Rhino" },
+			{ "RHINORUNNERGROUND", "Act_36_Rhino" },
+			{ "TELEPORTER", "Prop_0365_WarpMushroom" },
 			{ "BURNINGLOG", "prop_0372_FlameLog" },
 			{ "BUNYIPELDER", "act_86_ElderBunyip" },
 			{ "THUNDEGGCOLLECTOR", "Prop_0403_ThundEggGun" },
@@ -201,6 +205,7 @@ namespace
 			{ "ELEVATOR1", "Prop_0108_Elevator" },
 			{ "FINISHLINE", "Prop_0088_FinishLine" },
 			{ "TIMEATTACKRING", "Prop_0413_TimeAttackRing" },
+			{ "RESTART", "Prop_0018_Thunderbox" },
 		};
 		for (const Pair& pair : kExtra)
 		{
@@ -480,6 +485,14 @@ std::vector<Ty1Instance> parseTy1Instances(
 				current.modelFile = canonicalFile(cagedBilbyModel(current.variantLabel));
 				current.extraModelFile = canonicalFile("Prop_0044_cage");
 			}
+			else if (key == "RESTART")
+			{
+				current.extraModelFile = canonicalFile("Prop_0092_DunnyRoll");
+				// CheckpointStruct::Dormant activates when Ty is inside this sphere.
+				current.hasSphere = true;
+				current.spherePosition = current.position;
+				current.sphereRadius = 500.0f;
+			}
 			current.closePath = key == "PATH";
 			// A water dragon is one creature at a point. It has no roam scale, so the
 			// large-scale test never marks it.
@@ -654,6 +667,13 @@ std::vector<Ty1Instance> parseTy1Instances(
 		else if (key == "rot" && !hasRot)
 		{
 			hasRot = readVec3(rhs, current.rotation);
+		}
+		else if (key == "yaw" && !hasRot)
+		{
+			// Teleporters face with `Yaw` and never write `rot`. Same slot as rot's yaw.
+			float yaw = 0.0f;
+			if (readFloat(rhs, yaw))
+				current.rotation.y = yaw;
 		}
 		else if (key == "scale" && !hasScale)
 		{
