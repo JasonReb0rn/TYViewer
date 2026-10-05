@@ -45,11 +45,22 @@ public:
 	virtual void draw(Shader& shader) const override;
 	// `world` is the placed instance. Room meshes pass identity.
 	void draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& style = {}) const;
+	// One draw call for every entry in `worlds`. Used when many level objects share
+	// this mesh (the common case for props). Skips the call when disabled or empty.
+	void drawInstanced(Shader& shader, const std::vector<glm::mat4>& worlds, const MeshDrawStyle& style = {}) const;
 
 	// Raw vertex access (debug/overlay). Order matches parsed file order.
 	const std::vector<Vertex>& getVertices() const { return m_vertices; }
 	// Raw index access (triangulated). Indices are into `getVertices()` and are in groups of 3.
 	const std::vector<unsigned int>& getIndices() const { return m_indices; }
+
+	// Local-space AABB of this mesh's vertices, padded by 1 unit (computed once
+	// at construction). false when the mesh has no vertices; such a mesh is never
+	// culled since there is nothing to draw anyway. Room meshes pass identity as
+	// `world`, so this box is already in the same space as the frustum test.
+	bool hasLocalAabb() const { return m_hasLocalAabb; }
+	const glm::vec3& getLocalAabbMin() const { return m_localAabbMin; }
+	const glm::vec3& getLocalAabbMax() const { return m_localAabbMax; }
 	
 	// "Material" here is the texture/material slot name as provided by the game formats.
 	// Multiple mesh parts can share the same material name.
@@ -90,6 +101,10 @@ public:
 
 private:
 	void setup();
+	void computeLocalAabb();
+	// Shared uniform/texture/blend state for both draw paths. Leaves modelMatrix,
+	// useInstancing, the VAO bind, and the draw call itself to the caller.
+	void prepareDraw(Shader& shader, const MeshDrawStyle& style) const;
 
 	unsigned int vao, vbo, ebo;
 
@@ -98,8 +113,15 @@ private:
 
 	Texture* m_texture;
 	std::string m_materialName;
+	// Lowercased once at construction. draw()/drawInstanced() look up global.mad
+	// state by this every frame; the lowercase + hash lookup used to happen three
+	// times per draw call (uv matrix, wrap, water), each re-lowercasing the name.
+	std::string m_materialNameLower;
 	std::string m_partName;
 	int m_subobjectGroup = -1;
+	bool m_hasLocalAabb = false;
+	glm::vec3 m_localAabbMin{ 0.0f, 0.0f, 0.0f };
+	glm::vec3 m_localAabbMax{ 0.0f, 0.0f, 0.0f };
 	bool m_enabled;
 	bool m_defaultEnabled = true;
 	MeshBlend m_blend = MeshBlend::Opaque;

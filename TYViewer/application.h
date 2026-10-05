@@ -91,6 +91,13 @@ private:
 	std::unordered_map<int, int> levelObjectIds;
 	// Unique prop models. Not drawn at the origin; instances reference them.
 	std::vector<Model*> propModels;
+	// Mesh part shared by every instance that places it, to the levelObjects indices
+	// that place it. Rebuilt once when a level loads (rebuildPropBatches). Visibility
+	// and frustum culling are applied per instance, per frame, in Application::render.
+	std::unordered_map<Mesh*, std::vector<int>> propMeshInstances;
+	// Reused every frame for one batch's world matrices, so a 2000+ object level
+	// doesn't reallocate a vector per mesh part per frame.
+	std::vector<glm::mat4> scratchInstanceMatrices;
 	int selectedLevelObject = -1;
 	// Animation clock. Half of real time: TY1 presents at 30 Hz (lockTo30).
 	float ty1AnimTime = 0.0f;
@@ -111,6 +118,10 @@ private:
 	void refreshCollisionToggle();
 	void capturePartDefaults();
 	void syncCollisionVisibility();
+	// Groups levelObjects by the Mesh parts they place, for instanced batch drawing.
+	void rebuildPropBatches();
+	// Fills in Ty1Instance::worldAabbMin/Max/hasAabb for every placed instance.
+	void computeInstanceWorldBounds();
 
 	// ------------------------------------------------------------------
 	// Screen-space vertex index overlay ("V")

@@ -55,6 +55,14 @@ struct Ty1Instance
 	bool visible = true;
 	Ty1Kind kind = Ty1Kind::Prop;
 
+	// World-space box across `model` and `extraModel`, computed once after a level's
+	// props finish loading (Application::computeInstanceWorldBounds). Used to
+	// frustum-cull this instance out of the per-frame draw batches. false when this
+	// instance has no mesh (a pure trigger/patrol/sound has nothing to cull).
+	bool hasAabb = false;
+	glm::vec3 worldAabbMin{ 0.0f, 0.0f, 0.0f };
+	glm::vec3 worldAabbMax{ 0.0f, 0.0f, 0.0f };
+
 	// Flock roam box, or a water volume. Full size, centered on `position`,
 	// turned by `rotation`. Not the mesh scale.
 	bool critter = false;

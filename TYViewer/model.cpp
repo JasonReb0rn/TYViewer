@@ -1,10 +1,28 @@
 #include "Model.h"
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/common.hpp>
 
 Model::Model(const std::vector<Mesh*>& meshes) :
 	meshes(meshes)
-{}
+{
+	for (const Mesh* mesh : meshes)
+	{
+		if (mesh == nullptr || !mesh->hasLocalAabb())
+			continue;
+		if (!m_hasLocalAabb)
+		{
+			m_localAabbMin = mesh->getLocalAabbMin();
+			m_localAabbMax = mesh->getLocalAabbMax();
+			m_hasLocalAabb = true;
+		}
+		else
+		{
+			m_localAabbMin = glm::min(m_localAabbMin, mesh->getLocalAabbMin());
+			m_localAabbMax = glm::max(m_localAabbMax, mesh->getLocalAabbMax());
+		}
+	}
+}
 Model::~Model()
 {
 	for (int i = 0; i < meshes.size(); i++)

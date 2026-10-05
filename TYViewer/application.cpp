@@ -1,6 +1,7 @@
 #include "application.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <unordered_set>
@@ -13,6 +14,7 @@
 
 #include "export/obj_exporter.h"
 #include "export/raw_exporter.h"
+#include "graphics/render_stats.h"
 #include "util/folder_picker.h"
 #include "util/bitconverter.h"
 #include "util/stringext.h"
@@ -600,6 +602,55 @@ namespace
 		return lowerCopy(a) == lowerCopy(b);
 	}
 
+	// Six inward-facing planes (left, right, bottom, top, near, far), extracted from
+	// a combined view-projection matrix (Gribb/Hartmann). `xyz` is the plane normal,
+	// `w` is the offset; a point is inside when dot(normal, point) + w >= 0.
+	struct FrustumPlanes
+	{
+		glm::vec4 planes[6];
+	};
+
+	FrustumPlanes extractFrustumPlanes(const glm::mat4& vpMatrix)
+	{
+		// glm is column-major (m[col][row]); build each matrix row explicitly.
+		const glm::vec4 row0(vpMatrix[0][0], vpMatrix[1][0], vpMatrix[2][0], vpMatrix[3][0]);
+		const glm::vec4 row1(vpMatrix[0][1], vpMatrix[1][1], vpMatrix[2][1], vpMatrix[3][1]);
+		const glm::vec4 row2(vpMatrix[0][2], vpMatrix[1][2], vpMatrix[2][2], vpMatrix[3][2]);
+		const glm::vec4 row3(vpMatrix[0][3], vpMatrix[1][3], vpMatrix[2][3], vpMatrix[3][3]);
+
+		FrustumPlanes frustum;
+		frustum.planes[0] = row3 + row0; // left
+		frustum.planes[1] = row3 - row0; // right
+		frustum.planes[2] = row3 + row1; // bottom
+		frustum.planes[3] = row3 - row1; // top
+		frustum.planes[4] = row3 + row2; // near
+		frustum.planes[5] = row3 - row2; // far
+
+		for (glm::vec4& plane : frustum.planes)
+		{
+			const float length = glm::length(glm::vec3(plane));
+			if (length > 1e-6f)
+				plane /= length;
+		}
+		return frustum;
+	}
+
+	// Positive-vertex AABB test. Picks, per plane, whichever box corner is furthest
+	// along the plane normal; the box is outside as soon as that corner fails one plane.
+	bool aabbInFrustum(const FrustumPlanes& frustum, const glm::vec3& boxMin, const glm::vec3& boxMax)
+	{
+		for (const glm::vec4& plane : frustum.planes)
+		{
+			const glm::vec3 positiveCorner(
+				plane.x >= 0.0f ? boxMax.x : boxMin.x,
+				plane.y >= 0.0f ? boxMax.y : boxMin.y,
+				plane.z >= 0.0f ? boxMax.z : boxMin.z);
+			if (glm::dot(glm::vec3(plane), positiveCorner) + plane.w < 0.0f)
+				return false;
+		}
+		return true;
+	}
+
 	void appendMdlNames(const std::string& value, std::vector<std::string>& out)
 	{
 		const std::string lower = lowerCopy(value);
@@ -852,6 +903,9 @@ void Application::loadTy1Level(const std::string& levelName)
 	Debug::log("TY1 level " + levelName + " objects: " + std::to_string(levelObjects.size())
 		+ " with mesh: " + std::to_string(propsWithMesh));
 
+	computeInstanceWorldBounds();
+	rebuildPropBatches();
+
 	if (models.empty() && levelObjects.empty())
 	{
 		Debug::log("No room meshes in " + levelName);
@@ -1073,6 +1127,58 @@ static void eachPlacedModel(const Ty1Instance& instance, Fn&& visit)
 		visit(*instance.model);
 	if (instance.extraModel != nullptr)
 		visit(*instance.extraModel);
+}
+
+void Application::computeInstanceWorldBounds()
+{
+	for (Ty1Instance& instance : levelObjects)
+	{
+		instance.hasAabb = false;
+		glm::vec3 minCorner(std::numeric_limits<float>::max());
+		glm::vec3 maxCorner(-std::numeric_limits<float>::max());
+		const glm::mat4 world = ty1InstanceMatrix(instance);
+		eachPlacedModel(instance, [&](const Model& placed)
+		{
+			const glm::vec3 corner = placed.bounds_crn;
+			const glm::vec3 size = placed.bounds_size;
+			for (int cornerIndex = 0; cornerIndex < 8; cornerIndex++)
+			{
+				const glm::vec3 local(
+					corner.x + ((cornerIndex & 1) ? size.x : 0.0f),
+					corner.y + ((cornerIndex & 2) ? size.y : 0.0f),
+					corner.z + ((cornerIndex & 4) ? size.z : 0.0f));
+				const glm::vec3 point(world * glm::vec4(local, 1.0f));
+				minCorner = glm::min(minCorner, point);
+				maxCorner = glm::max(maxCorner, point);
+			}
+			instance.hasAabb = true;
+		});
+		if (instance.hasAabb)
+		{
+			// Pad a little so a point-sized prop (zero-volume bounds) doesn't sit
+			// exactly on a frustum edge and flicker as the camera turns.
+			const glm::vec3 pad(1.0f);
+			instance.worldAabbMin = minCorner - pad;
+			instance.worldAabbMax = maxCorner + pad;
+		}
+	}
+}
+
+void Application::rebuildPropBatches()
+{
+	propMeshInstances.clear();
+	for (int index = 0; index < static_cast<int>(levelObjects.size()); index++)
+	{
+		const Ty1Instance& instance = levelObjects[static_cast<size_t>(index)];
+		eachPlacedModel(instance, [&](Model& placed)
+		{
+			for (Mesh* mesh : placed.getMeshes())
+			{
+				if (mesh != nullptr)
+					propMeshInstances[mesh].push_back(index);
+			}
+		});
+	}
 }
 
 void Application::frameCameraOnModels(const std::vector<const Model*>& list, bool levelFraming)
@@ -1457,6 +1563,7 @@ void Application::clearModels()
 	levelObjects.clear();
 	levelObjectIds.clear();
 	propModels.clear();
+	propMeshInstances.clear();
 	selectedLevelObject = -1;
 	// Note: Models are managed by the Content system, so we don't delete them here
 	
@@ -1775,32 +1882,106 @@ void Application::render(Shader& shader)
 	shader.bind();
 	shader.setUniformMat4("VPMatrix", vpmatrix);
 	shader.setUniformMat3("uvMatrix", glm::mat3(1.0f));
+	shader.setUniform1i("useInstancing", 0);
+
+	RenderStats::beginFrame();
+	const auto sceneStart = std::chrono::high_resolution_clock::now();
+
+	// One matrix and one frustum test per instance per frame, shared by every mesh
+	// part that instance places (a multi-part prop used to pay for this twice, once
+	// per blend pass, and once more per part within each pass).
+	const FrustumPlanes frustum = extractFrustumPlanes(vpmatrix);
+	std::vector<bool> instanceDrawable(levelObjects.size(), false);
+	std::vector<glm::mat4> instanceWorld(levelObjects.size());
+	for (size_t index = 0; index < levelObjects.size(); index++)
+	{
+		const Ty1Instance& instance = levelObjects[index];
+		if (!instance.visible)
+			continue;
+		if (instance.hasAabb && !aabbInFrustum(frustum, instance.worldAabbMin, instance.worldAabbMax))
+		{
+			RenderStats::instancesCulled++;
+			continue;
+		}
+		instanceWorld[index] = ty1InstanceMatrix(instance);
+		instanceDrawable[index] = true;
+		RenderStats::instancesVisited++;
+	}
+
+	// Every instance sharing a mesh part draws in one glDrawElementsInstanced call
+	// instead of one glDrawElements call each. `transparentPass` matches the mesh's
+	// own blend mode, so draw order between the two passes is unchanged.
+	auto drawPropBatches = [&](bool transparentPass)
+	{
+		for (auto& entry : propMeshInstances)
+		{
+			Mesh* mesh = entry.first;
+			if (mesh == nullptr || !mesh->isEnabled() || mesh->isTransparent() != transparentPass)
+				continue;
+
+			scratchInstanceMatrices.clear();
+			for (int index : entry.second)
+			{
+				if (instanceDrawable[static_cast<size_t>(index)])
+					scratchInstanceMatrices.push_back(instanceWorld[static_cast<size_t>(index)]);
+			}
+			mesh->drawInstanced(shader, scratchInstanceMatrices);
+		}
+	};
+
+	// Level parts are never batched (unlike props, each one is a unique mesh,
+	// material, and draw call), so a part that misses the frustum is skipped
+	// outright instead of folded into another draw. Room meshes pass identity,
+	// so a mesh's local AABB (Mesh::computeLocalAabb) is already a world AABB.
+	// A model-level box first skips a whole room mesh with one test when none of
+	// it is visible; the per-mesh test below still applies within a visible model
+	// (an envcube the camera sits inside, for instance).
+	auto drawRoomMeshes = [&](bool transparentPass)
+	{
+		for (Model* model : models)
+		{
+			if (model == nullptr)
+				continue;
+			if (model->hasLocalAabb() && !aabbInFrustum(frustum, model->getLocalAabbMin(), model->getLocalAabbMax()))
+			{
+				for (const Mesh* mesh : model->getMeshes())
+				{
+					if (mesh != nullptr && mesh->isEnabled() && mesh->isTransparent() == transparentPass)
+						RenderStats::partsCulled++;
+				}
+				continue;
+			}
+
+			for (Mesh* mesh : model->getMeshes())
+			{
+				if (mesh == nullptr || !mesh->isEnabled() || mesh->isTransparent() != transparentPass)
+					continue;
+				if (mesh->hasLocalAabb() && !aabbInFrustum(frustum, mesh->getLocalAabbMin(), mesh->getLocalAabbMax()))
+				{
+					RenderStats::partsCulled++;
+					continue;
+				}
+				mesh->draw(shader, glm::mat4(1.0f));
+				RenderStats::partsVisited++;
+			}
+		}
+	};
 
 	// Opaque world first, then alpha and additive sheets. A waterfall drawn in
 	// file order writes depth and hides the cliff that is stored in a later room.
-	for (auto& model : models)
-		model->drawMeshes(shader, false);
-	for (const Ty1Instance& instance : levelObjects)
+	drawRoomMeshes(false);
+	drawPropBatches(false);
+	drawRoomMeshes(true);
+	drawPropBatches(true);
+
+	RenderStats::lastSceneMs = std::chrono::duration<float, std::milli>(
+		std::chrono::high_resolution_clock::now() - sceneStart).count();
+	if (gui)
 	{
-		if (!instance.visible)
-			continue;
-		const glm::mat4 world = ty1InstanceMatrix(instance);
-		eachPlacedModel(instance, [&](Model& placed)
-		{
-			placed.drawMeshes(shader, false, world);
-		});
-	}
-	for (auto& model : models)
-		model->drawMeshes(shader, true);
-	for (const Ty1Instance& instance : levelObjects)
-	{
-		if (!instance.visible)
-			continue;
-		const glm::mat4 world = ty1InstanceMatrix(instance);
-		eachPlacedModel(instance, [&](Model& placed)
-		{
-			placed.drawMeshes(shader, true, world);
-		});
+		gui->setRenderStats(RenderStats::drawCalls, RenderStats::instancedBatches,
+			RenderStats::instancesVisited, RenderStats::instancesCulled,
+			RenderStats::partsVisited, RenderStats::partsCulled,
+			RenderStats::trianglesDrawn, RenderStats::lastSceneMs);
 	}
 
 	if (selectedLevelObject >= 0 && selectedLevelObject < static_cast<int>(levelObjects.size()))

@@ -145,6 +145,14 @@ public:
 	void ty1UvWrap(const std::string& materialName, bool& clampU, bool& clampV) const;
 	// indirectwater scales as (x, y, z, w). False when the material is not water.
 	bool ty1IndirectWater(const std::string& materialName, glm::vec4& scale) const;
+
+	// One hash lookup shared by the three calls above, given a name a caller has
+	// already lowercased and cached (Mesh does, by material). Null when the
+	// material has no global.mad entry; every *For overload treats that as defaults.
+	const Ty1MaterialDraw* findTy1MaterialLower(const std::string& lowerMaterialName) const;
+	glm::mat3 ty1UvMatrixFor(const Ty1MaterialDraw* draw, float timeSeconds, float yawRadians, float pitchRadians) const;
+	void ty1UvWrapFor(const Ty1MaterialDraw* draw, bool& clampU, bool& clampV) const;
+	bool ty1IndirectWaterFor(const Ty1MaterialDraw* draw, glm::vec4& scale) const;
 	// Shared 16x16 ripple map. Null until the first animation update.
 	Texture* ty1WaterRipple() const { return waterRipple; }
 	void updateTy1WaterRipple();

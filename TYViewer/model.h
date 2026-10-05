@@ -35,6 +35,13 @@ public:
 	// transparentPass false draws depth-writing meshes. true draws the rest, in file order.
 	void drawMeshes(Shader& shader, bool transparentPass) const;
 	void drawMeshes(Shader& shader, bool transparentPass, const glm::mat4& world, const MeshDrawStyle& style = {}) const;
+
+	// Union of every mesh's local AABB (Mesh::hasLocalAabb), computed once in the
+	// constructor. A coarse per-model test before testing each mesh; false when no
+	// mesh in this model has vertices (nothing to draw, nothing to cull against).
+	bool hasLocalAabb() const { return m_hasLocalAabb; }
+	const glm::vec3& getLocalAabbMin() const { return m_localAabbMin; }
+	const glm::vec3& getLocalAabbMax() const { return m_localAabbMax; }
 	
 	// For GUI access
 	const std::vector<Mesh*>& getMeshes() const { return meshes; }
@@ -57,4 +64,7 @@ public:
 
 private:
 	std::vector<Mesh*> meshes;
+	bool m_hasLocalAabb = false;
+	glm::vec3 m_localAabbMin{ 0.0f, 0.0f, 0.0f };
+	glm::vec3 m_localAabbMax{ 0.0f, 0.0f, 0.0f };
 };

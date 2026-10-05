@@ -1,0 +1,21 @@
+#include "render_stats.h"
+
+int RenderStats::drawCalls = 0;
+int RenderStats::instancedBatches = 0;
+long long RenderStats::trianglesDrawn = 0;
+int RenderStats::instancesVisited = 0;
+int RenderStats::instancesCulled = 0;
+int RenderStats::partsVisited = 0;
+int RenderStats::partsCulled = 0;
+float RenderStats::lastSceneMs = 0.0f;
+
+void RenderStats::beginFrame()
+{
+	drawCalls = 0;
+	instancedBatches = 0;
+	trianglesDrawn = 0;
+	instancesVisited = 0;
+	instancesCulled = 0;
+	partsVisited = 0;
+	partsCulled = 0;
+}

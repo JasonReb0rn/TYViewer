@@ -490,33 +490,45 @@ Content::Ty1MaterialDraw Content::lookupTy1Material(const std::string& materialN
 	return it->second;
 }
 
+const Content::Ty1MaterialDraw* Content::findTy1MaterialLower(const std::string& lowerMaterialName) const
+{
+	const auto it = ty1Materials.find(lowerMaterialName);
+	return (it == ty1Materials.end()) ? nullptr : &it->second;
+}
+
 void Content::ty1UvWrap(const std::string& materialName, bool& clampU, bool& clampV) const
+{
+	ty1UvWrapFor(findTy1MaterialLower(lowerCopy(materialName)), clampU, clampV);
+}
+
+void Content::ty1UvWrapFor(const Ty1MaterialDraw* draw, bool& clampU, bool& clampV) const
 {
 	clampU = false;
 	clampV = false;
 
-	const auto it = ty1Materials.find(lowerCopy(materialName));
-	if (it == ty1Materials.end())
+	if (draw == nullptr)
 		return;
 
-	const Ty1MaterialDraw& draw = it->second;
 	// Static materials keep the repeat they had before the clamp experiment.
 	// Animated ones clamp only on the axes global.mad names.
-	if (draw.uvAnim == Ty1UvAnim::None && !draw.manualScroll)
+	if (draw->uvAnim == Ty1UvAnim::None && !draw->manualScroll)
 		return;
 
-	clampU = draw.clampU;
-	clampV = draw.clampV;
+	clampU = draw->clampU;
+	clampV = draw->clampV;
 }
 
 bool Content::ty1IndirectWater(const std::string& materialName, glm::vec4& scale) const
 {
-	const auto it = ty1Materials.find(lowerCopy(materialName));
-	if (it == ty1Materials.end() || !it->second.indirectWater)
+	return ty1IndirectWaterFor(findTy1MaterialLower(lowerCopy(materialName)), scale);
+}
+
+bool Content::ty1IndirectWaterFor(const Ty1MaterialDraw* draw, glm::vec4& scale) const
+{
+	if (draw == nullptr || !draw->indirectWater)
 		return false;
 
-	const Ty1MaterialDraw& draw = it->second;
-	scale = glm::vec4(draw.waterX, draw.waterY, draw.waterZ, draw.waterW);
+	scale = glm::vec4(draw->waterX, draw->waterY, draw->waterZ, draw->waterW);
 	return true;
 }
 
@@ -575,11 +587,15 @@ void Content::setTy1AnimClock(float timeSeconds, float yawRadians, float pitchRa
 
 glm::mat3 Content::ty1UvMatrix(const std::string& materialName, float timeSeconds, float yawRadians, float pitchRadians) const
 {
-	const auto it = ty1Materials.find(lowerCopy(materialName));
-	if (it == ty1Materials.end())
+	return ty1UvMatrixFor(findTy1MaterialLower(lowerCopy(materialName)), timeSeconds, yawRadians, pitchRadians);
+}
+
+glm::mat3 Content::ty1UvMatrixFor(const Ty1MaterialDraw* drawPtr, float timeSeconds, float yawRadians, float pitchRadians) const
+{
+	if (drawPtr == nullptr)
 		return glm::mat3(1.0f);
 
-	const Ty1MaterialDraw& draw = it->second;
+	const Ty1MaterialDraw& draw = *drawPtr;
 	if (draw.uvAnim == Ty1UvAnim::None && !draw.manualScroll)
 		return glm::mat3(1.0f);
 

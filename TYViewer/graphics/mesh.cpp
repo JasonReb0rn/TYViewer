@@ -1,11 +1,40 @@
 #include "mesh.h"
 
+#include <cctype>
+#include <limits>
+
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
 #include <glm/mat3x3.hpp>
+#include <glm/common.hpp>
 
 #include "content.h"
+#include "render_stats.h"
+
+namespace
+{
+	// One GPU buffer, reused by every mesh's instanced draw. Every Mesh's VAO wires
+	// attributes 5-8 to this buffer in setup(); drawInstanced() re-uploads it with
+	// that mesh's world matrices right before each instanced draw call. Instances
+	// from two meshes are never interleaved between the upload and the draw, so
+	// sharing one buffer across all meshes is safe.
+	unsigned int sharedInstanceBuffer()
+	{
+		static unsigned int buffer = 0;
+		if (buffer == 0)
+			glGenBuffers(1, &buffer);
+		return buffer;
+	}
+
+	std::string toLowerAscii(const std::string& value)
+	{
+		std::string lower = value;
+		for (char& c : lower)
+			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		return lower;
+	}
+}
 
 Mesh::Mesh() :
 	Drawable(),
@@ -14,6 +43,7 @@ Mesh::Mesh() :
 	m_indices(),
 	m_texture(NULL),
 	m_materialName(""),
+	m_materialNameLower(""),
 	m_partName(""),
 	m_subobjectGroup(-1),
 	m_enabled(true),
@@ -35,6 +65,7 @@ Mesh::Mesh(const std::vector<Vertex>& vertices,
 	m_indices(indices),
 	m_texture(texture),
 	m_materialName(materialName),
+	m_materialNameLower(toLowerAscii(materialName)),
 	m_partName(partName),
 	m_subobjectGroup(-1),
 	m_enabled(true),
@@ -45,6 +76,7 @@ Mesh::Mesh(const std::vector<Vertex>& vertices,
 	ebo(0)
 {
 	setup();
+	computeLocalAabb();
 }
 
 Mesh::~Mesh()
@@ -83,7 +115,44 @@ void Mesh::setup()
 	glEnableVertexAttribArray(4);
 	glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (const void*)offsetof(Vertex, skin));
 
+	// Instance matrix, one vec4 attribute per column (locations 5-8). Unused and
+	// untouched unless drawInstanced() runs; the shader picks modelMatrix instead
+	// when useInstancing is 0, which is every other draw path in the app.
+	const unsigned int instanceBuffer = sharedInstanceBuffer();
+	glBindBuffer(GL_ARRAY_BUFFER, instanceBuffer);
+	for (int column = 0; column < 4; column++)
+	{
+		const unsigned int location = 5 + static_cast<unsigned int>(column);
+		glEnableVertexAttribArray(location);
+		glVertexAttribPointer(location, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4),
+			reinterpret_cast<const void*>(sizeof(glm::vec4) * static_cast<size_t>(column)));
+		glVertexAttribDivisor(location, 1);
+	}
+
 	glBindVertexArray(0);
+}
+
+void Mesh::computeLocalAabb()
+{
+	m_hasLocalAabb = false;
+	if (m_vertices.empty())
+		return;
+
+	glm::vec3 minCorner(std::numeric_limits<float>::max());
+	glm::vec3 maxCorner(-std::numeric_limits<float>::max());
+	for (const Vertex& vertex : m_vertices)
+	{
+		const glm::vec3 point(vertex.position);
+		minCorner = glm::min(minCorner, point);
+		maxCorner = glm::max(maxCorner, point);
+	}
+
+	// Same 1-unit pad as Application::computeInstanceWorldBounds, so a part sitting
+	// exactly on a frustum edge does not flicker as the camera turns.
+	const glm::vec3 pad(1.0f);
+	m_localAabbMin = minCorner - pad;
+	m_localAabbMax = maxCorner + pad;
+	m_hasLocalAabb = true;
 }
 
 void Mesh::draw(Shader& shader) const
@@ -91,14 +160,8 @@ void Mesh::draw(Shader& shader) const
 	draw(shader, glm::mat4(1.0f), MeshDrawStyle{});
 }
 
-void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& style) const
+void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 {
-	// Disabled mesh parts should be fully hidden (skip draw call).
-	if (!m_enabled)
-	{
-		return;
-	}
-
 	shader.bind();
 
 	// A solid pass is the selection outline. The caller owns depth, stencil, and blend.
@@ -130,8 +193,14 @@ void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& sty
 	shader.setUniform2f("clipOffset", style.solid ? style.clipOffset : glm::vec2(0.0f));
 	shader.setUniform1i("solidColour", style.solid ? 1 : 0);
 	shader.setUniform1f("alphaRef", m_alphaRef);
+
+	// One hash lookup (on the name this mesh already lowercased at construction)
+	// feeds the uv matrix, wrap, and water queries below, instead of each of them
+	// separately lowercasing m_materialName and hashing it again.
+	const auto* materialDraw = m_content ? m_content->findTy1MaterialLower(m_materialNameLower) : nullptr;
+
 	const glm::mat3 uv = m_content
-		? m_content->ty1UvMatrix(m_materialName, m_content->ty1AnimTime(), m_content->ty1AnimYaw(), m_content->ty1AnimPitch())
+		? m_content->ty1UvMatrixFor(materialDraw, m_content->ty1AnimTime(), m_content->ty1AnimYaw(), m_content->ty1AnimPitch())
 		: glm::mat3(1.0f);
 	shader.setUniformMat3("uvMatrix", uv);
 	
@@ -141,13 +210,13 @@ void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& sty
 	bool clampU = false;
 	bool clampV = false;
 	if (m_content)
-		m_content->ty1UvWrap(m_materialName, clampU, clampV);
+		m_content->ty1UvWrapFor(materialDraw, clampU, clampV);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, clampU ? GL_CLAMP_TO_EDGE : GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, clampV ? GL_CLAMP_TO_EDGE : GL_REPEAT);
 
 	glm::vec4 waterScale(0.0f);
 	int water = 0;
-	if (m_content && m_content->ty1IndirectWater(m_materialName, waterScale))
+	if (m_content && m_content->ty1IndirectWaterFor(materialDraw, waterScale))
 	{
 		Texture* ripple = m_content->ty1WaterRipple();
 		if (ripple != nullptr)
@@ -159,10 +228,58 @@ void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& sty
 		}
 	}
 	shader.setUniform1i("water", water);
+}
 
+void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& style) const
+{
+	// Disabled mesh parts should be fully hidden (skip draw call).
+	if (!m_enabled)
+	{
+		return;
+	}
+
+	prepareDraw(shader, style);
+	shader.setUniform1i("useInstancing", 0);
 	shader.setUniformMat4("modelMatrix", world * getMatrix());
 
 	glBindVertexArray(vao);
+	glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(m_indices.size()), GL_UNSIGNED_INT, nullptr);
 
-	glDrawElements(GL_TRIANGLES, m_indices.size(), GL_UNSIGNED_INT, nullptr);
+	RenderStats::drawCalls++;
+	RenderStats::trianglesDrawn += static_cast<long long>(m_indices.size() / 3);
+}
+
+void Mesh::drawInstanced(Shader& shader, const std::vector<glm::mat4>& worlds, const MeshDrawStyle& style) const
+{
+	if (!m_enabled || worlds.empty())
+	{
+		return;
+	}
+
+	prepareDraw(shader, style);
+	shader.setUniform1i("useInstancing", 1);
+
+	// The mesh-local transform is identity for every TY1 part today (nothing calls
+	// Transformable::setPosition/setRotation/setScale on a Mesh), but fold it in so a
+	// future per-part offset keeps working without touching call sites.
+	const glm::mat4 local = getMatrix();
+	std::vector<glm::mat4> combined(worlds.size());
+	for (size_t i = 0; i < worlds.size(); i++)
+		combined[i] = worlds[i] * local;
+
+	glBindBuffer(GL_ARRAY_BUFFER, sharedInstanceBuffer());
+	glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(combined.size() * sizeof(glm::mat4)), combined.data(), GL_DYNAMIC_DRAW);
+
+	glBindVertexArray(vao);
+	glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(m_indices.size()), GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(combined.size()));
+
+	// Other draw paths (room meshes, debug/text draws reusing this shader program)
+	// never touch useInstancing. Leaving it at 1 would make their next modelMatrix
+	// uniform update silently do nothing, since the vertex shader would keep
+	// reading the instance attributes instead.
+	shader.setUniform1i("useInstancing", 0);
+
+	RenderStats::drawCalls++;
+	RenderStats::instancedBatches++;
+	RenderStats::trianglesDrawn += static_cast<long long>(m_indices.size() / 3) * static_cast<long long>(combined.size());
 }

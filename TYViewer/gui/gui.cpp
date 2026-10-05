@@ -3,6 +3,7 @@
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <glm/gtc/type_ptr.hpp>
@@ -664,6 +665,8 @@ void Gui::render()
 		renderModelInfo();
 	if (hasMaterialPanel())
 		renderMaterialList();
+
+	renderSceneStatsBar();
 	
 	// Restore OpenGL state
 	if (depthTestEnabled)
@@ -2171,6 +2174,43 @@ void Gui::setObjectVisible(int index, bool visible)
 		onLevelObjectToggled(index, visible);
 }
 
+void Gui::setRenderStats(int drawCalls, int instancedBatches, int instancesVisited, int instancesCulled,
+	int partsVisited, int partsCulled, long long trianglesDrawn, float sceneMs)
+{
+	statsValid = true;
+	statDrawCalls = drawCalls;
+	statInstancedBatches = instancedBatches;
+	statInstancesVisited = instancesVisited;
+	statInstancesCulled = instancesCulled;
+	statPartsVisited = partsVisited;
+	statPartsCulled = partsCulled;
+	statTrianglesDrawn = trianglesDrawn;
+	statSceneMs = sceneMs;
+}
+
+void Gui::renderSceneStatsBar()
+{
+	if (!statsValid)
+		return;
+
+	const float height = kSceneStatsBarHeight;
+	const float y = static_cast<float>(windowHeight) - height;
+
+	glUseProgram(shaderProgram);
+	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
+	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+	drawRect(0.0f, y, static_cast<float>(windowWidth), height, glm::vec4(0.08f, 0.08f, 0.09f, 0.92f));
+	drawRect(0.0f, y, static_cast<float>(windowWidth), 1.0f, glm::vec4(0.4f, 0.4f, 0.4f, 1.0f));
+
+	char buf[224];
+	std::snprintf(buf, sizeof(buf),
+		"SCENE  objects %d (%d culled)  parts %d (%d culled)  draws %d (%d batched)  tris %lld  %.2fms",
+		statInstancesVisited, statInstancesCulled, statPartsVisited, statPartsCulled,
+		statDrawCalls, statInstancedBatches, statTrianglesDrawn, statSceneMs);
+	drawText(buf, 10.0f, y + 6.0f, glm::vec4(0.75f, 0.9f, 0.8f, 1.0f));
+}
+
 void Gui::rebuildObjectFilter()
 {
 	if (!objectFilterDirty)
@@ -2206,19 +2246,34 @@ void Gui::layoutObjectList()
 	rebuildObjectFilter();
 	const float kBottomPad = 5.0f;
 	const float kGap = 8.0f;
-	const float bottom = (float)windowHeight - 12.0f;
+	// Leave room for the scene stats bar (Gui::renderSceneStatsBar), which is
+	// always drawn across the bottom of the window once a level has rendered a
+	// frame, so the OBJECTS/INFO column never sits behind it.
+	const float bottom = (float)windowHeight - 12.0f - kSceneStatsBarHeight;
 	const float available = std::max(0.0f, bottom - kObjectColumnTop);
+	// INFO only has something to show once an object has been clicked. Hiding it
+	// otherwise (zero-size rect; renderObjectInfo already skips anything under 8px)
+	// also frees that space back to the list instead of leaving a blank gap.
+	const bool showInfo = selectedObjectIndex >= 0;
+
 	if (objectListCollapsed)
 	{
 		const float listHeight = kCollapsedListHeight;
-		const float inspectorHeight = std::max(0.0f, available - kGap - listHeight);
 		objectListRect = { 10.0f, kObjectColumnTop, kObjectColumnWidth, listHeight };
-		objectInfoRect = {
-			10.0f,
-			kObjectColumnTop + listHeight + kGap,
-			kObjectColumnWidth,
-			inspectorHeight
-		};
+		if (showInfo)
+		{
+			const float inspectorHeight = std::max(0.0f, available - kGap - listHeight);
+			objectInfoRect = {
+				10.0f,
+				kObjectColumnTop + listHeight + kGap,
+				kObjectColumnWidth,
+				inspectorHeight
+			};
+		}
+		else
+		{
+			objectInfoRect = { 0.0f, 0.0f, 0.0f, 0.0f };
+		}
 		rebuildInfoDrawLines();
 		return;
 	}
@@ -2227,16 +2282,47 @@ void Gui::layoutObjectList()
 		+ (static_cast<float>(objectFiltered.size()) * kMeshPartItemHeight)
 		+ kBottomPad;
 	const float listMin = kObjectListHeaderHeight;
+
+	// renderObjectList's rowFits() only draws a row that fits entirely inside the
+	// panel, so a height that isn't a whole number of rows below the header leaves
+	// blank background under the last full row. Round a capped budget down to the
+	// nearest row boundary (reusing the same header + N*item + pad shape the
+	// uncapped, exact-fit case already produces) so that remainder never shows.
+	auto quantizeListHeight = [&](float budget) -> float
+	{
+		if (budget <= kObjectListHeaderHeight + kBottomPad)
+			return budget;
+		const float rows = std::floor((budget - kObjectListHeaderHeight - kBottomPad) / kMeshPartItemHeight);
+		return kObjectListHeaderHeight + std::max(0.0f, rows) * kMeshPartItemHeight + kBottomPad;
+	};
+
+	if (!showInfo)
+	{
+		float listHeight = contentHeight;
+		if (contentHeight > available)
+			listHeight = quantizeListHeight(available);
+		objectListRect = { 10.0f, kObjectColumnTop, kObjectColumnWidth, listHeight };
+		objectInfoRect = { 0.0f, 0.0f, 0.0f, 0.0f };
+		maxObjectListScroll = (contentHeight > listHeight) ? (contentHeight - listHeight) : 0.0f;
+		if (objectListScroll < 0.0f)
+			objectListScroll = 0.0f;
+		if (objectListScroll > maxObjectListScroll)
+			objectListScroll = maxObjectListScroll;
+		rebuildInfoDrawLines();
+		return;
+	}
+
 	float inspectorHeight = available * 0.38f;
 	if (available >= 360.0f)
 		inspectorHeight = std::max(220.0f, inspectorHeight);
 	if (inspectorHeight > available - kGap - listMin)
 		inspectorHeight = std::max(60.0f, available - kGap - listMin);
 
-	float listRoom = std::max(0.0f, available - kGap - inspectorHeight);
-	float listHeight = (contentHeight < listRoom) ? contentHeight : listRoom;
-	if (listHeight < listRoom)
-		inspectorHeight = std::max(0.0f, available - kGap - listHeight);
+	const float listRoom = std::max(0.0f, available - kGap - inspectorHeight);
+	const float listHeight = (contentHeight < listRoom) ? contentHeight : quantizeListHeight(listRoom);
+	// Hand back whatever a short list or the row-quantization above didn't use, so
+	// INFO gets the leftover instead of it sitting empty at the bottom of OBJECTS.
+	inspectorHeight = std::max(0.0f, available - kGap - listHeight);
 
 	objectListRect = { 10.0f, kObjectColumnTop, kObjectColumnWidth, listHeight };
 	objectInfoRect = {

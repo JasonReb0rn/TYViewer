@@ -136,18 +136,28 @@ Shader* Shader::createDefault()
 		layout(location = 2) in vec4 colour;
 		layout(location = 3) in vec2 texcoord;
 		layout(location = 4) in vec3 skin;
+		// One placed-object world matrix, one column per attribute. Only read when
+		// useInstancing is set; Mesh::drawInstanced is the only caller that sets it.
+		layout(location = 5) in vec4 instanceMatrix0;
+		layout(location = 6) in vec4 instanceMatrix1;
+		layout(location = 7) in vec4 instanceMatrix2;
+		layout(location = 8) in vec4 instanceMatrix3;
 
 		uniform mat4 VPMatrix;
 		uniform mat4 modelMatrix;
 		uniform mat3 uvMatrix;
 		uniform vec2 clipOffset;
+		uniform int useInstancing;
 
 		out vec4 v_colour;
 		out vec2 v_texcoord;
 
 		void main()
 		{
-			gl_Position = VPMatrix * modelMatrix * position;
+			mat4 world = useInstancing != 0
+				? mat4(instanceMatrix0, instanceMatrix1, instanceMatrix2, instanceMatrix3)
+				: modelMatrix;
+			gl_Position = VPMatrix * world * position;
 			gl_Position.xy += clipOffset * gl_Position.w;
 			v_colour = colour;
 			v_texcoord = (uvMatrix * vec3(texcoord, 1.0)).xy;

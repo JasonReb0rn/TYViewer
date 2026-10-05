@@ -115,6 +115,11 @@ public:
 	// Level (or other multi-mesh) view: names the button without enabling model export.
 	// canRecenter turns the recenter button on when room meshes are in the scene.
 	void setSceneLabel(const std::string& name, bool canRecenter);
+	// Scene-pass counters for the current frame (Application::render). Shown in a
+	// bar across the bottom of the screen, independent of the OBJECTS/LEVEL PARTS
+	// panels (draws counts level geometry too, not just placed objects).
+	void setRenderStats(int drawCalls, int instancedBatches, int instancesVisited, int instancesCulled,
+		int partsVisited, int partsCulled, long long trianglesDrawn, float sceneMs);
 	
 	// Input handling
 	void onMouseButton(int button, int action, float x, float y);
@@ -147,6 +152,10 @@ private:
 	static constexpr float kObjectColumnTop = 180.0f;
 	static constexpr float kInfoHeaderHeight = 22.0f;
 	static constexpr float kInfoLineHeight = 12.0f;
+	// Height of the bottom scene stats bar (Gui::renderSceneStatsBar), always drawn
+	// once a level has rendered a frame. Layouts in the OBJECTS column reserve this
+	// much space (plus a gap) above it so the INFO panel never sits behind it.
+	static constexpr float kSceneStatsBarHeight = 24.0f;
 
 	// ---------------------------------------------------------------------
 	// TY2 "material" name parsing (rudimentary suffix identification)
@@ -293,6 +302,19 @@ private:
 	float objectInfoScroll = 0.0f;
 	float maxObjectInfoScroll = 0.0f;
 	int hoveredInfoRow = -1;
+
+	// Last scene-pass counters from Application::render. statsValid stays false
+	// until the first frame after a level loads reports in.
+	bool statsValid = false;
+	int statDrawCalls = 0;
+	int statInstancedBatches = 0;
+	int statInstancesVisited = 0;
+	int statInstancesCulled = 0;
+	int statPartsVisited = 0;
+	int statPartsCulled = 0;
+	long long statTrianglesDrawn = 0;
+	float statSceneMs = 0.0f;
+	void renderSceneStatsBar();
 	
 	bool dropdownOpen;
 	bool hovering;
