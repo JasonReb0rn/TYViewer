@@ -19,11 +19,20 @@ namespace
 	// that mesh's world matrices right before each instanced draw call. Instances
 	// from two meshes are never interleaved between the upload and the draw, so
 	// sharing one buffer across all meshes is safe.
+	//
+	// Ordinary draws leave those attributes enabled. glDrawElements still fetches
+	// instance 0, so the buffer must already have storage. One identity matrix is
+	// enough; the shader ignores it while useInstancing is 0.
 	unsigned int sharedInstanceBuffer()
 	{
 		static unsigned int buffer = 0;
 		if (buffer == 0)
+		{
 			glGenBuffers(1, &buffer);
+			const glm::mat4 identity(1.0f);
+			glBindBuffer(GL_ARRAY_BUFFER, buffer);
+			glBufferData(GL_ARRAY_BUFFER, sizeof(identity), &identity[0][0], GL_DYNAMIC_DRAW);
+		}
 		return buffer;
 	}
 
@@ -115,9 +124,10 @@ void Mesh::setup()
 	glEnableVertexAttribArray(4);
 	glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (const void*)offsetof(Vertex, skin));
 
-	// Instance matrix, one vec4 attribute per column (locations 5-8). Unused and
-	// untouched unless drawInstanced() runs; the shader picks modelMatrix instead
-	// when useInstancing is 0, which is every other draw path in the app.
+	// Instance matrix, one vec4 attribute per column (locations 5-8). Enabled on
+	// every draw. The shader reads modelMatrix instead while useInstancing is 0;
+	// the fetch of instance 0 still happens, from the identity matrix stored in
+	// the shared buffer until drawInstanced() replaces it.
 	const unsigned int instanceBuffer = sharedInstanceBuffer();
 	glBindBuffer(GL_ARRAY_BUFFER, instanceBuffer);
 	for (int column = 0; column < 4; column++)
