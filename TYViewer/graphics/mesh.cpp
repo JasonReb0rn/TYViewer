@@ -136,13 +136,14 @@ void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& sty
 	shader.setUniformMat3("uvMatrix", uv);
 	
 	m_texture->bind();
-	// Animated sheets have paint past the UV island. Repeating tiles that border
-	// back onto the surface. Clamp shows the edge texel instead. Other materials
-	// still tile, and wrap is set every draw because textures are shared.
-	const bool clampUv = m_content && m_content->ty1UvClamped(m_materialName);
-	const GLint wrap = clampUv ? GL_CLAMP_TO_EDGE : GL_REPEAT;
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+	// Wrap is per material and textures are shared, so set it on every draw.
+	// Waterfalls repeat. clampUV / address clamp an axis on their own.
+	bool clampU = false;
+	bool clampV = false;
+	if (m_content)
+		m_content->ty1UvWrap(m_materialName, clampU, clampV);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, clampU ? GL_CLAMP_TO_EDGE : GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, clampV ? GL_CLAMP_TO_EDGE : GL_REPEAT);
 
 	shader.setUniformMat4("modelMatrix", world * getMatrix());
 

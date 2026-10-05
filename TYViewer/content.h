@@ -118,6 +118,9 @@ public:
 		float manualDv = 0.0f;
 		bool lockU = false;
 		float lockedU = 0.0f;
+		// global.mad clampUV / address. Absent lines repeat, which is what waterfalls use.
+		bool clampU = false;
+		bool clampV = false;
 	};
 	Ty1MaterialDraw lookupTy1Material(const std::string& materialName);
 	// Playback clock for ty1UvMatrix. Yaw and pitch are radians.
@@ -127,8 +130,8 @@ public:
 	float ty1AnimPitch() const { return ty1AnimPitchRadians; }
 	// Game texture matrix, conjugated through the TY1 mesh V flip, as a mat3.
 	glm::mat3 ty1UvMatrix(const std::string& materialName, float timeSeconds, float yawRadians, float pitchRadians) const;
-	// Animated sheets keep the texels past the mesh UV island instead of tiling them.
-	bool ty1UvClamped(const std::string& materialName) const;
+	// Per-axis wrap from clampUV / address. Materials without those lines repeat.
+	void ty1UvWrap(const std::string& materialName, bool& clampU, bool& clampV) const;
 
 private:
 	void createDefaultTexture();

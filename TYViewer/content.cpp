@@ -173,6 +173,8 @@ void Content::loadTy1Materials()
 		float alphaRef = -1.0f;
 		Content::Ty1UvAnim uvAnim = Content::Ty1UvAnim::None;
 		float uvParam[6] = {};
+		bool clampU = false;
+		bool clampV = false;
 		bool active = false;
 	};
 
@@ -194,6 +196,8 @@ void Content::loadTy1Materials()
 		draw.uvAnim = block.uvAnim;
 		for (int i = 0; i < 6; i++)
 			draw.uvParam[i] = block.uvParam[i];
+		draw.clampU = block.clampU;
+		draw.clampV = block.clampV;
 		if (block.masked)
 			draw.alphaRef = block.alphaRef >= 0.0f ? block.alphaRef : 0.5f;
 		if (block.blendCode == 1)
@@ -292,6 +296,36 @@ void Content::loadTy1Materials()
 			if (!parseIntWord(words[1], enabled))
 				return;
 			block.masked = enabled != 0;
+		}
+		else if (key == "clampuv" || key == "address")
+		{
+			// clampUV sets each axis. address uses its first value for both.
+			std::vector<int> values;
+			for (size_t i = 1; i < words.size(); i++)
+			{
+				std::string token = words[i];
+				if (!token.empty() && token.back() == ',')
+					token.pop_back();
+				if (token.empty() || token == "=")
+					continue;
+				int value = 0;
+				if (!parseIntWord(token, value))
+					continue;
+				values.push_back(value);
+			}
+			if (values.empty())
+				return;
+			if (key == "address")
+			{
+				block.clampU = values[0] != 0;
+				block.clampV = values[0] != 0;
+			}
+			else
+			{
+				block.clampU = values[0] != 0;
+				if (values.size() > 1)
+					block.clampV = values[1] != 0;
+			}
 		}
 		else if (key == "aref" && words.size() >= 2)
 		{
@@ -400,13 +434,23 @@ Content::Ty1MaterialDraw Content::lookupTy1Material(const std::string& materialN
 	return it->second;
 }
 
-bool Content::ty1UvClamped(const std::string& materialName) const
+void Content::ty1UvWrap(const std::string& materialName, bool& clampU, bool& clampV) const
 {
+	clampU = false;
+	clampV = false;
+
 	const auto it = ty1Materials.find(lowerCopy(materialName));
 	if (it == ty1Materials.end())
-		return false;
+		return;
+
 	const Ty1MaterialDraw& draw = it->second;
-	return draw.uvAnim != Ty1UvAnim::None || draw.manualScroll;
+	// Static materials keep the repeat they had before the clamp experiment.
+	// Animated ones clamp only on the axes global.mad names.
+	if (draw.uvAnim == Ty1UvAnim::None && !draw.manualScroll)
+		return;
+
+	clampU = draw.clampU;
+	clampV = draw.clampV;
 }
 
 void Content::setTy1AnimClock(float timeSeconds, float yawRadians, float pitchRadians)
