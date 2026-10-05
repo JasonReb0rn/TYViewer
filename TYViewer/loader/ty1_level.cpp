@@ -438,7 +438,9 @@ glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance, const glm::mat4* camera
 {
 	// Transpose of (scale * Rx * Ry * Rz) with translation in the last row.
 	glm::mat4 matrix(1.0f);
-	matrix = glm::translate(matrix, instance.position);
+	glm::vec3 place = instance.position;
+	place.y += instance.drawLiftY;
+	matrix = glm::translate(matrix, place);
 	if (instance.billboard && cameraView != nullptr)
 	{
 		// Inverse of the view rotation is camera right, up, and back in the
@@ -560,6 +562,11 @@ std::vector<Ty1Instance> parseTy1Instances(
 			}
 			else if (key == "THUNDEREGG")
 				current.modelFile = canonicalFile(collectibles.egg);
+			else if (key == "PORTAL")
+			{
+				current.billboard = true;
+				current.seatBottom = true;
+			}
 			if (key == "CAGEDBILBY")
 			{
 				current.modelFile = canonicalFile(cagedBilbyModel(current.variantLabel));

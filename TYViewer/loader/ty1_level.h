@@ -53,8 +53,12 @@ struct Ty1Instance
 	glm::vec3 rotation{ 0.0f, 0.0f, 0.0f };
 	glm::vec3 scale{ 1.0f, 1.0f, 1.0f };
 	bool visible = true;
-	// Gem::Draw copies the camera rotation each frame. Level rot is not used.
+	// Gem::Draw and Portal::Draw copy the camera rotation each frame. Level rot is not used.
 	bool billboard = false;
+	// Added to world Y before the rotation. The portal value is a guess:
+	// the decompiled parent stores `position`, and Portal::LoadDone is not recovered.
+	float drawLiftY = 0.0f;
+	bool seatBottom = false;
 	Ty1Kind kind = Ty1Kind::Prop;
 
 	// World-space box across `model` and `extraModel`, computed once after a level's

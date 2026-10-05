@@ -899,6 +899,11 @@ void Application::loadTy1Level(const std::string& levelName)
 		const bool gotExtra = takeProp(instance.extraModelFile, instance.extraModel, instance.typeName);
 		if (gotModel || gotExtra)
 			propsWithMesh++;
+		// Guess. StaticProp::LoadDone stores the level pos with no Y add.
+		// Portal::LoadDone (0x74) is not decompiled, and its sdata2 floats are
+		// unpublished, so seating the mesh bottom on pos is not a game value.
+		if (instance.seatBottom && instance.model != nullptr)
+			instance.drawLiftY = -instance.model->bounds_crn.y * instance.scale.y;
 	}
 	Debug::log("TY1 level " + levelName + " objects: " + std::to_string(levelObjects.size())
 		+ " with mesh: " + std::to_string(propsWithMesh));
@@ -1171,8 +1176,9 @@ void Application::computeInstanceWorldBounds()
 				// The gem turns with the camera. A cube around the mesh radius
 				// stays valid for every facing.
 				const glm::vec3 half(billboardRadius);
-				instance.worldAabbMin = instance.position - half - pad;
-				instance.worldAabbMax = instance.position + half + pad;
+				const glm::vec3 center = instance.position + glm::vec3(0.0f, instance.drawLiftY, 0.0f);
+				instance.worldAabbMin = center - half - pad;
+				instance.worldAabbMax = center + half + pad;
 			}
 			else
 			{
