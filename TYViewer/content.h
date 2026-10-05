@@ -106,6 +106,8 @@ public:
 		bool invisible = false;
 		// global.mad "effect = grass,...". The surface may still be drawn.
 		bool grassEffect = false;
+		// The number after "grass,": section index in grass_types.ini. -1 when absent.
+		int grassIndex = -1;
 		// global.mad "masked 1" / "aref". Cutout cards (tree walls) discard below this.
 		bool masked = false;
 		float alphaRef = 0.01f;
@@ -134,6 +136,23 @@ public:
 		float waterW = 0.005f;
 	};
 	Ty1MaterialDraw lookupTy1Material(const std::string& materialName);
+
+	// One grass_types.ini section, as MKGrass_InitTypes stores it. Lengths are
+	// already in world units (metres * 100). Section order is the effect index.
+	struct Ty1GrassType
+	{
+		std::string name;
+		// clumpSize * density, capped at 32: blades per triangle.
+		int bladesPerTriangle = 0;
+		float minHeight = 0.0f;
+		float maxHeight = 0.0f;
+		float width = 0.0f;
+		float upVector = 0.0f;
+		int numTextures = 0;
+		float maxVisibleRadius = 0.0f;
+		std::string material;
+	};
+	const std::vector<Ty1GrassType>& ty1GrassTypes();
 	// Playback clock for ty1UvMatrix. Yaw and pitch are radians.
 	void setTy1AnimClock(float timeSeconds, float yawRadians, float pitchRadians);
 	float ty1AnimTime() const { return ty1AnimTimeSeconds; }
@@ -171,6 +190,8 @@ private:
 
 	bool ty1MaterialsReady = false;
 	std::unordered_map<std::string, Ty1MaterialDraw> ty1Materials;
+	bool ty1GrassTypesReady = false;
+	std::vector<Ty1GrassType> ty1GrassTypeList;
 	float ty1AnimTimeSeconds = 0.0f;
 	float ty1AnimYawRadians = 0.0f;
 	float ty1AnimPitchRadians = 0.0f;

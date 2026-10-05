@@ -24,6 +24,8 @@ bool Content::loadRKV(const std::string& path, int archiveIndex)
 	{
 		ty1MaterialsReady = false;
 		ty1Materials.clear();
+		ty1GrassTypesReady = false;
+		ty1GrassTypeList.clear();
 	}
 	return archives[archiveIndex]->load(path);
 }
@@ -194,6 +196,7 @@ void Content::loadTy1Materials()
 		int blendCode = -1;
 		bool invisible = false;
 		bool grassEffect = false;
+		int grassIndex = -1;
 		bool masked = false;
 		float alphaRef = -1.0f;
 		Content::Ty1UvAnim uvAnim = Content::Ty1UvAnim::None;
@@ -224,6 +227,7 @@ void Content::loadTy1Materials()
 		draw.textureAlias = block.alias;
 		draw.invisible = block.invisible;
 		draw.grassEffect = block.grassEffect;
+		draw.grassIndex = block.grassIndex;
 		draw.masked = block.masked;
 		draw.uvAnim = block.uvAnim;
 		for (int i = 0; i < 6; i++)
@@ -338,11 +342,26 @@ void Content::loadTy1Materials()
 		else if (key == "effect")
 		{
 			// "effect = grass,21" is a grass emitter. The mesh may still be drawn.
+			// Material::InitFromMatDefs reads the name, then the int after it.
+			std::string rest;
 			for (size_t i = 1; i < words.size(); i++)
+				rest += lowerCopy(words[i]) + " ";
+			const size_t at = rest.find("grass");
+			if (at != std::string::npos)
 			{
-				const std::string word = lowerCopy(words[i]);
-				if (word == "grass" || word.rfind("grass", 0) == 0)
-					block.grassEffect = true;
+				block.grassEffect = true;
+				size_t pos = at + 5;
+				while (pos < rest.size() && (rest[pos] == ',' || rest[pos] == ' ' || rest[pos] == '='))
+					pos++;
+				int index = 0;
+				bool any = false;
+				while (pos < rest.size() && std::isdigit(static_cast<unsigned char>(rest[pos])))
+				{
+					index = index * 10 + (rest[pos] - '0');
+					any = true;
+					pos++;
+				}
+				block.grassIndex = any ? index : 0;
 			}
 		}
 		else if (key == "masked" && words.size() >= 2)
@@ -488,6 +507,121 @@ Content::Ty1MaterialDraw Content::lookupTy1Material(const std::string& materialN
 	if (it == ty1Materials.end())
 		return {};
 	return it->second;
+}
+
+const std::vector<Content::Ty1GrassType>& Content::ty1GrassTypes()
+{
+	if (ty1GrassTypesReady || archives[0] == nullptr)
+		return ty1GrassTypeList;
+	ty1GrassTypesReady = true;
+
+	std::vector<char> data;
+	if (!archives[0]->getFileData("grass_types.ini", data) || data.empty())
+	{
+		Debug::log("grass_types.ini missing; TY1 grass is skipped");
+		return ty1GrassTypeList;
+	}
+
+	// GrassInfoGC is memset to 0, so a section without density emits no blades.
+	struct Raw
+	{
+		std::string name;
+		int clumpSize = 0;
+		int density = 0;
+		float minHeight = 0.0f;
+		float maxHeight = 0.0f;
+		float width = 0.0f;
+		float upVector = 0.0f;
+		int numTextures = 0;
+		float maxVisibleRadius = 0.0f;
+		std::string material;
+	};
+	std::vector<Raw> raws;
+
+	auto trim = [](std::string value)
+	{
+		size_t start = 0;
+		while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start])))
+			start++;
+		size_t end = value.size();
+		while (end > start && std::isspace(static_cast<unsigned char>(value[end - 1])))
+			end--;
+		return value.substr(start, end - start);
+	};
+
+	std::string text(data.begin(), data.end());
+	size_t pos = 0;
+	while (pos <= text.size())
+	{
+		size_t eol = text.find('\n', pos);
+		if (eol == std::string::npos)
+			eol = text.size();
+		std::string line = text.substr(pos, eol - pos);
+		pos = eol + 1;
+
+		const size_t comment = line.find("//");
+		if (comment != std::string::npos)
+			line.erase(comment);
+		line = trim(line);
+		if (line.empty())
+			continue;
+
+		if (line[0] == '[')
+		{
+			Raw raw;
+			const size_t close = line.find(']');
+			raw.name = line.substr(1, close == std::string::npos ? std::string::npos : close - 1);
+			raws.push_back(raw);
+			continue;
+		}
+		if (raws.empty())
+			continue;
+
+		const size_t eq = line.find('=');
+		if (eq == std::string::npos)
+			continue;
+		const std::string key = lowerCopy(trim(line.substr(0, eq)));
+		const std::string value = trim(line.substr(eq + 1));
+		const float number = std::strtof(value.c_str(), nullptr);
+		const int whole = static_cast<int>(std::strtol(value.c_str(), nullptr, 10));
+
+		Raw& raw = raws.back();
+		if (key == "material")
+			raw.material = value;
+		else if (key == "clumpsize")
+			raw.clumpSize = whole;
+		else if (key == "density")
+			raw.density = whole;
+		else if (key == "minheight")
+			raw.minHeight = number;
+		else if (key == "maxheight")
+			raw.maxHeight = number;
+		else if (key == "width")
+			raw.width = number;
+		else if (key == "upvector")
+			raw.upVector = number;
+		else if (key == "numtextures")
+			raw.numTextures = whole;
+		else if (key == "maxvisibleradius")
+			raw.maxVisibleRadius = number;
+	}
+
+	for (const Raw& raw : raws)
+	{
+		Ty1GrassType type;
+		type.name = raw.name;
+		type.bladesPerTriangle = std::min(raw.clumpSize * raw.density, 32);
+		type.minHeight = raw.minHeight * 100.0f;
+		type.maxHeight = raw.maxHeight * 100.0f;
+		type.width = raw.width * 100.0f;
+		type.upVector = raw.upVector;
+		type.numTextures = raw.numTextures;
+		type.maxVisibleRadius = raw.maxVisibleRadius * 100.0f;
+		type.material = raw.material;
+		ty1GrassTypeList.push_back(type);
+	}
+	Debug::log("grass_types.ini: " + std::to_string(ty1GrassTypeList.size()) + " grass types");
+	return ty1GrassTypeList;
 }
 
 const Content::Ty1MaterialDraw* Content::findTy1MaterialLower(const std::string& lowerMaterialName) const

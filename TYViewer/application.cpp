@@ -865,6 +865,8 @@ void Application::loadTy1Level(const std::string& levelName)
 		models.push_back(loaded);
 		Debug::log("Loaded level room mesh: " + roomName);
 	}
+	// Hidden guides emit too, so this runs before collision meshes are disabled.
+	grassCards.build(models, content);
 
 	std::string globalModelText;
 	std::vector<char> globalModel;
@@ -1589,6 +1591,7 @@ void Application::clearModels()
 	levelObjectIds.clear();
 	propModels.clear();
 	propMeshInstances.clear();
+	grassCards.clear();
 	selectedLevelObject = -1;
 	// Note: Models are managed by the Content system, so we don't delete them here
 	
@@ -1751,6 +1754,11 @@ void Application::update(float dt)
 	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_V))
 	{
 		drawVertexIds = !drawVertexIds;
+	}
+
+	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_G))
+	{
+		drawGrass = !drawGrass;
 	}
 
 	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_T))
@@ -1997,6 +2005,16 @@ void Application::render(Shader& shader)
 	// file order writes depth and hides the cliff that is stored in a later room.
 	drawRoomMeshes(false);
 	drawPropBatches(false);
+	if (drawGrass)
+	{
+		// Row 0 of the view rotation is the camera right axis in prop world space.
+		const glm::vec3 cameraRight(view[0][0], view[1][0], view[2][0]);
+		grassCards.draw(vpmatrix, cameraRight, [&](const glm::vec3& boxMin, const glm::vec3& boxMax)
+		{
+			return aabbInFrustum(frustum, boxMin, boxMax);
+		});
+		shader.bind();
+	}
 	drawRoomMeshes(true);
 	drawPropBatches(true);
 

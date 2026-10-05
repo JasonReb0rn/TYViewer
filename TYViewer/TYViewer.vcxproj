@@ -197,6 +197,7 @@
     <ClCompile Include="graphics\camera.cpp" />
     <ClCompile Include="graphics\renderer.cpp" />
     <ClCompile Include="graphics\shader.cpp" />
+    <ClCompile Include="graphics\grass_cards.cpp" />
     <ClCompile Include="graphics\mesh.cpp" />
     <ClCompile Include="graphics\render_stats.cpp" />
     <ClCompile Include="graphics\text.cpp" />
@@ -227,6 +228,7 @@
     <ClInclude Include="graphics\drawable.h" />
     <ClInclude Include="graphics\renderer.h" />
     <ClInclude Include="graphics\shader.h" />
+    <ClInclude Include="graphics\grass_cards.h" />
     <ClInclude Include="graphics\mesh.h" />
     <ClInclude Include="graphics\render_stats.h" />
     <ClInclude Include="graphics\text.h" />

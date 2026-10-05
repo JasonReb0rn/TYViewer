@@ -16,6 +16,7 @@
 #include "graphics/renderer.h"
 #include "graphics/shader.h"
 
+#include "graphics/grass_cards.h"
 #include "graphics/mesh.h"
 #include "graphics/texture.h"
 #include "graphics/text.h"
@@ -68,6 +69,7 @@ private:
 	bool drawColliders = true;
 	bool drawBones = true;
 	bool drawVertexIds = false;
+	bool drawGrass = true;
 
 	bool wireframe = false;
 	bool viewingLevel = false;
@@ -95,6 +97,8 @@ private:
 	// that place it. Rebuilt once when a level loads (rebuildPropBatches). Visibility
 	// and frustum culling are applied per instance, per frame, in Application::render.
 	std::unordered_map<Mesh*, std::vector<int>> propMeshInstances;
+	// Blade cards from the room meshes' grass materials. Rebuilt per TY1 level.
+	GrassCards grassCards;
 	// Reused every frame for one batch's world matrices, so a 2000+ object level
 	// doesn't reallocate a vector per mesh part per frame.
 	std::vector<glm::mat4> scratchInstanceMatrices;

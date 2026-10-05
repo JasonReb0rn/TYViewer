@@ -101,6 +101,10 @@ void Shader::setUniform2f(const std::string& name, glm::vec2 v)
 {
 	glUniform2f(getUniformLocation(name), v.x, v.y);
 }
+void Shader::setUniform3f(const std::string& name, glm::vec3 v)
+{
+	glUniform3f(getUniformLocation(name), v.x, v.y, v.z);
+}
 void Shader::setUniform4f(const std::string& name, glm::vec4 v)
 {
 	glUniform4f(getUniformLocation(name), v.x, v.y, v.z, v.w);
