@@ -5,8 +5,25 @@
 
 #define TEXTURE_DEFAULT_ID 1
 
-Texture::Texture(unsigned int id)
-	: id(id)
+Texture* Texture::createRGBA(int width, int height, const unsigned char* pixels)
+{
+	unsigned int id = 0;
+	glGenTextures(1, &id);
+	glBindTexture(GL_TEXTURE_2D, id);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	return new Texture(id, width, height);
+}
+
+void Texture::updateRGBA(const unsigned char* pixels) const
+{
+	glBindTexture(GL_TEXTURE_2D, id);
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+Texture::Texture(unsigned int id, int width, int height)
+	: id(id), width(width), height(height)
 {
 	glBindTexture(GL_TEXTURE_2D, id);
 

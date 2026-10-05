@@ -2,7 +2,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 
 void Content::initialize()
 {
@@ -147,6 +149,29 @@ namespace
 		const float offset = static_cast<float>(index) * step;
 		return offset >= 0.99f ? 0.0f : offset;
 	}
+
+	// Water_Update's RandomFR. The seed is the IEEE bits of a coordinate hash.
+	float randomFR(std::uint32_t seedBits, float minValue, float maxValue)
+	{
+		const std::uint32_t curr = seedBits * 0x343FDu + 0x269EC3u;
+		const std::uint32_t bits = ((curr >> 8) & 0x7FFFFFu) | 0x3F800000u;
+		float unit = 0.0f;
+		std::memcpy(&unit, &bits, sizeof(unit));
+		unit -= 1.0f;
+		return unit * (maxValue - minValue) + minValue;
+	}
+
+	float waterPhase(float texelX, float texelY, bool second)
+	{
+		const float f16 = texelY + 57.0f;
+		const float f24 = texelX + 30.0f;
+		const float hash = second
+			? (0.05f + f24) * (1.2f + f24) * (2.15f + f16) * (1.2f + f16)
+			: (f24 * f16) * f16 * (0.2f + f24) * (0.8f + f16);
+		std::uint32_t seedBits = 0;
+		std::memcpy(&seedBits, &hash, sizeof(seedBits));
+		return randomFR(seedBits, 0.0f, 6.28318530718f);
+	}
 }
 
 void Content::loadTy1Materials()
@@ -175,6 +200,13 @@ void Content::loadTy1Materials()
 		float uvParam[6] = {};
 		bool clampU = false;
 		bool clampV = false;
+		bool indirectWater = false;
+		bool waterCameraUv = false;
+		bool waterWorldUv = false;
+		float waterX = 25.0f;
+		float waterY = 50.0f;
+		float waterZ = 0.005f;
+		float waterW = 0.005f;
 		bool active = false;
 	};
 
@@ -198,6 +230,13 @@ void Content::loadTy1Materials()
 			draw.uvParam[i] = block.uvParam[i];
 		draw.clampU = block.clampU;
 		draw.clampV = block.clampV;
+		draw.indirectWater = block.indirectWater;
+		draw.waterCameraUv = block.waterCameraUv;
+		draw.waterWorldUv = block.waterWorldUv;
+		draw.waterX = block.waterX;
+		draw.waterY = block.waterY;
+		draw.waterZ = block.waterZ;
+		draw.waterW = block.waterW;
 		if (block.masked)
 			draw.alphaRef = block.alphaRef >= 0.0f ? block.alphaRef : 0.5f;
 		if (block.blendCode == 1)
@@ -271,7 +310,23 @@ void Content::loadTy1Materials()
 			// Floor water and cave puddles (Z2_water, and the same material on
 			// the raised pool). Vertex alpha is the opacity. Depth writes hide
 			// the ground under the surface.
+			// Order matches Material::InitFromMatDefs: flag, flag, z, w, x, y.
+			// A short line keeps the game defaults already stored on the block.
 			block.depthWrite = false;
+			block.indirectWater = true;
+			const std::vector<float> values = collectFloats(words);
+			if (values.size() > 0)
+				block.waterCameraUv = values[0] != 0.0f;
+			if (values.size() > 1)
+				block.waterWorldUv = values[1] != 0.0f;
+			if (values.size() > 2)
+				block.waterZ = values[2];
+			if (values.size() > 3)
+				block.waterW = values[3];
+			if (values.size() > 4)
+				block.waterX = values[4];
+			if (values.size() > 5)
+				block.waterY = values[5];
 		}
 		else if (key == "invisible" && words.size() >= 2)
 		{
@@ -386,7 +441,8 @@ void Content::loadTy1Materials()
 	commit();
 	}
 
-	// ManuallyScrollTextures, once per 60 Hz logic tick. Stored as UV units per second.
+	// ManuallyScrollTextures, once per 60 Hz logic tick. Stored as UV per second of that tick.
+	// Playback is 30 Hz because the animation clock runs at half real time.
 	struct ManualScroll
 	{
 		const char* name;
@@ -451,6 +507,63 @@ void Content::ty1UvWrap(const std::string& materialName, bool& clampU, bool& cla
 
 	clampU = draw.clampU;
 	clampV = draw.clampV;
+}
+
+bool Content::ty1IndirectWater(const std::string& materialName, glm::vec4& scale) const
+{
+	const auto it = ty1Materials.find(lowerCopy(materialName));
+	if (it == ty1Materials.end() || !it->second.indirectWater)
+		return false;
+
+	const Ty1MaterialDraw& draw = it->second;
+	scale = glm::vec4(draw.waterX, draw.waterY, draw.waterZ, draw.waterW);
+	return true;
+}
+
+void Content::updateTy1WaterRipple()
+{
+	if (!waterPhasesReady)
+	{
+		// i is the texel row and j is the column, matching Water_Update's walk.
+		for (int y = 0; y < 16; y++)
+		{
+			for (int x = 0; x < 16; x++)
+			{
+				const int index = y * 16 + x;
+				waterPhaseA[index] = waterPhase(static_cast<float>(x), static_cast<float>(y), false);
+				waterPhaseB[index] = waterPhase(static_cast<float>(x), static_cast<float>(y), true);
+			}
+		}
+		waterPhasesReady = true;
+	}
+
+	// 0.1 rad per 60 Hz tick. The clock is already half real time, so this is one step per 30 Hz frame.
+	const float angle = std::fmod(ty1AnimTimeSeconds * 6.0f, 6.28318530718f);
+	unsigned char pixels[16 * 16 * 4];
+	for (int i = 0; i < 256; i++)
+	{
+		int dat0 = static_cast<int>(128.0f + 127.0f * std::sin(waterPhaseA[i] + angle));
+		int dat1 = static_cast<int>(128.0f + 127.0f * std::sin(waterPhaseB[i] + angle));
+		if (dat0 < 0)
+			dat0 = 0;
+		if (dat0 > 255)
+			dat0 = 255;
+		if (dat1 < 0)
+			dat1 = 0;
+		if (dat1 > 255)
+			dat1 = 255;
+		// Indirect unit reads alpha, blue, green. Red and green stay 0.
+		unsigned char* pixel = pixels + i * 4;
+		pixel[0] = 0;
+		pixel[1] = 0;
+		pixel[2] = static_cast<unsigned char>(dat1);
+		pixel[3] = static_cast<unsigned char>(dat0);
+	}
+
+	if (waterRipple == nullptr)
+		waterRipple = Texture::createRGBA(16, 16, pixels);
+	else
+		waterRipple->updateRGBA(pixels);
 }
 
 void Content::setTy1AnimClock(float timeSeconds, float yawRadians, float pitchRadians)

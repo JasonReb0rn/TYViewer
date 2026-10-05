@@ -145,6 +145,21 @@ void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& sty
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, clampU ? GL_CLAMP_TO_EDGE : GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, clampV ? GL_CLAMP_TO_EDGE : GL_REPEAT);
 
+	glm::vec4 waterScale(0.0f);
+	int water = 0;
+	if (m_content && m_content->ty1IndirectWater(m_materialName, waterScale))
+	{
+		Texture* ripple = m_content->ty1WaterRipple();
+		if (ripple != nullptr)
+		{
+			water = 1;
+			ripple->bind(1);
+			shader.setUniform1i("waterRipple", 1);
+			shader.setUniform4f("waterScale", waterScale);
+		}
+	}
+	shader.setUniform1i("water", water);
+
 	shader.setUniformMat4("modelMatrix", world * getMatrix());
 
 	glBindVertexArray(vao);

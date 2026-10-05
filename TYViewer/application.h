@@ -92,7 +92,7 @@ private:
 	// Unique prop models. Not drawn at the origin; instances reference them.
 	std::vector<Model*> propModels;
 	int selectedLevelObject = -1;
-	// Seconds since launch. TY1 texture scrolls are UV units per second.
+	// Animation clock. Half of real time: TY1 presents at 30 Hz (lockTo30).
 	float ty1AnimTime = 0.0f;
 	std::vector<Text*> labels;
 	Mesh* mesh;

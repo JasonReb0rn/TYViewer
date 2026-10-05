@@ -161,16 +161,48 @@ Shader* Shader::createDefault()
 		in vec2 v_texcoord;
 
 		uniform sampler2D diffuseTexture;
+		uniform sampler2D waterRipple;
+		uniform vec4 waterScale;
 		uniform vec4 tintColour;
 		uniform float alphaRef;
 		uniform int solidColour;
+		uniform int water;
 
 		out vec4 color;
 
+		// GameCube indirect matrix entries are signed 11-bit, value * 1024.
+		// 1.0 becomes 1024, which sign-extends to -1024.
+		int quantS11(float value)
+		{
+			int q = int(value * 1024.0) & 2047;
+			if ((q & 1024) != 0)
+				q -= 2048;
+			return q;
+		}
+
 		void main()
 		{
-			vec4 texColor = texture(diffuseTexture, v_texcoord);
-			vec4 shaded = texColor * v_colour * tintColour;
+			vec2 sampleUv = v_texcoord;
+			if (water != 0)
+			{
+				// Mesh V is stored flipped. The ripple map is looked up in game UV.
+				vec2 gameUv = vec2(v_texcoord.x, 1.0 - v_texcoord.y);
+				vec3 abg = texture(waterRipple, gameUv * waterScale.xy).abg;
+				ivec3 ind = ivec3(round(abg * 255.0)) - 128;
+				int ma = quantS11(waterScale.z);
+				int md = quantS11(waterScale.w);
+				int bias = quantS11(1.0);
+				// scale_exp 1: (dot >> 3) << 1, in 1/128-texel units.
+				int rawS = ((ma * ind.x + bias * ind.z) >> 3) << 1;
+				int rawT = ((md * ind.y + bias * ind.z) >> 3) << 1;
+				vec2 deltaGame = vec2(rawS, rawT) / (vec2(textureSize(diffuseTexture, 0)) * 128.0);
+				sampleUv += vec2(deltaGame.x, -deltaGame.y);
+			}
+
+			vec4 texColor = texture(diffuseTexture, sampleUv);
+			vec4 shaded = water != 0
+				? vec4(texColor.rgb, texColor.a * v_colour.a) * tintColour
+				: texColor * v_colour * tintColour;
 			if (solidColour != 0)
 			{
 				if (texColor.a < alphaRef)

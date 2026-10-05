@@ -319,6 +319,8 @@ void Application::initialize()
 	shader->setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
 	shader->setUniform1f("alphaRef", 0.01f);
 	shader->setUniform1i("diffuseTexture", 0);
+	shader->setUniform1i("waterRipple", 1);
+	shader->setUniform1i("water", 0);
 	shader->setUniformMat3("uvMatrix", glm::mat3(1.0f));
 
 	basic = content.load<Shader>("standard.shader");
@@ -1540,11 +1542,14 @@ void Application::onChar(unsigned int codepoint)
 
 void Application::update(float dt)
 {
-	ty1AnimTime += dt;
+	// Game_InitSystem sets lockTo30, so a presented frame is two NTSC retraces.
+	// Steps written per 60 Hz tick play back at 30 Hz.
+	ty1AnimTime += dt * 0.5f;
 	content.setTy1AnimClock(
 		ty1AnimTime,
 		glm::radians(camera.getRotation().x),
 		glm::radians(camera.getRotation().y));
+	content.updateTy1WaterRipple();
 
 	float mouseInputX = Mouse::getMouseDelta().x;
 	float mouseInputY = Mouse::getMouseDelta().y;
@@ -1743,6 +1748,7 @@ void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& i
 	shader.bind();
 	shader.setUniform2f("clipOffset", glm::vec2(0.0f));
 	shader.setUniform1i("solidColour", 0);
+	shader.setUniform1i("water", 0);
 	shader.setUniform4f("tintColour", glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
 }
 
@@ -1809,6 +1815,7 @@ void Application::render(Shader& shader)
 	shader.setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
 	shader.setUniform2f("clipOffset", glm::vec2(0.0f));
 	shader.setUniform1i("solidColour", 0);
+	shader.setUniform1i("water", 0);
 	shader.setUniform1f("alphaRef", 0.01f);
 	shader.setUniformMat3("uvMatrix", glm::mat3(1.0f));
 

@@ -28,6 +28,7 @@
 #include "debug.h"
 
 #include <glm/mat3x3.hpp>
+#include <glm/vec4.hpp>
 
 
 #define MDL2_SUBMESH_SIZE 80
@@ -111,7 +112,8 @@ public:
 		// scroll / animate / rotate / sinrotate / envscroll parameters, in file order.
 		Ty1UvAnim uvAnim = Ty1UvAnim::None;
 		float uvParam[6] = {};
-		// ManuallyScrollTextures. Rates are UV units per second at 60 Hz.
+		// ManuallyScrollTextures. Rates are UV per second of a 60 Hz tick.
+		// The animation clock runs at half real time, so these play at 30 Hz.
 		// lockU replaces U every tick (SetMatrixX) before the scroll is added.
 		bool manualScroll = false;
 		float manualDu = 0.0f;
@@ -121,6 +123,15 @@ public:
 		// global.mad clampUV / address. Absent lines repeat, which is what waterfalls use.
 		bool clampU = false;
 		bool clampV = false;
+		// indirectwater. x,y tile the ripple map across the mesh UV. z,w scale the warp.
+		// The two flags are the game's camera-locked and world-space paths. Shipped materials leave both off.
+		bool indirectWater = false;
+		bool waterCameraUv = false;
+		bool waterWorldUv = false;
+		float waterX = 25.0f;
+		float waterY = 50.0f;
+		float waterZ = 0.005f;
+		float waterW = 0.005f;
 	};
 	Ty1MaterialDraw lookupTy1Material(const std::string& materialName);
 	// Playback clock for ty1UvMatrix. Yaw and pitch are radians.
@@ -132,6 +143,11 @@ public:
 	glm::mat3 ty1UvMatrix(const std::string& materialName, float timeSeconds, float yawRadians, float pitchRadians) const;
 	// Per-axis wrap from clampUV / address. Materials without those lines repeat.
 	void ty1UvWrap(const std::string& materialName, bool& clampU, bool& clampV) const;
+	// indirectwater scales as (x, y, z, w). False when the material is not water.
+	bool ty1IndirectWater(const std::string& materialName, glm::vec4& scale) const;
+	// Shared 16x16 ripple map. Null until the first animation update.
+	Texture* ty1WaterRipple() const { return waterRipple; }
+	void updateTy1WaterRipple();
 
 private:
 	void createDefaultTexture();
@@ -150,6 +166,12 @@ private:
 	float ty1AnimTimeSeconds = 0.0f;
 	float ty1AnimYawRadians = 0.0f;
 	float ty1AnimPitchRadians = 0.0f;
+
+	Texture* waterRipple = nullptr;
+	bool waterPhasesReady = false;
+	// Fixed phase of each ripple texel, from the game's RandomFR hash. Angle is added at upload.
+	float waterPhaseA[256] = {};
+	float waterPhaseB[256] = {};
 };
 
 #include "content.inl"
