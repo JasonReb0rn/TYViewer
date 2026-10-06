@@ -44,7 +44,7 @@ namespace
 		{ "BUTTERFLY",   CritterMove::FlySit,  "Act_09_Butterfly.bad",    1,    3.5f, 3.5f, 0.12f, 60, 240,  "sit",                                       "fly",                        "",               "",     0.0f,  80.0f, false },
 		// dragonFlyDesc is a FlyDesc. The levels pack DFly_A3.dds and never Act_16_Dragonfly.mdl,
 		// whose "hover" anim only turns z_root 180 degrees and snaps back.
-		{ "DRAGONFLY",   CritterMove::Hover,   nullptr,                   1,    10.0f, 10.0f, 0.40f, 15, 90, "",                                          "",                           "",               "",     0.0f,  100.0f, false, "DFly_A3.dds", 40.0f },
+		{ "DRAGONFLY",   CritterMove::Hover,   nullptr,                   1,    10.0f, 10.0f, 0.40f, 15, 90, "",                                          "",                           "",               "",     0.0f,  100.0f, false, "DFly_A3.dds", 40.0f, 16, true, false },
 		{ "SEAGULL",     CritterMove::Flock,   "Act_33_Seagull.bad",      1,    10.0f, 10.0f, 0.04f, 0, 0,   "",                                          "flap",                       "glide",          "",     0.0f,  300.0f, false },
 		{ "BIRDFLOCK",   CritterMove::Flock,   "ACT1_37_BIRDFLOCK.BAD",   1,    12.0f, 12.0f, 0.05f, 0, 0,   "",                                          "flap",                       "glide",          "",     0.0f,  300.0f, false },
 		{ "KINGFISHER",  CritterMove::Perch,   "Act_21_Kingfisher.bad",   1,    9.0f, 9.0f, 0.08f, 90, 300,  "idle01",                                    "fly",                        "glide",          "land", 0.0f,  200.0f, false },
@@ -60,7 +60,8 @@ namespace
 		{ "WATERDRAGON", CritterMove::Point,   "Act_20_WaterDragon.bad",  1,    0.0f, 0.0f, 0.0f, 150, 400,  "idle",                                      "",                           "alert",          "",     0.0f,  0.0f, false },
 		{ "SYNKERFROG",  CritterMove::Point,   "Act1_13_SynkerFrog.bad",  1,    0.0f, 0.0f, 0.0f, 150, 400,  "nothing",                                   "",                           "",               "",     0.0f,  0.0f, false },
 		{ "FLY",         CritterMove::Sprite,  nullptr,                   8,    6.0f, 6.0f, 0.30f, 0, 0,     "",                                          "",                           "",               "",     0.0f,  0.0f, false },
-		{ "FIREFLY",     CritterMove::Sprite,  nullptr,                   6,    3.0f, 3.0f, 0.15f, 0, 0,     "",                                          "",                           "",               "",     0.0f,  0.0f, false },
+		// fx_072 is packed by exactly the levels with fireflies; global.mad gives it blend 1 (additive).
+		{ "FIREFLY",     CritterMove::Sprite,  nullptr,                   6,    3.0f, 3.0f, 0.15f, 0, 0,     "",                                          "",                           "",               "",     0.0f,  0.0f, false, "fx_072.dds", 20.0f, 8, false, true },
 	};
 
 	std::string upper(std::string value)

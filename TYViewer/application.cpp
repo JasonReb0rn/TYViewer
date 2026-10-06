@@ -1622,19 +1622,20 @@ void Application::refreshCrittersToggle()
 		gui->setCrittersToggle(!critters.empty(), !critters.paused());
 }
 
-const std::vector<std::unique_ptr<Mesh>>& Application::critterSpriteFramesFor(const std::string& texture)
+const std::vector<std::unique_ptr<Mesh>>& Application::critterSpriteFramesFor(const CritterSpecies& species)
 {
+	const std::string texture = species.sprite;
 	auto it = critterSpriteFrames.find(texture);
 	if (it != critterSpriteFrames.end())
 		return it->second;
 
-	const int kFrames = 16;
+	const int frameCount = std::max(1, species.spriteFrames);
 	Texture* sheet = content.load<Texture>(texture);
 	std::vector<std::unique_ptr<Mesh>> frames;
-	for (int frame = 0; frame < kFrames; frame++)
+	for (int frame = 0; frame < frameCount; frame++)
 	{
-		const float u0 = static_cast<float>(frame) / kFrames;
-		const float u1 = static_cast<float>(frame + 1) / kFrames;
+		const float u0 = static_cast<float>(frame) / frameCount;
+		const float u1 = static_cast<float>(frame + 1) / frameCount;
 		// Textures load with Y inverted, so the top of the image is v = 1.
 		const std::vector<Vertex> vertices =
 		{
@@ -1644,9 +1645,9 @@ const std::vector<std::unique_ptr<Mesh>>& Application::critterSpriteFramesFor(co
 			Vertex(glm::vec4(-0.5f, 0.5f, 0.0f, 1.0f), glm::vec2(u0, 1.0f)),
 		};
 		auto mesh = std::make_unique<Mesh>(vertices, std::vector<unsigned int>{ 0, 1, 2, 0, 2, 3 }, sheet, texture);
-		// global.mad: Dfly_A1..A3 are blend 6, aref .03.
-		mesh->setBlend(MeshBlend::Alpha);
-		mesh->setAlphaRef(0.03f);
+		// global.mad: Dfly_A1..A3 are blend 6, aref .03. fx_072 is blend 1.
+		mesh->setBlend(species.spriteAdditive ? MeshBlend::Additive : MeshBlend::Alpha);
+		mesh->setAlphaRef(species.spriteAdditive ? 0.0f : 0.03f);
 		frames.push_back(std::move(mesh));
 	}
 	return critterSpriteFrames.emplace(texture, std::move(frames)).first->second;
@@ -2177,9 +2178,9 @@ void Application::render(Shader& shader)
 	drawPropBatches(true);
 	drawCritters(true);
 
-	// Sprite critters (the dragonfly). The sheet frame is the heading relative to the
-	// camera. Guess: frame 0 faces the camera and each later frame turns the head 45
-	// degrees toward screen left; the still and blurred wing sets alternate every 2 ticks.
+	// Sprite critters. Guesses: the dragonfly's frame 0 faces the camera and each later
+	// frame turns the head 45 degrees toward screen left, with the still and blurred wing
+	// sets alternating every 2 ticks. The firefly flicker steps one frame every 2 ticks.
 	{
 		const glm::vec3 cameraRight(view[0][0], view[1][0], view[2][0]);
 		const glm::vec3 cameraUp(view[0][1], view[1][1], view[2][1]);
@@ -2193,7 +2194,7 @@ void Application::render(Shader& shader)
 			const size_t instanceIndex = static_cast<size_t>(field->instanceIndex());
 			if (instanceIndex >= levelObjects.size() || !levelObjects[instanceIndex].visible)
 				continue;
-			const std::vector<std::unique_ptr<Mesh>>& frames = critterSpriteFramesFor(species.sprite);
+			const std::vector<std::unique_ptr<Mesh>>& frames = critterSpriteFramesFor(species);
 			for (auto& entry : critterBatches)
 				entry.second.clear();
 			const float size = species.spriteSize;
@@ -2203,16 +2204,26 @@ void Application::render(Shader& shader)
 				const glm::vec3 position = field->critterPosition(critter, alpha);
 				if (!aabbInFrustum(frustum, position - glm::vec3(size), position + glm::vec3(size)))
 					continue;
-				const float angle = std::atan2(-glm::dot(critter.forward, cameraRight), glm::dot(critter.forward, cameraBack));
-				int heading = static_cast<int>(std::lround(angle / glm::quarter_pi<float>()));
-				heading = ((heading % 8) + 8) % 8;
-				const bool blurred = ((field->ticks() / 2 + static_cast<int>(i)) & 1) != 0;
+				size_t frame = 0;
+				if (species.spriteByHeading)
+				{
+					const float angle = std::atan2(-glm::dot(critter.forward, cameraRight), glm::dot(critter.forward, cameraBack));
+					int heading = static_cast<int>(std::lround(angle / glm::quarter_pi<float>()));
+					heading = ((heading % 8) + 8) % 8;
+					const bool blurred = ((field->ticks() / 2 + static_cast<int>(i)) & 1) != 0;
+					frame = static_cast<size_t>(heading + (blurred ? 8 : 0));
+				}
+				else
+				{
+					frame = static_cast<size_t>(field->ticks() / 2 + static_cast<int>(i) * 3);
+				}
+				frame %= frames.size();
 				glm::mat4 world(1.0f);
 				world[0] = glm::vec4(cameraRight * size, 0.0f);
 				world[1] = glm::vec4(cameraUp * size, 0.0f);
 				world[2] = glm::vec4(cameraBack, 0.0f);
 				world[3] = glm::vec4(position, 1.0f);
-				critterBatches[frames[static_cast<size_t>(heading + (blurred ? 8 : 0))].get()].push_back(world);
+				critterBatches[frames[frame].get()].push_back(world);
 			}
 			for (auto& entry : critterBatches)
 			{
@@ -2265,13 +2276,13 @@ void Application::render(Shader& shader)
 		renderer.draw(*grid, *basic);
 	}
 
-	// Flies and fireflies are BlitterCritter sprites with no mesh. A dot marks each one.
+	// Sprite critters with no known sprite sheet (the plain fly). A dot marks each one.
 	{
 		bool started = false;
 		const float alpha = critters.alpha();
 		for (const std::unique_ptr<CritterField>& field : critters.fields())
 		{
-			if (field->species().move != CritterMove::Sprite)
+			if (field->species().move != CritterMove::Sprite || field->species().sprite != nullptr)
 				continue;
 			const size_t instanceIndex = static_cast<size_t>(field->instanceIndex());
 			if (instanceIndex >= levelObjects.size() || !levelObjects[instanceIndex].visible)

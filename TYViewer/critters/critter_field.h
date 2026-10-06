@@ -91,11 +91,16 @@ struct CritterSpecies
 	float hopHeight;
 	// Gecko: the body follows the surface normal.
 	bool alignToFloor;
-	// FlyDesc critters drawn as a camera-facing sprite sheet instead of a model:
-	// 8 headings 45 degrees apart, wings still, then the same 8 with wings blurred.
+	// FlyDesc critters drawn as a camera-facing sprite strip instead of a model.
 	const char* sprite = nullptr;
 	// World units across the sprite.
 	float spriteSize = 0.0f;
+	// Frames in the strip, left to right.
+	int spriteFrames = 0;
+	// Dragonfly: 8 headings 45 degrees apart with wings still, then the same 8 with
+	// wings blurred. Otherwise the frames are a flicker loop (firefly).
+	bool spriteByHeading = false;
+	bool spriteAdditive = false;
 };
 
 // Null for types that are not critters.

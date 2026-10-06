@@ -128,7 +128,7 @@ private:
 	void drawSelectedObjectOutline(Shader& shader, const Ty1Instance& instance);
 	void refreshCollisionToggle();
 	void refreshCrittersToggle();
-	const std::vector<std::unique_ptr<Mesh>>& critterSpriteFramesFor(const std::string& texture);
+	const std::vector<std::unique_ptr<Mesh>>& critterSpriteFramesFor(const CritterSpecies& species);
 	// Each critter in `field` with its model and world matrix between the last two ticks.
 	void forEachCritterDraw(const CritterField& field, const std::function<void(Model&, const glm::mat4&, const Critter&)>& visit) const;
 	void capturePartDefaults();
