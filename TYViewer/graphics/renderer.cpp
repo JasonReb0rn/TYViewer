@@ -1,5 +1,6 @@
 #include "renderer.h"
 
+#include "debug.h"
 #include "vertex.h"
 
 #define _USE_MATH_DEFINES
@@ -11,9 +12,117 @@ Renderer::Renderer()
 void Renderer::initialize()
 {
 	glEnable(GL_DEPTH_TEST);
+	// Near is the greater depth. See Camera::updateProjectionMatrix.
+	glDepthFunc(GL_GEQUAL);
+	glClearDepth(0.0);
+	// [0, 1] clip z so the float depth target is not quantized back to 24 bits.
+	if (glad_glClipControl != nullptr)
+		glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
 
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+}
+
+void Renderer::destroyWorldTarget()
+{
+	if (m_worldFbo != 0)
+		glDeleteFramebuffers(1, &m_worldFbo);
+	if (m_worldColor != 0)
+		glDeleteTextures(1, &m_worldColor);
+	if (m_worldDepth != 0)
+		glDeleteRenderbuffers(1, &m_worldDepth);
+	m_worldFbo = 0;
+	m_worldColor = 0;
+	m_worldDepth = 0;
+	m_worldWidth = 0;
+	m_worldHeight = 0;
+}
+
+void Renderer::ensureWorldTarget(int width, int height)
+{
+	if (m_worldTargetFailed)
+		return;
+	if (width < 1)
+		width = 1;
+	if (height < 1)
+		height = 1;
+	if (m_worldFbo != 0 && m_worldWidth == width && m_worldHeight == height)
+		return;
+
+	destroyWorldTarget();
+
+	glGenFramebuffers(1, &m_worldFbo);
+	glGenTextures(1, &m_worldColor);
+	glBindTexture(GL_TEXTURE_2D, m_worldColor);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+	glGenRenderbuffers(1, &m_worldDepth);
+	glBindRenderbuffer(GL_RENDERBUFFER, m_worldDepth);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH32F_STENCIL8, width, height);
+
+	glBindFramebuffer(GL_FRAMEBUFFER, m_worldFbo);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_worldColor, 0);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, m_worldDepth);
+	const GLenum drawBuffer = GL_COLOR_ATTACHMENT0;
+	glDrawBuffers(1, &drawBuffer);
+
+	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+	{
+		Debug::log("Float depth target is incomplete; level parts will keep fighting at distance");
+		m_worldTargetFailed = true;
+		destroyWorldTarget();
+	}
+
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glBindRenderbuffer(GL_RENDERBUFFER, 0);
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	if (m_worldFbo != 0)
+	{
+		m_worldWidth = width;
+		m_worldHeight = height;
+	}
+}
+
+void Renderer::beginWorldTarget(int width, int height, const glm::vec4& colour)
+{
+	// The UI is drawn with a [-1, 1] ortho after presentWorldTarget restores it.
+	if (glad_glClipControl != nullptr)
+		glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+	ensureWorldTarget(width, height);
+	glBindFramebuffer(GL_FRAMEBUFFER, m_worldFbo);
+	glViewport(0, 0, width > 0 ? width : 1, height > 0 ? height : 1);
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_GEQUAL);
+	glDepthMask(GL_TRUE);
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	glClearColor(colour.x, colour.y, colour.z, 1.0f);
+	glClearDepth(0.0);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+}
+
+void Renderer::presentWorldTarget()
+{
+	if (m_worldFbo == 0)
+	{
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		if (glad_glClipControl != nullptr)
+			glClipControl(GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE);
+		return;
+	}
+
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, m_worldFbo);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+	glBlitFramebuffer(0, 0, m_worldWidth, m_worldHeight, 0, 0, m_worldWidth, m_worldHeight,
+		GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glViewport(0, 0, m_worldWidth, m_worldHeight);
+	glDrawBuffer(GL_BACK);
+	if (glad_glClipControl != nullptr)
+		glClipControl(GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE);
 }
 
 void Renderer::drawHollowBox(const glm::vec3& min, const glm::vec3& max, const glm::vec4& colour)

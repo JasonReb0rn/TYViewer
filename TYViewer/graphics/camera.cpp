@@ -1,5 +1,9 @@
 #include "camera.h"
 
+#include <glad/glad.h>
+
+#include <cmath>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -111,7 +115,29 @@ void Camera::localTranslate(const glm::vec3& t)
 
 void Camera::updateProjectionMatrix()
 {
-	projection = glm::perspective(glm::radians(fieldOfView), aspectRatio, clipPlaneNear, clipPlaneFar);
+	const float fov = glm::radians(fieldOfView);
+	const float n = clipPlaneNear;
+	const float f = clipPlaneFar;
+	// Reversed depth into the float world target: the near plane is the greater
+	// value and the depth test keeps it (GL_GEQUAL, clear 0). Passing far then
+	// near to glm::perspective only reverses the [-1, 1] clip range. This GPU
+	// still quantizes that range to 24 bits while converting it to window depth,
+	// so a 1-unit gap at a few thousand units ties and level parts fight. With
+	// glClipControl the clip range is already [0, 1] (near = 1, far = 0) and the
+	// float buffer keeps the separation.
+	if (glad_glClipControl != nullptr && f > n && aspectRatio > 0.0f)
+	{
+		const float t = tanf(fov * 0.5f);
+		projection = glm::mat4(0.0f);
+		projection[0][0] = 1.0f / (aspectRatio * t);
+		projection[1][1] = 1.0f / t;
+		projection[2][2] = n / (f - n);
+		projection[2][3] = -1.0f;
+		projection[3][2] = (f * n) / (f - n);
+		return;
+	}
+
+	projection = glm::perspective(fov, aspectRatio, f, n);
 }
 
 void Camera::updateViewMatrix()

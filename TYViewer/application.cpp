@@ -40,7 +40,8 @@ out vec2 TexCoord;
 uniform mat4 projection;
 void main()
 {
-    gl_Position = projection * vec4(aPos, 0.0, 1.0);
+	gl_Position = projection * vec4(aPos, 0.0, 1.0);
+	gl_Position.z = 0.5 * gl_Position.w;
     TexCoord = aTexCoord;
 }
 )";
@@ -629,6 +630,8 @@ namespace
 	// Six inward-facing planes (left, right, bottom, top, near, far), extracted from
 	// a combined view-projection matrix (Gribb/Hartmann). `xyz` is the plane normal,
 	// `w` is the offset; a point is inside when dot(normal, point) + w >= 0.
+	// World depth is reversed inside clip z [0, 1]: the camera far plane is z = 0
+	// and the camera near plane is z = w. The x/y planes are unchanged.
 	struct FrustumPlanes
 	{
 		glm::vec4 planes[6];
@@ -647,8 +650,16 @@ namespace
 		frustum.planes[1] = row3 - row0; // right
 		frustum.planes[2] = row3 + row1; // bottom
 		frustum.planes[3] = row3 - row1; // top
-		frustum.planes[4] = row3 + row2; // near
-		frustum.planes[5] = row3 - row2; // far
+		if (glad_glClipControl != nullptr)
+		{
+			frustum.planes[4] = row2;          // camera far (clip z >= 0)
+			frustum.planes[5] = row3 - row2;   // camera near (clip z <= w)
+		}
+		else
+		{
+			frustum.planes[4] = row3 + row2; // near
+			frustum.planes[5] = row3 - row2; // far
+		}
 
 		for (glm::vec4& plane : frustum.planes)
 		{
@@ -1922,10 +1933,11 @@ void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& i
 	glStencilMask(0xFF);
 	glClear(GL_STENCIL_BUFFER_BIT);
 
-	// Equal depth marks the pixels the mesh already wrote. A closer wall stays empty.
+	// Equal depth marks the pixels the mesh already wrote. Reversed depth stores a
+	// closer wall as a greater value, so GEQUAL leaves that wall empty.
 	glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
 	glDepthMask(GL_FALSE);
-	glDepthFunc(GL_LEQUAL);
+	glDepthFunc(GL_GEQUAL);
 	glStencilFunc(GL_ALWAYS, 1, 0xFF);
 	glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
 
@@ -2008,7 +2020,8 @@ void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& i
 
 void Application::render(Shader& shader)
 {
-	renderer.clear(glm::vec4(Config::backgroundR, Config::backgroundG, Config::backgroundB, 1.0f));
+	renderer.beginWorldTarget(Config::windowResolutionX, Config::windowResolutionY,
+		glm::vec4(Config::backgroundR, Config::backgroundG, Config::backgroundB, 1.0f));
 
 	// Apply wireframe mode only for the 3D scene; GUI should always be solid.
 	if (wireframe)
@@ -2482,6 +2495,9 @@ void Application::render(Shader& shader)
 	// Ensure the GUI is never affected by 3D polygon mode.
 	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
+	// The world target holds the float depth buffer. The UI draws on the window.
+	renderer.presentWorldTarget();
+
 	// Render GUI on top
 	if (gui)
 	{
@@ -2538,7 +2554,8 @@ static bool projectToScreen(const glm::mat4& vpmatrix, const glm::mat4& modelMat
 		return false;
 
 	glm::vec3 ndc = glm::vec3(clip) / clip.w;
-	if (ndc.x < -1.0f || ndc.x > 1.0f || ndc.y < -1.0f || ndc.y > 1.0f || ndc.z < -1.0f || ndc.z > 1.0f)
+	const float zMin = glad_glClipControl != nullptr ? 0.0f : -1.0f;
+	if (ndc.x < -1.0f || ndc.x > 1.0f || ndc.y < -1.0f || ndc.y > 1.0f || ndc.z < zMin || ndc.z > 1.0f)
 		return false;
 
 	float sx = (ndc.x * 0.5f + 0.5f) * (float)width;
