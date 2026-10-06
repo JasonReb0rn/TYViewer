@@ -456,6 +456,7 @@ void Application::loadModel(const std::string& modelName, int archiveIndex)
 	// Clear existing models
 	clearModels();
 	viewingLevel = false;
+	drawGrid = true;
 	
 	// Set active archive
 	content.setActiveArchive(archiveIndex);
@@ -857,6 +858,7 @@ void Application::refreshObjectInspector()
 void Application::loadTy1Level(const std::string& levelName)
 {
 	clearModels();
+	drawGrid = false;
 	content.setActiveArchive(0);
 	currentModelArchiveIndex = 0;
 	currentModelName = levelName;
@@ -993,6 +995,7 @@ void Application::inspectTy2Level(const std::string& levelName)
 {
 	clearModels();
 	viewingLevel = false;
+	drawGrid = false;
 	content.setActiveArchive(1);
 	currentModelArchiveIndex = 1;
 	currentModelName = levelName;
@@ -2270,6 +2273,11 @@ void Application::render(Shader& shader)
 	basic->setUniformMat3("uvMatrix", glm::mat3(1.0f));
 	// Also reset tint for basic shader (they might share the same shader program)
 	basic->setUniform4f("tintColour", glm::vec4(1, 1, 1, 1));
+	// This shader multiplies by whatever texture the last mesh left bound.
+	// A white sample lets the grid, bounds, and bone spheres keep their own colour.
+	if (content.defaultTexture != nullptr)
+		content.defaultTexture->bind();
+	basic->setUniform1f("alphaRef", 0.0f);
 
 	if (drawGrid)
 	{
