@@ -33,6 +33,9 @@ public:
 	void setUniform4f(const std::string& name, glm::vec4 v);
 	void setUniformMat4(const std::string& name, glm::mat4 mat);
 	void setUniformMat3(const std::string& name, glm::mat3 mat);
+	// `name` is the array uniform; uploads `count` elements from element 0.
+	void setUniformMat4Array(const std::string& name, const glm::mat4* mats, int count);
+	void setUniform1iArray(const std::string& name, const int* values, int count);
 
 	static Shader* createDefault();
 

@@ -8,6 +8,7 @@
 #include <vector>
 #include <filesystem>
 
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/common.hpp>
@@ -432,6 +433,10 @@ void Application::initialize()
 		drawBounds = !drawBounds;
 		gui->setBoundsVisible(drawBounds);
 	});
+	gui->setOnCrittersToggle([this]() {
+		critters.setPaused(!critters.paused());
+		refreshCrittersToggle();
+	});
 	
 	// Load initial model if specified in config
 	if (!Config::model.empty() && (ty1Loaded || ty2Loaded))
@@ -595,6 +600,24 @@ namespace
 	bool isEnvPartName(const std::string& name)
 	{
 		return lowerCopy(name).rfind("env", 0) == 0;
+	}
+
+	// One animated critter. `pass` 0 draws opaque parts, 1 transparent parts, 2 both.
+	void drawSkinnedCritter(Shader& shader, const CritterAssets& assets, const Critter& critter,
+		const glm::mat4& world, int pass, const MeshDrawStyle& style = {})
+	{
+		if (assets.model == nullptr)
+			return;
+		const std::vector<glm::mat4>& bones = critter.pose.matrices();
+		const int count = static_cast<int>(std::min(bones.size(), assets.boneParents.size()));
+		for (Mesh* mesh : assets.model->getMeshes())
+		{
+			if (mesh == nullptr || !mesh->isEnabled())
+				continue;
+			if (pass != 2 && mesh->isTransparent() != (pass == 1))
+				continue;
+			mesh->drawSkinned(shader, world, bones.data(), assets.boneParents.data(), count, style);
+		}
 	}
 
 	bool sameName(const std::string& a, const std::string& b)
@@ -911,6 +934,12 @@ void Application::loadTy1Level(const std::string& levelName)
 		+ " with mesh: " + std::to_string(propsWithMesh));
 
 	computeInstanceWorldBounds();
+	// Collision shells count: the game's critters stand on the collision mesh.
+	// Env cubes and see-through sheets (water surfaces, foliage cards) do not.
+	critters.load(levelObjects, models,
+		[](const Mesh* mesh) { return !mesh->isTransparent() && !isEnvPartName(mesh->getPartName()); },
+		[this](const std::string& name, std::vector<char>& bytes) { return content.getActiveFileData(name, bytes); });
+	refreshCrittersToggle();
 	rebuildPropBatches();
 
 	if (models.empty() && levelObjects.empty())
@@ -1197,6 +1226,9 @@ void Application::rebuildPropBatches()
 	for (int index = 0; index < static_cast<int>(levelObjects.size()); index++)
 	{
 		const Ty1Instance& instance = levelObjects[static_cast<size_t>(index)];
+		// The field draws its critters instead of one mesh at the field center.
+		if (critters.fieldForInstance(index) != nullptr)
+			continue;
 		eachPlacedModel(instance, [&](Model& placed)
 		{
 			for (Mesh* mesh : placed.getMeshes())
@@ -1584,6 +1616,53 @@ void Application::refreshCollisionToggle()
 		gui->setCollisionToggle(any, any && collisionMeshesVisible);
 }
 
+void Application::refreshCrittersToggle()
+{
+	if (gui)
+		gui->setCrittersToggle(!critters.empty(), !critters.paused());
+}
+
+const std::vector<std::unique_ptr<Mesh>>& Application::critterSpriteFramesFor(const std::string& texture)
+{
+	auto it = critterSpriteFrames.find(texture);
+	if (it != critterSpriteFrames.end())
+		return it->second;
+
+	const int kFrames = 16;
+	Texture* sheet = content.load<Texture>(texture);
+	std::vector<std::unique_ptr<Mesh>> frames;
+	for (int frame = 0; frame < kFrames; frame++)
+	{
+		const float u0 = static_cast<float>(frame) / kFrames;
+		const float u1 = static_cast<float>(frame + 1) / kFrames;
+		// Textures load with Y inverted, so the top of the image is v = 1.
+		const std::vector<Vertex> vertices =
+		{
+			Vertex(glm::vec4(-0.5f, -0.5f, 0.0f, 1.0f), glm::vec2(u0, 0.0f)),
+			Vertex(glm::vec4(0.5f, -0.5f, 0.0f, 1.0f), glm::vec2(u1, 0.0f)),
+			Vertex(glm::vec4(0.5f, 0.5f, 0.0f, 1.0f), glm::vec2(u1, 1.0f)),
+			Vertex(glm::vec4(-0.5f, 0.5f, 0.0f, 1.0f), glm::vec2(u0, 1.0f)),
+		};
+		auto mesh = std::make_unique<Mesh>(vertices, std::vector<unsigned int>{ 0, 1, 2, 0, 2, 3 }, sheet, texture);
+		// global.mad: Dfly_A1..A3 are blend 6, aref .03.
+		mesh->setBlend(MeshBlend::Alpha);
+		mesh->setAlphaRef(0.03f);
+		frames.push_back(std::move(mesh));
+	}
+	return critterSpriteFrames.emplace(texture, std::move(frames)).first->second;
+}
+
+void Application::forEachCritterDraw(const CritterField& field,
+	const std::function<void(Model&, const glm::mat4&, const Critter&)>& visit) const
+{
+	CritterAssets* assets = field.assets();
+	if (assets == nullptr || assets->model == nullptr)
+		return;
+	const float alpha = critters.alpha();
+	for (const Critter& critter : field.critters())
+		visit(*assets->model, field.critterMatrix(critter, alpha), critter);
+}
+
 void Application::clearModels()
 {
 	models.clear();
@@ -1592,6 +1671,10 @@ void Application::clearModels()
 	propModels.clear();
 	propMeshInstances.clear();
 	grassCards.clear();
+	critters.clear();
+	critterBatches.clear();
+	critterSpriteFrames.clear();
+	refreshCrittersToggle();
 	selectedLevelObject = -1;
 	// Note: Models are managed by the Content system, so we don't delete them here
 	
@@ -1685,6 +1768,7 @@ void Application::update(float dt)
 		glm::radians(camera.getRotation().x),
 		glm::radians(camera.getRotation().y));
 	content.updateTy1WaterRipple();
+	critters.update(dt);
 
 	float mouseInputX = Mouse::getMouseDelta().x;
 	float mouseInputY = Mouse::getMouseDelta().y;
@@ -1761,6 +1845,12 @@ void Application::update(float dt)
 		drawGrass = !drawGrass;
 	}
 
+	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_P) && !critters.empty())
+	{
+		critters.setPaused(!critters.paused());
+		refreshCrittersToggle();
+	}
+
 	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_T))
 	{
 		Debug::log
@@ -1799,7 +1889,11 @@ void Application::update(float dt)
 
 void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& instance)
 {
-	if (instance.model == nullptr && instance.extraModel == nullptr)
+	const int instanceIndex = static_cast<int>(&instance - levelObjects.data());
+	const CritterField* field = critters.fieldForInstance(instanceIndex);
+	if (field != nullptr && (field->assets() == nullptr || field->critters().empty()))
+		return;
+	if (field == nullptr && instance.model == nullptr && instance.extraModel == nullptr)
 		return;
 
 	const int width = static_cast<int>(Config::windowResolutionX);
@@ -1835,6 +1929,21 @@ void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& i
 	const glm::mat4 world = ty1InstanceMatrix(instance, &cameraView);
 	auto drawParts = [&](const MeshDrawStyle& style)
 	{
+		if (field != nullptr)
+		{
+			const CritterAssets& assets = *field->assets();
+			forEachCritterDraw(*field, [&](Model& model, const glm::mat4& critterWorld, const Critter& critter)
+			{
+				if (assets.animated)
+					drawSkinnedCritter(shader, assets, critter, critterWorld, 2, style);
+				else
+				{
+					model.drawMeshes(shader, false, critterWorld, style);
+					model.drawMeshes(shader, true, critterWorld, style);
+				}
+			});
+			return;
+		}
 		eachPlacedModel(instance, [&](Model& placed)
 		{
 			placed.drawMeshes(shader, false, world, style);
@@ -2001,10 +2110,59 @@ void Application::render(Shader& shader)
 		}
 	};
 
+	// Animated critters draw one at a time with their bone matrices. Static ones
+	// (fish shoals, guppies) share a batch per mesh part like props do.
+	auto drawCritters = [&](bool transparentPass)
+	{
+		for (auto& entry : critterBatches)
+			entry.second.clear();
+		for (const std::unique_ptr<CritterField>& field : critters.fields())
+		{
+			const size_t instanceIndex = static_cast<size_t>(field->instanceIndex());
+			if (instanceIndex >= levelObjects.size() || !levelObjects[instanceIndex].visible)
+				continue;
+			const CritterAssets* assets = field->assets();
+			if (assets == nullptr || assets->model == nullptr)
+				continue;
+			// Posed limbs can reach past the bind-pose box.
+			float radius = 50.0f;
+			if (assets->model->hasLocalAabb())
+				radius = 1.5f * std::max(glm::length(assets->model->getLocalAabbMin()), glm::length(assets->model->getLocalAabbMax()));
+			forEachCritterDraw(*field, [&](Model& model, const glm::mat4& world, const Critter& critter)
+			{
+				const glm::vec3 centre(world[3]);
+				if (!aabbInFrustum(frustum, centre - glm::vec3(radius), centre + glm::vec3(radius)))
+				{
+					if (!transparentPass)
+						RenderStats::instancesCulled++;
+					return;
+				}
+				if (!transparentPass)
+					RenderStats::instancesVisited++;
+				if (assets->animated)
+				{
+					drawSkinnedCritter(shader, *assets, critter, world, transparentPass ? 1 : 0);
+					return;
+				}
+				for (Mesh* mesh : model.getMeshes())
+				{
+					if (mesh != nullptr && mesh->isEnabled() && mesh->isTransparent() == transparentPass)
+						critterBatches[mesh].push_back(world);
+				}
+			});
+		}
+		for (auto& entry : critterBatches)
+		{
+			if (!entry.second.empty())
+				entry.first->drawInstanced(shader, entry.second);
+		}
+	};
+
 	// Opaque world first, then alpha and additive sheets. A waterfall drawn in
 	// file order writes depth and hides the cliff that is stored in a later room.
 	drawRoomMeshes(false);
 	drawPropBatches(false);
+	drawCritters(false);
 	if (drawGrass)
 	{
 		// Row 0 of the view rotation is the camera right axis in prop world space.
@@ -2017,6 +2175,52 @@ void Application::render(Shader& shader)
 	}
 	drawRoomMeshes(true);
 	drawPropBatches(true);
+	drawCritters(true);
+
+	// Sprite critters (the dragonfly). The sheet frame is the heading relative to the
+	// camera. Guess: frame 0 faces the camera and each later frame turns the head 45
+	// degrees toward screen left; the still and blurred wing sets alternate every 2 ticks.
+	{
+		const glm::vec3 cameraRight(view[0][0], view[1][0], view[2][0]);
+		const glm::vec3 cameraUp(view[0][1], view[1][1], view[2][1]);
+		const glm::vec3 cameraBack(view[0][2], view[1][2], view[2][2]);
+		const float alpha = critters.alpha();
+		for (const std::unique_ptr<CritterField>& field : critters.fields())
+		{
+			const CritterSpecies& species = field->species();
+			if (species.sprite == nullptr)
+				continue;
+			const size_t instanceIndex = static_cast<size_t>(field->instanceIndex());
+			if (instanceIndex >= levelObjects.size() || !levelObjects[instanceIndex].visible)
+				continue;
+			const std::vector<std::unique_ptr<Mesh>>& frames = critterSpriteFramesFor(species.sprite);
+			for (auto& entry : critterBatches)
+				entry.second.clear();
+			const float size = species.spriteSize;
+			for (size_t i = 0; i < field->critters().size(); i++)
+			{
+				const Critter& critter = field->critters()[i];
+				const glm::vec3 position = field->critterPosition(critter, alpha);
+				if (!aabbInFrustum(frustum, position - glm::vec3(size), position + glm::vec3(size)))
+					continue;
+				const float angle = std::atan2(-glm::dot(critter.forward, cameraRight), glm::dot(critter.forward, cameraBack));
+				int heading = static_cast<int>(std::lround(angle / glm::quarter_pi<float>()));
+				heading = ((heading % 8) + 8) % 8;
+				const bool blurred = ((field->ticks() / 2 + static_cast<int>(i)) & 1) != 0;
+				glm::mat4 world(1.0f);
+				world[0] = glm::vec4(cameraRight * size, 0.0f);
+				world[1] = glm::vec4(cameraUp * size, 0.0f);
+				world[2] = glm::vec4(cameraBack, 0.0f);
+				world[3] = glm::vec4(position, 1.0f);
+				critterBatches[frames[static_cast<size_t>(heading + (blurred ? 8 : 0))].get()].push_back(world);
+			}
+			for (auto& entry : critterBatches)
+			{
+				if (!entry.second.empty())
+					entry.first->drawInstanced(shader, entry.second);
+			}
+		}
+	}
 
 	RenderStats::lastSceneMs = std::chrono::duration<float, std::milli>(
 		std::chrono::high_resolution_clock::now() - sceneStart).count();
@@ -2059,6 +2263,39 @@ void Application::render(Shader& shader)
 	if (drawGrid)
 	{
 		renderer.draw(*grid, *basic);
+	}
+
+	// Flies and fireflies are BlitterCritter sprites with no mesh. A dot marks each one.
+	{
+		bool started = false;
+		const float alpha = critters.alpha();
+		for (const std::unique_ptr<CritterField>& field : critters.fields())
+		{
+			if (field->species().move != CritterMove::Sprite)
+				continue;
+			const size_t instanceIndex = static_cast<size_t>(field->instanceIndex());
+			if (instanceIndex >= levelObjects.size() || !levelObjects[instanceIndex].visible)
+				continue;
+			if (!started)
+			{
+				if (content.defaultTexture != nullptr)
+					content.defaultTexture->bind();
+				basic->setUniform1i("solidColour", 1);
+				basic->setUniform1f("alphaRef", 0.0f);
+				started = true;
+			}
+			const bool firefly = std::string(field->species().type) == "FIREFLY";
+			const glm::vec4 colour = firefly ? glm::vec4(0.85f, 1.0f, 0.3f, 1.0f) : glm::vec4(0.08f, 0.08f, 0.08f, 1.0f);
+			basic->setUniform4f("tintColour", colour);
+			for (const Critter& critter : field->critters())
+				renderer.drawSphere(field->critterPosition(critter, alpha), firefly ? 4.0f : 3.0f, colour, 6);
+		}
+		if (started)
+		{
+			basic->setUniform1i("solidColour", 0);
+			basic->setUniform4f("tintColour", glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+			basic->setUniform1f("alphaRef", 0.01f);
+		}
 	}
 
 	for (auto& model : models)

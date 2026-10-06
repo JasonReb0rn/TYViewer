@@ -24,7 +24,9 @@ public:
 		float position[3]; // XYZ
 		float normal[3]; // XYZ
 		float texcoord[2]; // UV (XY)
-		float skin[3]; // MODIFIER; BONE_A; BONE_B
+		// TY1: weight of the first matrix, then two indices into the model's matrix list
+		// (0 is the model root, n + 1 is animation node n). TY2 MDG keeps its own encoding.
+		float skin[3];
 		float colour[4]; // RGBA
 	};
 
@@ -47,6 +49,9 @@ public:
 		std::string material;
 
 		size_t triangle_count;
+
+		// SubObject::matrixIndex. Vertices with no skin weight follow this matrix.
+		int matrixIndex = 0;
 
 		std::vector<Mesh> meshes;
 	};

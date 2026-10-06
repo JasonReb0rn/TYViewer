@@ -1,5 +1,6 @@
 #include "ty1_level.h"
 
+#include <glm/common.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/mat3x3.hpp>
 #include <glm/matrix.hpp>
@@ -581,10 +582,18 @@ std::vector<Ty1Instance> parseTy1Instances(
 				current.sphereRadius = 500.0f;
 			}
 			current.closePath = key == "PATH";
-			// A water dragon is one creature at a point. It has no roam scale, so the
-			// large-scale test never marks it.
-			if (key == "WATERDRAGON")
+			// CritterField2 reads `scale` as the field size even when it is small
+			// (a2 has a gecko field of scale 1), and the range critters (turtle,
+			// soldier crab) and the water dragon have no scale at all.
+			if (ty1IsCritterType(type))
+			{
 				current.critter = true;
+				if (hasScale && current.roamSize == glm::vec3(0.0f))
+				{
+					current.roamSize = glm::abs(current.scale);
+					current.scale = glm::vec3(1.0f);
+				}
+			}
 			if (key == "WATERVOLUME")
 				current.kind = Ty1Kind::Water;
 			else if (current.hasBox || triggerSphere)
@@ -791,6 +800,25 @@ std::vector<Ty1Instance> parseTy1Instances(
 	}
 	flush();
 	return instances;
+}
+
+bool ty1IsCritterType(const std::string& typeName)
+{
+	static const char* kNames[] =
+	{
+		"BIRDFLOCK", "BUTTERFLY", "CLOWNFISH", "COW", "CUTTLEFISH", "DRAGONFLY",
+		"FIREFLY", "FISHSHOAL", "FLY", "FROG", "GECKO", "GRASSHOPPER", "GUPPY",
+		"IBIS", "KINGFISHER", "KOOKABURRA", "LORIKEET", "MOTH", "SEAGULL",
+		"SEAHORSE", "SHEEP", "SOLDIERCRAB", "SYNKERFROG", "TURTLE", "WALLABY",
+		"WATERDRAGON", "WATERSKIMMER",
+	};
+	const std::string key = descriptorKey(typeName);
+	for (const char* name : kNames)
+	{
+		if (key == name)
+			return true;
+	}
+	return false;
 }
 
 const char* ty1KindName(const Ty1Instance& instance)

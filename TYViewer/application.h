@@ -24,6 +24,7 @@
 #include "grid.h"
 
 #include "config.h"
+#include "critters/critter_field.h"
 #include "gui/gui.h"
 #include "loader/ty1_level.h"
 
@@ -105,6 +106,12 @@ private:
 	int selectedLevelObject = -1;
 	// Animation clock. Half of real time: TY1 presents at 30 Hz (lockTo30).
 	float ty1AnimTime = 0.0f;
+	// Critter fields for the open TY1 level. Their placeholder instances are not batched.
+	CritterSystem critters;
+	// Unskinned critter meshes to this frame's world matrices. Cleared per pass.
+	std::unordered_map<Mesh*, std::vector<glm::mat4>> critterBatches;
+	// One unit quad per frame of a critter sprite sheet, keyed by texture name.
+	std::unordered_map<std::string, std::vector<std::unique_ptr<Mesh>>> critterSpriteFrames;
 	std::vector<Text*> labels;
 	Mesh* mesh;
 	
@@ -120,6 +127,10 @@ private:
 	void refreshObjectInspector();
 	void drawSelectedObjectOutline(Shader& shader, const Ty1Instance& instance);
 	void refreshCollisionToggle();
+	void refreshCrittersToggle();
+	const std::vector<std::unique_ptr<Mesh>>& critterSpriteFramesFor(const std::string& texture);
+	// Each critter in `field` with its model and world matrix between the last two ticks.
+	void forEachCritterDraw(const CritterField& field, const std::function<void(Model&, const glm::mat4&, const Critter&)>& visit) const;
 	void capturePartDefaults();
 	void syncCollisionVisibility();
 	// Groups levelObjects by the Mesh parts they place, for instanced batch drawing.

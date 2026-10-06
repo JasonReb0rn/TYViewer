@@ -190,8 +190,12 @@
     <ClCompile Include="config.cpp" />
     <ClCompile Include="grid.cpp" />
     <ClCompile Include="loader\assets\mdg.cpp" />
+    <ClCompile Include="loader\assets\anim_script.cpp" />
+    <ClCompile Include="loader\assets\anm.cpp" />
     <ClCompile Include="loader\assets\mdl2.cpp" />
     <ClCompile Include="loader\assets\wfn.cpp" />
+    <ClCompile Include="critters\critter_field.cpp" />
+    <ClCompile Include="critters\critter_floor.cpp" />
     <ClCompile Include="content.cpp" />
     <ClCompile Include="debug.cpp" />
     <ClCompile Include="graphics\camera.cpp" />
@@ -219,8 +223,12 @@
     <ClInclude Include="loader\ty1_level.h" />
     <ClInclude Include="grid.h" />
     <ClInclude Include="loader\assets\mdg.h" />
+    <ClInclude Include="loader\assets\anim_script.h" />
+    <ClInclude Include="loader\assets\anm.h" />
     <ClInclude Include="loader\assets\mdl2.h" />
     <ClInclude Include="loader\assets\wfn.h" />
+    <ClInclude Include="critters\critter_field.h" />
+    <ClInclude Include="critters\critter_floor.h" />
     <ClInclude Include="config.h" />
     <ClInclude Include="content.h" />
     <ClInclude Include="debug.h" />

@@ -48,6 +48,11 @@ public:
 	// One draw call for every entry in `worlds`. Used when many level objects share
 	// this mesh (the common case for props). Skips the call when disabled or empty.
 	void drawInstanced(Shader& shader, const std::vector<glm::mat4>& worlds, const MeshDrawStyle& style = {}) const;
+	// TY1 skinned draw. `bones` are model-space matrices (0 is the model root) and
+	// `boneParents[i]` is the parent matrix of bones[i]. Falls back to draw() past kMaxSkinBones.
+	static const int kMaxSkinBones = 64;
+	void drawSkinned(Shader& shader, const glm::mat4& world, const glm::mat4* bones, const int* boneParents,
+		int boneCount, const MeshDrawStyle& style = {}) const;
 
 	// Raw vertex access (debug/overlay). Order matches parsed file order.
 	const std::vector<Vertex>& getVertices() const { return m_vertices; }

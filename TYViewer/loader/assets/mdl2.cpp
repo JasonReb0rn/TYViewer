@@ -344,6 +344,7 @@ mdl2::Subobject mdl2::parse_subobject(const char* buffer, size_t offset)
 	std::string material = (fileBytes == 0) ? nts(buffer, materialPtr) : readCString(buffer, fileBytes, materialPtr);
 
 	unsigned int triangle_count = from_bytes<uint32_t>(buffer, offset + 56);
+	const int matrixIndex = from_bytes<int16_t>(buffer, offset + 64);
 
 	unsigned int mesh_count = from_bytes<uint16_t>(buffer, offset + 66);
 	size_t mesh_offset = from_bytes<uint32_t>(buffer, offset + 68);
@@ -365,7 +366,31 @@ mdl2::Subobject mdl2::parse_subobject(const char* buffer, size_t offset)
 		mesh_offset += 16;
 	}
 
-	return { bounds, name, material, triangle_count, meshes };
+	// Model_Draw (ModelGC.cpp) binds an unweighted vertex to the subobject matrix
+	// with full weight. Rigid parts (dragonfly wings, grasshopper legs) are stored this way.
+	if (fileBytes != 0)
+	{
+		for (Mesh& mesh : meshes)
+		{
+			for (Segment& segment : mesh.segments)
+			{
+				for (Vertex& vertex : segment.vertices)
+				{
+					if (vertex.skin[0] == 0.0f)
+					{
+						vertex.skin[0] = 1.0f;
+						vertex.skin[1] = static_cast<float>(matrixIndex);
+						vertex.skin[2] = 0.0f;
+					}
+				}
+			}
+		}
+	}
+
+	Subobject subobject{ bounds, name, material, triangle_count };
+	subobject.matrixIndex = matrixIndex;
+	subobject.meshes = std::move(meshes);
+	return subobject;
 }
 
 mdl2::Mesh mdl2::parse_mesh(const char* buffer, size_t offset)
@@ -487,9 +512,10 @@ mdl2::Segment mdl2::parse_segment(const char* buffer, size_t offset, size_t& siz
 	{
 		size_t p = offset + 52 + (amount_of_vertices * 12) + 4 + (amount_of_vertices * 4) + 4 + (i * 8) + 4;
 
+		// Vertex::weight / matrix1 / matrix2. The PC data stores each matrix index * 4.
 		float x = from_bytes<int16_t>(buffer, p) / 4096.0f;
-		float y = (float)from_bytes<int8_t>(buffer, p + 2);
-		float z = (float)from_bytes<int8_t>(buffer, p + 3);
+		float y = (float)(from_bytes<uint8_t>(buffer, p + 2) / 4);
+		float z = (float)(from_bytes<uint8_t>(buffer, p + 3) / 4);
 
 		vertices[i].skin[0] = x;
 		vertices[i].skin[1] = y;

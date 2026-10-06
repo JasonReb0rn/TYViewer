@@ -103,6 +103,9 @@ struct Ty1Instance
 	std::vector<Ty1Field> fields;
 };
 
+// Types that CritterField2 / BlitterCritter spawn (ibis, gecko, turtle, ...).
+bool ty1IsCritterType(const std::string& typeName);
+
 // List label for this instance. A plain prop is "prop". A prop with a range sphere is "range".
 const char* ty1KindName(const Ty1Instance& instance);
 

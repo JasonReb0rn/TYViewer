@@ -98,6 +98,9 @@ public:
 	void setOnBoundsToggle(std::function<void()> callback);
 	// visible: mesh bounding boxes are drawn in the viewport.
 	void setBoundsVisible(bool visible);
+	void setOnCrittersToggle(std::function<void()> callback);
+	// available: the level has critter fields. playing: they are moving.
+	void setCrittersToggle(bool available, bool playing);
 	
 	// Model debugging
 	void setCurrentModel(class Model* model, const std::string& modelName);
@@ -184,6 +187,7 @@ private:
 	void renderRecenterButton();
 	void renderCollisionButton();
 	void renderBoundsButton();
+	void renderCrittersButton();
 	void renderNotificationBanner();
 	void renderScrollbar();
 	void renderModelInfo();
@@ -230,6 +234,7 @@ private:
 	GuiRect recenterButtonRect;
 	GuiRect collisionButtonRect;
 	GuiRect boundsButtonRect;
+	GuiRect crittersButtonRect;
 	GuiRect notificationRect;
 	GuiRect dropdownRect;
 	GuiRect submenuRect;
@@ -339,6 +344,9 @@ private:
 	bool collisionVisible = false;
 	std::function<void()> onBoundsToggle;
 	bool boundsVisible = false;
+	std::function<void()> onCrittersToggle;
+	bool crittersAvailable = false;
+	bool crittersPlaying = true;
 
 	// Notification state
 	bool notificationActive = false;

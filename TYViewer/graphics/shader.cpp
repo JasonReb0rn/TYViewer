@@ -117,6 +117,16 @@ void Shader::setUniformMat3(const std::string& name, glm::mat3 mat)
 {
 	glUniformMatrix3fv(getUniformLocation(name), 1, GL_FALSE, &mat[0][0]);
 }
+void Shader::setUniformMat4Array(const std::string& name, const glm::mat4* mats, int count)
+{
+	if (count > 0)
+		glUniformMatrix4fv(getUniformLocation(name), count, GL_FALSE, &mats[0][0][0]);
+}
+void Shader::setUniform1iArray(const std::string& name, const int* values, int count)
+{
+	if (count > 0)
+		glUniform1iv(getUniformLocation(name), count, values);
+}
 
 int Shader::getUniformLocation(const std::string& name)
 {
@@ -152,6 +162,11 @@ Shader* Shader::createDefault()
 		uniform mat3 uvMatrix;
 		uniform vec2 clipOffset;
 		uniform int useInstancing;
+		// TY1 model matrices: bones[0] is the model root, bones[n + 1] is anim node n.
+		// boneParents[i] is the matrix of node i's parent.
+		uniform int useSkinning;
+		uniform mat4 bones[64];
+		uniform int boneParents[64];
 
 		out vec4 v_colour;
 		out vec2 v_texcoord;
@@ -161,7 +176,22 @@ Shader* Shader::createDefault()
 			mat4 world = useInstancing != 0
 				? mat4(instanceMatrix0, instanceMatrix1, instanceMatrix2, instanceMatrix3)
 				: modelMatrix;
-			gl_Position = VPMatrix * world * position;
+			vec4 local = position;
+			if (useSkinning != 0)
+			{
+				// Model_Draw (ModelGC.cpp): w * M[m1] * v + (1 - w) * M[m2] * v.
+				// Guess: the PC files leave m2 at 0 on blended vertices, so the
+				// second matrix is taken to be the first matrix's parent.
+				int m1 = clamp(int(skin.y + 0.5), 0, 63);
+				int m2 = clamp(int(skin.z + 0.5), 0, 63);
+				float w = skin.x;
+				if (w < 1.0 && m2 == 0)
+					m2 = boneParents[m1];
+				vec4 p = vec4(position.xyz, 1.0);
+				local = w * (bones[m1] * p) + (1.0 - w) * (bones[m2] * p);
+				local.w = 1.0;
+			}
+			gl_Position = VPMatrix * world * local;
 			gl_Position.xy += clipOffset * gl_Position.w;
 			v_colour = colour;
 			v_texcoord = (uvMatrix * vec3(texcoord, 1.0)).xy;

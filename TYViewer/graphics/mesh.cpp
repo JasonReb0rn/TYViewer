@@ -203,6 +203,7 @@ void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 	shader.setUniform2f("clipOffset", style.solid ? style.clipOffset : glm::vec2(0.0f));
 	shader.setUniform1i("solidColour", style.solid ? 1 : 0);
 	shader.setUniform1f("alphaRef", m_alphaRef);
+	shader.setUniform1i("useSkinning", 0);
 
 	// One hash lookup (on the name this mesh already lowercased at construction)
 	// feeds the uv matrix, wrap, and water queries below, instead of each of them
@@ -254,6 +255,33 @@ void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& sty
 
 	glBindVertexArray(vao);
 	glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(m_indices.size()), GL_UNSIGNED_INT, nullptr);
+
+	RenderStats::drawCalls++;
+	RenderStats::trianglesDrawn += static_cast<long long>(m_indices.size() / 3);
+}
+
+void Mesh::drawSkinned(Shader& shader, const glm::mat4& world, const glm::mat4* bones, const int* boneParents,
+	int boneCount, const MeshDrawStyle& style) const
+{
+	if (!m_enabled)
+		return;
+	if (bones == nullptr || boneParents == nullptr || boneCount <= 0 || boneCount > kMaxSkinBones)
+	{
+		draw(shader, world, style);
+		return;
+	}
+
+	prepareDraw(shader, style);
+	shader.setUniform1i("useInstancing", 0);
+	shader.setUniformMat4("modelMatrix", world * getMatrix());
+	shader.setUniformMat4Array("bones", bones, boneCount);
+	shader.setUniform1iArray("boneParents", boneParents, boneCount);
+	shader.setUniform1i("useSkinning", 1);
+
+	glBindVertexArray(vao);
+	glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(m_indices.size()), GL_UNSIGNED_INT, nullptr);
+
+	shader.setUniform1i("useSkinning", 0);
 
 	RenderStats::drawCalls++;
 	RenderStats::trianglesDrawn += static_cast<long long>(m_indices.size() / 3);

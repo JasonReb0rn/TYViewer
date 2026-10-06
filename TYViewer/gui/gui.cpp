@@ -260,6 +260,7 @@ void Gui::initialize(int width, int height)
 	recenterButtonRect = {exportRawButtonRect.x + exportRawButtonRect.width + 10.0f, 10.0f, 30.0f, 30.0f};
 	collisionButtonRect = {recenterButtonRect.x + recenterButtonRect.width + 10.0f, 10.0f, 96.0f, 30.0f};
 	boundsButtonRect = {collisionButtonRect.x + collisionButtonRect.width + 10.0f, 10.0f, 144.0f, 30.0f};
+	crittersButtonRect = {boundsButtonRect.x + boundsButtonRect.width + 10.0f, 10.0f, 150.0f, 30.0f};
 	
 	// Model info panel on the right
 	modelInfoRect = {(float)width - 310.0f, 10.0f, 300.0f, 150.0f};
@@ -648,6 +649,7 @@ void Gui::render()
 	renderRecenterButton();
 	renderCollisionButton();
 	renderBoundsButton();
+	renderCrittersButton();
 	renderNotificationBanner();
 	
 	if (dropdownOpen)
@@ -911,6 +913,57 @@ void Gui::setBoundsVisible(bool visible)
 	boundsVisible = visible;
 }
 
+void Gui::renderCrittersButton()
+{
+	glUseProgram(shaderProgram);
+	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
+	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+	const bool hovered = crittersAvailable && crittersButtonRect.contains(mouseX, mouseY);
+
+	glm::vec4 bgColor;
+	glm::vec4 textColor;
+	if (!crittersAvailable)
+	{
+		bgColor = glm::vec4(0.14f, 0.14f, 0.14f, 0.8f);
+		textColor = glm::vec4(0.45f, 0.45f, 0.45f, 1.0f);
+	}
+	else if (crittersPlaying)
+	{
+		bgColor = hovered ? glm::vec4(0.35f, 0.55f, 0.32f, 0.98f) : glm::vec4(0.22f, 0.42f, 0.22f, 0.95f);
+		textColor = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
+	}
+	else
+	{
+		bgColor = hovered ? glm::vec4(0.32f, 0.32f, 0.32f, 0.95f) : glm::vec4(0.18f, 0.18f, 0.18f, 0.9f);
+		textColor = glm::vec4(0.75f, 0.75f, 0.75f, 1.0f);
+	}
+
+	const float x = crittersButtonRect.x;
+	const float y = crittersButtonRect.y;
+	const float w = crittersButtonRect.width;
+	const float h = crittersButtonRect.height;
+	drawRect(x, y, w, h, bgColor);
+	drawRect(x, y, w, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(x, y + h - 2.0f, w, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(x, y, 2.0f, h, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(x + w - 2.0f, y, 2.0f, h, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+
+	const char* label = (crittersAvailable && !crittersPlaying) ? "Critters: Paused [P]" : "Critters: Live [P]";
+	drawText(label, x + 12.0f, y + 11.0f, textColor);
+}
+
+void Gui::setOnCrittersToggle(std::function<void()> callback)
+{
+	onCrittersToggle = callback;
+}
+
+void Gui::setCrittersToggle(bool available, bool playing)
+{
+	crittersAvailable = available;
+	crittersPlaying = playing;
+}
+
 void Gui::setOnCollisionToggle(std::function<void()> callback)
 {
 	onCollisionToggle = callback;
@@ -926,7 +979,7 @@ void Gui::renderNotificationBanner()
 {
 	// Banner sits to the right of the header buttons.
 	const float kPad = 10.0f;
-	const float x = boundsButtonRect.x + boundsButtonRect.width + kPad;
+	const float x = crittersButtonRect.x + crittersButtonRect.width + kPad;
 	const float y = exportRawButtonRect.y;
 	const float h = exportRawButtonRect.height;
 	const float maxW = (float)windowWidth - x - kPad;
@@ -1341,6 +1394,13 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				return;
 			}
 
+			if (crittersButtonRect.contains(x, y))
+			{
+				if (crittersAvailable && onCrittersToggle)
+					onCrittersToggle();
+				return;
+			}
+
 			if (buttonRect.contains(x, y))
 			{
 				dropdownOpen = !dropdownOpen;
@@ -1617,7 +1677,7 @@ void Gui::onMouseMove(float x, float y)
 	mouseX = x;
 	mouseY = y;
 	
-	hovering = buttonRect.contains(x, y) || exportButtonRect.contains(x, y) || exportRawButtonRect.contains(x, y) || recenterButtonRect.contains(x, y) || collisionButtonRect.contains(x, y) || boundsButtonRect.contains(x, y) ||
+	hovering = buttonRect.contains(x, y) || exportButtonRect.contains(x, y) || exportRawButtonRect.contains(x, y) || recenterButtonRect.contains(x, y) || collisionButtonRect.contains(x, y) || boundsButtonRect.contains(x, y) || crittersButtonRect.contains(x, y) ||
 		(dropdownOpen && dropdownRect.contains(x, y)) || (submenuOpen && submenuRect.contains(x, y));
 	
 	// Track hovered submenu item
