@@ -122,7 +122,8 @@ public:
 	// bar across the bottom of the screen, independent of the OBJECTS/LEVEL PARTS
 	// panels (draws counts level geometry too, not just placed objects).
 	void setRenderStats(int drawCalls, int instancedBatches, int instancesVisited, int instancesCulled,
-		int partsVisited, int partsCulled, long long trianglesDrawn, float sceneMs);
+		int partsVisited, int partsCulled, long long trianglesDrawn, float sceneMs,
+		int simTicks, float simMs);
 	
 	// Input handling
 	void onMouseButton(int button, int action, float x, float y);
@@ -319,6 +320,8 @@ private:
 	int statPartsCulled = 0;
 	long long statTrianglesDrawn = 0;
 	float statSceneMs = 0.0f;
+	int statSimTicks = 0;
+	float statSimMs = 0.0f;
 	void renderSceneStatsBar();
 	
 	bool dropdownOpen;

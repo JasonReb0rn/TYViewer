@@ -11,7 +11,10 @@
 
 namespace
 {
-	const int kMaxCellsPerAxis = 256;
+	// A downward query only walks the cell under the point, so the cell has to stay
+	// small. The cap grows the cell on a huge level instead of allocating a giant grid.
+	const int kMaxCellsPerAxis = 1024;
+	const float kTargetCellSize = 128.0f;
 }
 
 void CritterFloor::clear()
@@ -61,7 +64,7 @@ void CritterFloor::build(const std::vector<Model*>& rooms, const std::function<b
 
 	m_min = lo;
 	const float span = std::max(hi.x - lo.x, hi.z - lo.z);
-	m_cellSize = std::max(512.0f, span / static_cast<float>(kMaxCellsPerAxis));
+	m_cellSize = std::max(kTargetCellSize, span / static_cast<float>(kMaxCellsPerAxis));
 	m_cellsX = std::max(1, static_cast<int>(std::ceil((hi.x - lo.x) / m_cellSize)) + 1);
 	m_cellsZ = std::max(1, static_cast<int>(std::ceil((hi.z - lo.z) / m_cellSize)) + 1);
 	m_cells.assign(static_cast<size_t>(m_cellsX) * static_cast<size_t>(m_cellsZ), {});
@@ -89,8 +92,33 @@ void CritterFloor::cellOf(float x, float z, int& outX, int& outZ) const
 	outZ = std::clamp(static_cast<int>(std::floor((z - m_min.z) / m_cellSize)), 0, m_cellsZ - 1);
 }
 
+bool CritterFloor::rayTriangle(const Triangle& tri, const glm::vec3& from, const glm::vec3& dir,
+	float maxDistance, float& outDistance, glm::vec3& outNormal)
+{
+	// Moller-Trumbore, both faces.
+	const glm::vec3 p = glm::cross(dir, tri.edge2);
+	const float det = glm::dot(tri.edge1, p);
+	if (std::abs(det) < 1e-8f)
+		return false;
+	const float inv = 1.0f / det;
+	const glm::vec3 s = from - tri.a;
+	const float u = glm::dot(s, p) * inv;
+	if (u < 0.0f || u > 1.0f)
+		return false;
+	const glm::vec3 q = glm::cross(s, tri.edge1);
+	const float v = glm::dot(dir, q) * inv;
+	if (v < 0.0f || u + v > 1.0f)
+		return false;
+	const float distance = glm::dot(tri.edge2, q) * inv;
+	if (distance < 0.0f || distance > maxDistance)
+		return false;
+	outDistance = distance;
+	outNormal = glm::dot(tri.normal, dir) > 0.0f ? -tri.normal : tri.normal;
+	return true;
+}
+
 bool CritterFloor::testCell(int cell, const glm::vec3& from, const glm::vec3& dir, float maxDistance,
-	float& best, glm::vec3& bestNormal) const
+	float& best, glm::vec3& bestNormal, int& bestTriangle) const
 {
 	bool hit = false;
 	for (uint32_t t : m_cells[static_cast<size_t>(cell)])
@@ -99,33 +127,20 @@ bool CritterFloor::testCell(int cell, const glm::vec3& from, const glm::vec3& di
 			continue;
 		m_stamps[t] = m_stamp;
 
-		// Moller-Trumbore, both faces.
-		const Triangle& tri = m_triangles[t];
-		const glm::vec3 p = glm::cross(dir, tri.edge2);
-		const float det = glm::dot(tri.edge1, p);
-		if (std::abs(det) < 1e-8f)
-			continue;
-		const float inv = 1.0f / det;
-		const glm::vec3 s = from - tri.a;
-		const float u = glm::dot(s, p) * inv;
-		if (u < 0.0f || u > 1.0f)
-			continue;
-		const glm::vec3 q = glm::cross(s, tri.edge1);
-		const float v = glm::dot(dir, q) * inv;
-		if (v < 0.0f || u + v > 1.0f)
-			continue;
-		const float distance = glm::dot(tri.edge2, q) * inv;
-		if (distance < 0.0f || distance > maxDistance || distance >= best)
+		float distance = 0.0f;
+		glm::vec3 normal(0.0f);
+		if (!rayTriangle(m_triangles[t], from, dir, maxDistance, distance, normal) || distance >= best)
 			continue;
 		best = distance;
-		bestNormal = glm::dot(tri.normal, dir) > 0.0f ? -tri.normal : tri.normal;
+		bestNormal = normal;
+		bestTriangle = static_cast<int>(t);
 		hit = true;
 	}
 	return hit;
 }
 
 bool CritterFloor::cast(const glm::vec3& from, const glm::vec3& dir, float maxDistance,
-	float& outDistance, glm::vec3& outNormal) const
+	float& outDistance, glm::vec3& outNormal, int* outTriangle) const
 {
 	if (m_triangles.empty() || maxDistance <= 0.0f)
 		return false;
@@ -137,6 +152,7 @@ bool CritterFloor::cast(const glm::vec3& from, const glm::vec3& dir, float maxDi
 
 	float best = std::numeric_limits<float>::max();
 	glm::vec3 bestNormal(0.0f, 1.0f, 0.0f);
+	int bestTriangle = -1;
 	bool hit = false;
 
 	// Visit each cell the XZ projection crosses, sampled at half a cell.
@@ -153,14 +169,24 @@ bool CritterFloor::cast(const glm::vec3& from, const glm::vec3& dir, float maxDi
 		if (cell == lastCell)
 			continue;
 		lastCell = cell;
-		hit |= testCell(cell, from, dir, maxDistance, best, bestNormal);
+		hit |= testCell(cell, from, dir, maxDistance, best, bestNormal, bestTriangle);
 	}
 
 	if (!hit)
 		return false;
 	outDistance = best;
 	outNormal = bestNormal;
+	if (outTriangle != nullptr)
+		*outTriangle = bestTriangle;
 	return true;
+}
+
+bool CritterFloor::testTriangle(int triangle, const glm::vec3& from, const glm::vec3& dir, float maxDistance,
+	float& outDistance, glm::vec3& outNormal) const
+{
+	if (triangle < 0 || static_cast<size_t>(triangle) >= m_triangles.size() || maxDistance <= 0.0f)
+		return false;
+	return rayTriangle(m_triangles[static_cast<size_t>(triangle)], from, dir, maxDistance, outDistance, outNormal);
 }
 
 bool CritterFloor::floorBelow(const glm::vec3& from, float maxDrop, float& outY, glm::vec3& outNormal) const

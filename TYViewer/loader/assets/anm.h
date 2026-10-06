@@ -48,8 +48,9 @@ public:
 	bool valid() const { return m_data != nullptr && !m_frames.empty(); }
 
 	// Animation::Tween. A weight below 1 blends from the current pose.
+	// A repeat of the last built frame and weight leaves the matrices alone.
 	void tween(float frame, float weight);
-	// Animation::CalculateMatrices.
+	// Animation::CalculateMatrices. No work when tween() did not change the target.
 	void calculateMatrices();
 
 	const std::vector<glm::mat4>& matrices() const { return m_matrices; }
@@ -74,4 +75,8 @@ private:
 	const AnmData* m_data = nullptr;
 	std::vector<Frame> m_frames;
 	std::vector<glm::mat4> m_matrices;
+	bool m_hasTarget = false;
+	bool m_matricesReady = false;
+	float m_targetFrame = 0.0f;
+	float m_targetWeight = 0.0f;
 };

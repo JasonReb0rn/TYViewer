@@ -130,7 +130,7 @@ private:
 	void refreshCrittersToggle();
 	const std::vector<std::unique_ptr<Mesh>>& critterSpriteFramesFor(const CritterSpecies& species);
 	// Each critter in `field` with its model and world matrix between the last two ticks.
-	void forEachCritterDraw(const CritterField& field, const std::function<void(Model&, const glm::mat4&, const Critter&)>& visit) const;
+	void forEachCritterDraw(CritterField& field, const std::function<void(Model&, const glm::mat4&, Critter&)>& visit) const;
 	void capturePartDefaults();
 	void syncCollisionVisibility();
 	// Groups levelObjects by the Mesh parts they place, for instanced batch drawing.

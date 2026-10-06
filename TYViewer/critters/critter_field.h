@@ -140,6 +140,8 @@ struct Critter
 	float prevBank = 0.0f;
 	int jumpTicks = 0;
 	int jumpLength = 1;
+	// Last CritterFloor triangle under this critter. -1 until a query hits.
+	int floorTriangle = -1;
 
 	AnimScriptPlayer anim;
 	AnmPose pose;
@@ -169,6 +171,7 @@ public:
 	int instanceIndex() const { return m_instanceIndex; }
 	const CritterSpecies& species() const { return m_species; }
 	CritterAssets* assets() const { return m_assets; }
+	std::vector<Critter>& critters() { return m_critters; }
 	const std::vector<Critter>& critters() const { return m_critters; }
 	// Ticks since the level loaded.
 	int ticks() const { return m_ticks; }
@@ -188,6 +191,8 @@ private:
 	void stepToward(Critter& critter, float speed, bool keepUpright);
 	bool snapToFloor(Critter& critter);
 	void keepAboveFloor(Critter& critter, float clearance);
+	// Cached triangle first. A cell walk only runs when that triangle misses.
+	bool sampleFloor(Critter& critter, float above, float below, glm::vec3& outPoint, glm::vec3& outNormal);
 
 	void updateGround(Critter& critter);
 	void updateHopper(Critter& critter);
@@ -231,8 +236,8 @@ public:
 	// Rooms are the level's room models; `solid` picks the meshes critters stand on.
 	void load(const std::vector<Ty1Instance>& instances, const std::vector<Model*>& rooms,
 		const std::function<bool(const class Mesh*)>& solid, const FileReader& readFile);
-	// Real seconds. Steps the fields at 30 Hz.
-	void update(float dt);
+	// Real seconds. At most one 30 Hz tick; returns how many ran (0 or 1).
+	int update(float dt);
 
 	bool paused() const { return m_paused; }
 	void setPaused(bool paused) { m_paused = paused; }
@@ -242,6 +247,7 @@ public:
 	float alpha() const;
 	const std::vector<std::unique_ptr<CritterField>>& fields() const { return m_fields; }
 	// The field spawned by a level instance, or null.
+	CritterField* fieldForInstance(int instanceIndex);
 	const CritterField* fieldForInstance(int instanceIndex) const;
 
 private:

@@ -8,6 +8,8 @@ int RenderStats::instancesCulled = 0;
 int RenderStats::partsVisited = 0;
 int RenderStats::partsCulled = 0;
 float RenderStats::lastSceneMs = 0.0f;
+float RenderStats::lastSimMs = 0.0f;
+int RenderStats::simTicks = 0;
 
 void RenderStats::beginFrame()
 {

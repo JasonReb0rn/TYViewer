@@ -21,6 +21,9 @@ struct RenderStats
 	static int partsCulled;
 	// Wall time for the scene draw section (room meshes + prop batches), in milliseconds.
 	static float lastSceneMs;
+	// CritterSystem::update, which runs before the scene timer. 0 or 1 tick per frame.
+	static float lastSimMs;
+	static int simTicks;
 
 	static void beginFrame();
 };

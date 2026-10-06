@@ -605,11 +605,13 @@ namespace
 	}
 
 	// One animated critter. `pass` 0 draws opaque parts, 1 transparent parts, 2 both.
-	void drawSkinnedCritter(Shader& shader, const CritterAssets& assets, const Critter& critter,
+	void drawSkinnedCritter(Shader& shader, const CritterAssets& assets, Critter& critter,
 		const glm::mat4& world, int pass, const MeshDrawStyle& style = {})
 	{
 		if (assets.model == nullptr)
 			return;
+		// Off-screen critters never get here. A held frame leaves the last matrices in place.
+		critter.pose.calculateMatrices();
 		const std::vector<glm::mat4>& bones = critter.pose.matrices();
 		const int count = static_cast<int>(std::min(bones.size(), assets.boneParents.size()));
 		for (Mesh* mesh : assets.model->getMeshes())
@@ -947,10 +949,9 @@ void Application::loadTy1Level(const std::string& levelName)
 		+ " with mesh: " + std::to_string(propsWithMesh));
 
 	computeInstanceWorldBounds();
-	// Collision shells count: the game's critters stand on the collision mesh.
-	// Env cubes and see-through sheets (water surfaces, foliage cards) do not.
+	// Collision shells only. The drawn level mesh is far too dense to raycast every tick.
 	critters.load(levelObjects, models,
-		[](const Mesh* mesh) { return !mesh->isTransparent() && !isEnvPartName(mesh->getPartName()); },
+		[this](const Mesh* mesh) { return isCollisionMesh(mesh, content); },
 		[this](const std::string& name, std::vector<char>& bytes) { return content.getActiveFileData(name, bytes); });
 	refreshCrittersToggle();
 	rebuildPropBatches();
@@ -1667,14 +1668,14 @@ const std::vector<std::unique_ptr<Mesh>>& Application::critterSpriteFramesFor(co
 	return critterSpriteFrames.emplace(texture, std::move(frames)).first->second;
 }
 
-void Application::forEachCritterDraw(const CritterField& field,
-	const std::function<void(Model&, const glm::mat4&, const Critter&)>& visit) const
+void Application::forEachCritterDraw(CritterField& field,
+	const std::function<void(Model&, const glm::mat4&, Critter&)>& visit) const
 {
 	CritterAssets* assets = field.assets();
 	if (assets == nullptr || assets->model == nullptr)
 		return;
 	const float alpha = critters.alpha();
-	for (const Critter& critter : field.critters())
+	for (Critter& critter : field.critters())
 		visit(*assets->model, field.critterMatrix(critter, alpha), critter);
 }
 
@@ -1783,7 +1784,10 @@ void Application::update(float dt)
 		glm::radians(camera.getRotation().x),
 		glm::radians(camera.getRotation().y));
 	content.updateTy1WaterRipple();
-	critters.update(dt);
+	const auto simStart = std::chrono::high_resolution_clock::now();
+	RenderStats::simTicks = critters.update(dt);
+	RenderStats::lastSimMs = std::chrono::duration<float, std::milli>(
+		std::chrono::high_resolution_clock::now() - simStart).count();
 
 	float mouseInputX = Mouse::getMouseDelta().x;
 	float mouseInputY = Mouse::getMouseDelta().y;
@@ -1905,7 +1909,7 @@ void Application::update(float dt)
 void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& instance)
 {
 	const int instanceIndex = static_cast<int>(&instance - levelObjects.data());
-	const CritterField* field = critters.fieldForInstance(instanceIndex);
+	CritterField* field = critters.fieldForInstance(instanceIndex);
 	if (field != nullptr && (field->assets() == nullptr || field->critters().empty()))
 		return;
 	if (field == nullptr && instance.model == nullptr && instance.extraModel == nullptr)
@@ -1948,7 +1952,7 @@ void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& i
 		if (field != nullptr)
 		{
 			const CritterAssets& assets = *field->assets();
-			forEachCritterDraw(*field, [&](Model& model, const glm::mat4& critterWorld, const Critter& critter)
+			forEachCritterDraw(*field, [&](Model& model, const glm::mat4& critterWorld, Critter& critter)
 			{
 				if (assets.animated)
 					drawSkinnedCritter(shader, assets, critter, critterWorld, 2, style);
@@ -2145,7 +2149,7 @@ void Application::render(Shader& shader)
 			float radius = 50.0f;
 			if (assets->model->hasLocalAabb())
 				radius = 1.5f * std::max(glm::length(assets->model->getLocalAabbMin()), glm::length(assets->model->getLocalAabbMax()));
-			forEachCritterDraw(*field, [&](Model& model, const glm::mat4& world, const Critter& critter)
+			forEachCritterDraw(*field, [&](Model& model, const glm::mat4& world, Critter& critter)
 			{
 				const glm::vec3 centre(world[3]);
 				if (!aabbInFrustum(frustum, centre - glm::vec3(radius), centre + glm::vec3(radius)))
@@ -2256,7 +2260,8 @@ void Application::render(Shader& shader)
 		gui->setRenderStats(RenderStats::drawCalls, RenderStats::instancedBatches,
 			RenderStats::instancesVisited, RenderStats::instancesCulled,
 			RenderStats::partsVisited, RenderStats::partsCulled,
-			RenderStats::trianglesDrawn, RenderStats::lastSceneMs);
+			RenderStats::trianglesDrawn, RenderStats::lastSceneMs,
+			RenderStats::simTicks, RenderStats::lastSimMs);
 	}
 
 	if (selectedLevelObject >= 0 && selectedLevelObject < static_cast<int>(levelObjects.size()))

@@ -447,14 +447,45 @@ void CritterField::stepToward(Critter& critter, float speed, bool keepUpright)
 	critter.position += critter.forward * speed;
 }
 
+bool CritterField::sampleFloor(Critter& critter, float above, float below, glm::vec3& outPoint, glm::vec3& outNormal)
+{
+	if (m_floor == nullptr || m_floor->empty())
+		return false;
+	const glm::vec3 down = -fieldUp();
+	const glm::vec3 start = critter.position - down * above;
+	const float reach = above + below;
+	float distance = 0.0f;
+	glm::vec3 normal(0.0f);
+	if (m_floor->testTriangle(critter.floorTriangle, start, down, reach, distance, normal))
+	{
+		outPoint = start + down * distance;
+		outNormal = normal;
+		return true;
+	}
+	int triangle = -1;
+	if (!m_floor->cast(start, down, reach, distance, normal, &triangle))
+	{
+		critter.floorTriangle = -1;
+		return false;
+	}
+	critter.floorTriangle = triangle;
+	outPoint = start + down * distance;
+	outNormal = normal;
+	return true;
+}
+
 bool CritterField::snapToFloor(Critter& critter)
 {
 	glm::vec3 hit, normal;
 	// Guess: the step a walker climbs or drops in one tick.
-	if (!getFloor(critter.position, 60.0f, 120.0f, hit, normal))
+	if (!sampleFloor(critter, 60.0f, 120.0f, hit, normal))
 		return false;
 	if (glm::dot(normal, fieldUp()) < 0.35f)
+	{
+		// Don't keep a wall. The next tick has to search again.
+		critter.floorTriangle = -1;
 		return false;
+	}
 	critter.position = hit;
 	if (m_species.alignToFloor)
 	{
@@ -467,7 +498,7 @@ bool CritterField::snapToFloor(Critter& critter)
 void CritterField::keepAboveFloor(Critter& critter, float clearance)
 {
 	glm::vec3 hit, normal;
-	if (getFloor(critter.position, clearance, clearance, hit, normal))
+	if (sampleFloor(critter, clearance, clearance, hit, normal))
 	{
 		const float height = glm::dot(critter.position - hit, fieldUp());
 		if (height < clearance)
@@ -917,9 +948,9 @@ void CritterField::update()
 
 		if (m_assets != nullptr && m_assets->animated)
 		{
+			// Bone matrices are built at draw time, and only for critters in view.
 			critter.anim.animate(kAnimAdvance);
 			critter.anim.apply(critter.pose);
-			critter.pose.calculateMatrices();
 		}
 	}
 }
@@ -1058,23 +1089,30 @@ void CritterSystem::load(const std::vector<Ty1Instance>& instances, const std::v
 		Debug::log("Critter fields: " + std::to_string(m_fields.size()) + ", critters: " + std::to_string(critterTotal));
 }
 
-void CritterSystem::update(float dt)
+int CritterSystem::update(float dt)
 {
 	if (m_paused || m_fields.empty())
-		return;
-	// Long frames (a level load, a dragged window) would otherwise run hundreds of ticks.
-	m_accumulator = std::min(m_accumulator + dt, kTickSeconds * 5.0f);
-	while (m_accumulator >= kTickSeconds)
-	{
-		m_accumulator -= kTickSeconds;
-		for (const std::unique_ptr<CritterField>& field : m_fields)
-			field->update();
-	}
+		return 0;
+	// A hitch (level load, a dragged window) must not replay a burst of ticks.
+	// One step keeps the fields moving; the fractional remainder is alpha().
+	m_accumulator += std::min(dt, kTickSeconds * 5.0f);
+	if (m_accumulator < kTickSeconds)
+		return 0;
+	m_accumulator = std::fmod(m_accumulator, kTickSeconds);
+	for (const std::unique_ptr<CritterField>& field : m_fields)
+		field->update();
+	return 1;
 }
 
 float CritterSystem::alpha() const
 {
 	return std::clamp(m_accumulator / kTickSeconds, 0.0f, 1.0f);
+}
+
+CritterField* CritterSystem::fieldForInstance(int instanceIndex)
+{
+	const auto it = m_fieldByInstance.find(instanceIndex);
+	return it == m_fieldByInstance.end() ? nullptr : m_fields[it->second].get();
 }
 
 const CritterField* CritterSystem::fieldForInstance(int instanceIndex) const

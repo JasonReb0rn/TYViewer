@@ -20,7 +20,11 @@ public:
 	bool empty() const { return m_triangles.empty(); }
 
 	// Nearest hit along `dir` (unit length) within `maxDistance`. Both triangle sides hit.
+	// `outTriangle` receives the hit index when non-null.
 	bool cast(const glm::vec3& from, const glm::vec3& dir, float maxDistance,
+		float& outDistance, glm::vec3& outNormal, int* outTriangle = nullptr) const;
+	// The same test against one triangle from a previous cast. False when `triangle` is stale.
+	bool testTriangle(int triangle, const glm::vec3& from, const glm::vec3& dir, float maxDistance,
 		float& outDistance, glm::vec3& outNormal) const;
 	// Highest surface below `from`, at most `maxDrop` down. The normal faces up.
 	bool floorBelow(const glm::vec3& from, float maxDrop, float& outY, glm::vec3& outNormal) const;
@@ -36,13 +40,15 @@ private:
 
 	int cellIndex(int x, int z) const { return z * m_cellsX + x; }
 	void cellOf(float x, float z, int& outX, int& outZ) const;
+	static bool rayTriangle(const Triangle& tri, const glm::vec3& from, const glm::vec3& dir,
+		float maxDistance, float& outDistance, glm::vec3& outNormal);
 	bool testCell(int cell, const glm::vec3& from, const glm::vec3& dir, float maxDistance,
-		float& best, glm::vec3& bestNormal) const;
+		float& best, glm::vec3& bestNormal, int& bestTriangle) const;
 
 	std::vector<Triangle> m_triangles;
 	std::vector<std::vector<uint32_t>> m_cells;
 	glm::vec3 m_min{ 0.0f };
-	float m_cellSize = 512.0f;
+	float m_cellSize = 128.0f;
 	int m_cellsX = 0;
 	int m_cellsZ = 0;
 	// Per-query visit marks so a triangle spanning several cells is tested once.

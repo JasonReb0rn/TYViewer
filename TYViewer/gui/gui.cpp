@@ -2238,7 +2238,8 @@ void Gui::setObjectVisible(int index, bool visible)
 }
 
 void Gui::setRenderStats(int drawCalls, int instancedBatches, int instancesVisited, int instancesCulled,
-	int partsVisited, int partsCulled, long long trianglesDrawn, float sceneMs)
+	int partsVisited, int partsCulled, long long trianglesDrawn, float sceneMs,
+	int simTicks, float simMs)
 {
 	statsValid = true;
 	statDrawCalls = drawCalls;
@@ -2249,6 +2250,8 @@ void Gui::setRenderStats(int drawCalls, int instancedBatches, int instancesVisit
 	statPartsCulled = partsCulled;
 	statTrianglesDrawn = trianglesDrawn;
 	statSceneMs = sceneMs;
+	statSimTicks = simTicks;
+	statSimMs = simMs;
 }
 
 void Gui::renderSceneStatsBar()
@@ -2266,11 +2269,12 @@ void Gui::renderSceneStatsBar()
 	drawRect(0.0f, y, static_cast<float>(windowWidth), height, glm::vec4(0.08f, 0.08f, 0.09f, 0.92f));
 	drawRect(0.0f, y, static_cast<float>(windowWidth), 1.0f, glm::vec4(0.4f, 0.4f, 0.4f, 1.0f));
 
-	char buf[224];
+	char buf[320];
 	std::snprintf(buf, sizeof(buf),
-		"SCENE  objects %d (%d culled)  parts %d (%d culled)  draws %d (%d batched)  tris %lld  %.2fms",
+		"SCENE  objects %d (%d culled)  parts %d (%d culled)  draws %d (%d batched)  tris %lld  scene %.2fms  sim %.2fms (%d tick)",
 		statInstancesVisited, statInstancesCulled, statPartsVisited, statPartsCulled,
-		statDrawCalls, statInstancedBatches, statTrianglesDrawn, statSceneMs);
+		statDrawCalls, statInstancedBatches, statTrianglesDrawn, statSceneMs,
+		statSimMs, statSimTicks);
 	drawText(buf, 10.0f, y + 6.0f, glm::vec4(0.75f, 0.9f, 0.8f, 1.0f));
 }
 

@@ -155,6 +155,8 @@ void AnmPose::init(const AnmData* data, const std::vector<glm::vec3>& origins)
 	m_data = data;
 	m_frames.clear();
 	m_matrices.clear();
+	m_hasTarget = false;
+	m_matricesReady = false;
 	if (data == nullptr)
 		return;
 
@@ -169,6 +171,14 @@ void AnmPose::init(const AnmData* data, const std::vector<glm::vec3>& origins)
 void AnmPose::tween(float frame, float weight)
 {
 	const float clamped = std::clamp(weight, 0.0f, 1.0f);
+	if (m_hasTarget && m_matricesReady && m_targetFrame == frame && m_targetWeight == clamped)
+		return;
+
+	m_hasTarget = true;
+	m_targetFrame = frame;
+	m_targetWeight = clamped;
+	m_matricesReady = false;
+
 	for (size_t i = 0; i < m_frames.size(); i++)
 	{
 		Frame& state = m_frames[i];
@@ -183,11 +193,14 @@ void AnmPose::tween(float frame, float weight)
 
 void AnmPose::calculateMatrices()
 {
+	if (m_matricesReady)
+		return;
 	for (int i = 0; i < static_cast<int>(m_frames.size()); i++)
 	{
 		if (!m_frames[static_cast<size_t>(i)].matrixCalc)
 			calculateNodeMatrix(i);
 	}
+	m_matricesReady = true;
 }
 
 // Animation_CalculateFrame.
