@@ -75,6 +75,8 @@ private:
 	bool wireframe = false;
 	bool viewingLevel = false;
 	bool collisionMeshesVisible = true;
+	// Companion `{id}ex.lv2` objects. Per-object `visible` is unchanged by this.
+	bool showLevelExtras = true;
 
 	GLFWwindow* window;
 
@@ -125,6 +127,8 @@ private:
 	void frameCameraOnModels(const std::vector<const Model*>& list, bool levelFraming);
 	void frameCameraOnInstance(int index);
 	void refreshObjectInspector();
+	// Drawn when the instance is visible, and not a companion object while extras are hidden.
+	bool levelInstanceShown(const Ty1Instance& instance) const;
 	void drawSelectedObjectOutline(Shader& shader, const Ty1Instance& instance);
 	void refreshCollisionToggle();
 	void refreshCrittersToggle();

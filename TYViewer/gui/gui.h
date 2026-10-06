@@ -44,6 +44,8 @@ struct LevelObjectItem
 	bool visible = true;
 	// Visibility from the level file, before show-all or hide-all.
 	bool defaultVisible = true;
+	// Read from the level's `{id}ex.lv2` companion.
+	bool fromExtra = false;
 	// Empty for a prop. Otherwise critter, water, trigger, sound, patrol, or range.
 	std::string kindLabel;
 	// Name from `ID = number,label` when it is not blank or none.
@@ -111,6 +113,8 @@ public:
 	void setLevelObjects(const std::vector<LevelObjectItem>& objects);
 	void setObjectInfo(std::vector<ObjectInfoLine> lines);
 	void setOnLevelObjectToggled(std::function<void(int index, bool visible)> callback);
+	// Companion objects shown or hidden as a set. Does not change each row's checkbox.
+	void setOnLevelExtrasToggled(std::function<void(bool shown)> callback);
 	// Level-part show/hide changed mesh visibility. The app refreshes the collision toggle.
 	void setOnPartVisibilityChanged(std::function<void()> callback);
 	void setOnLevelObjectSelected(std::function<void(int index)> callback);
@@ -206,6 +210,8 @@ private:
 	void layoutObjectList();
 	GuiRect objectSearchRect() const;
 	void setObjectVisible(int index, bool visible);
+	int levelExtraCount() const;
+	GuiRect extrasButtonRect() const;
 	void selectLevelObject(int index);
 	void revealLevelObject(int index);
 	void rebuildInfoDrawLines();
@@ -283,6 +289,8 @@ private:
 	unsigned int objectKindFilter = 0;
 	bool objectListCollapsed = false;
 	bool materialListCollapsed = false;
+	// Companion `{id}ex.lv2` rows. Default on, matching a level load.
+	bool showLevelExtras = true;
 	std::vector<int> objectFiltered;
 	float objectListScroll = 0.0f;
 	float maxObjectListScroll = 0.0f;
@@ -291,6 +299,7 @@ private:
 	int lastObjectClickIndex = -1;
 	double lastObjectClickTime = 0.0;
 	std::function<void(int index, bool visible)> onLevelObjectToggled;
+	std::function<void(bool shown)> onLevelExtrasToggled;
 	std::function<void()> onPartVisibilityChanged;
 	std::function<void(int index)> onLevelObjectSelected;
 	std::function<void(int index)> onLevelObjectFocused;

@@ -1585,7 +1585,13 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 
 				if (yLocal >= 0.0f && yLocal < kObjectListHeaderHeight)
 				{
-					if (bulk.showDefault.contains(x, y) || bulk.showAll.contains(x, y) || bulk.hideAll.contains(x, y))
+					if (levelExtraCount() > 0 && extrasButtonRect().contains(x, y))
+					{
+						showLevelExtras = !showLevelExtras;
+						if (onLevelExtrasToggled)
+							onLevelExtrasToggled(showLevelExtras);
+					}
+					else if (bulk.showDefault.contains(x, y) || bulk.showAll.contains(x, y) || bulk.hideAll.contains(x, y))
 					{
 						for (int index : objectFiltered)
 						{
@@ -2175,6 +2181,7 @@ void Gui::clearObjectList()
 	objectInfoScroll = 0.0f;
 	maxObjectInfoScroll = 0.0f;
 	hoveredInfoRow = -1;
+	showLevelExtras = true;
 	layoutObjectList();
 }
 
@@ -2195,6 +2202,7 @@ void Gui::setLevelObjects(const std::vector<LevelObjectItem>& objects)
 	objectInfoScroll = 0.0f;
 	maxObjectInfoScroll = 0.0f;
 	hoveredInfoRow = -1;
+	showLevelExtras = true;
 	if (!objects.empty())
 		sceneLoaded = true;
 	layoutObjectList();
@@ -2211,6 +2219,11 @@ void Gui::setObjectInfo(std::vector<ObjectInfoLine> lines)
 void Gui::setOnLevelObjectToggled(std::function<void(int, bool)> callback)
 {
 	onLevelObjectToggled = std::move(callback);
+}
+
+void Gui::setOnLevelExtrasToggled(std::function<void(bool)> callback)
+{
+	onLevelExtrasToggled = std::move(callback);
 }
 
 void Gui::setOnPartVisibilityChanged(std::function<void()> callback)
@@ -2293,7 +2306,8 @@ void Gui::rebuildObjectFilter()
 		if (objectSearch.empty()
 			|| containsCaseInsensitive(item.typeName, objectSearch)
 			|| containsCaseInsensitive(item.modelFile, objectSearch)
-			|| containsCaseInsensitive(item.idLabel, objectSearch))
+			|| containsCaseInsensitive(item.idLabel, objectSearch)
+			|| (item.fromExtra && containsCaseInsensitive("ex", objectSearch)))
 			objectFiltered.push_back(i);
 	}
 }
@@ -2411,6 +2425,30 @@ GuiRect Gui::objectSearchRect() const
 	return { objectListRect.x + 8.0f, objectListRect.y + 60.0f, objectListRect.width - 16.0f, 20.0f };
 }
 
+int Gui::levelExtraCount() const
+{
+	int count = 0;
+	for (const LevelObjectItem& item : levelObjectItems)
+	{
+		if (item.fromExtra)
+			count++;
+	}
+	return count;
+}
+
+GuiRect Gui::extrasButtonRect() const
+{
+	const std::string label = "EXTRAS " + std::to_string(levelExtraCount());
+	float width = static_cast<float>(label.size()) * 8.0f + 12.0f;
+	const float x = objectListRect.x + 6.0f;
+	const float y = objectListRect.y + 38.0f;
+	const BulkButtonRects bulk = bulkButtonRects(objectListRect);
+	const float maxWidth = std::max(48.0f, bulk.showDefault.x - 4.0f - x);
+	if (width > maxWidth)
+		width = maxWidth;
+	return { x, y, width, 18.0f };
+}
+
 GuiRect Gui::objectKindChipRect(int index) const
 {
 	const int columns = 4;
@@ -2511,6 +2549,19 @@ void Gui::renderObjectList()
 	bindRectShader();
 	drawTextButton(bulk.hideAll, "HIDE ALL", hideFill, hideHover);
 	bindRectShader();
+	if (levelExtraCount() > 0)
+	{
+		const GuiRect extras = extrasButtonRect();
+		const std::string extrasLabel = "EXTRAS " + std::to_string(levelExtraCount());
+		const glm::vec4 extrasOn(0.45f, 0.32f, 0.08f, 0.95f);
+		const glm::vec4 extrasOnHover(0.62f, 0.45f, 0.12f, 0.98f);
+		const glm::vec4 extrasOff(0.22f, 0.22f, 0.22f, 0.95f);
+		const glm::vec4 extrasOffHover(0.32f, 0.32f, 0.32f, 0.98f);
+		drawTextButton(extras, extrasLabel.c_str(),
+			showLevelExtras ? extrasOn : extrasOff,
+			showLevelExtras ? extrasOnHover : extrasOffHover);
+		bindRectShader();
+	}
 	const GuiRect searchRect = objectSearchRect();
 	const glm::vec4 searchBg = objectSearchActive ? glm::vec4(0.22f, 0.22f, 0.22f, 1.0f) : glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
 	const glm::vec4 searchBorder = objectSearchActive ? glm::vec4(0.7f, 0.7f, 0.7f, 1.0f) : glm::vec4(0.45f, 0.45f, 0.45f, 1.0f);
@@ -2597,6 +2648,18 @@ void Gui::renderObjectList()
 			drawText(displayType, objectListRect.x + 28.0f, yOffset + kNameLineY, textColor);
 
 			std::string secondary;
+			float secondaryX = objectListRect.x + 28.0f;
+			int secondaryMax = maxChars;
+			if (item.fromExtra)
+			{
+				const glm::vec4 extraColor = isEnabled
+					? glm::vec4(1.0f, 0.72f, 0.25f, 1.0f)
+					: glm::vec4(0.65f, 0.48f, 0.18f, 1.0f);
+				drawText("ex", secondaryX, yOffset + kTagsLineY, extraColor);
+				bindRectShader();
+				secondaryX += 24.0f;
+				secondaryMax = std::max(4, secondaryMax - 3);
+			}
 			if (!item.kindLabel.empty())
 				secondary += item.kindLabel;
 			if (!item.idLabel.empty())
@@ -2623,9 +2686,9 @@ void Gui::renderObjectList()
 					kindColor.a = 0.55f;
 				secondaryColor = kindColor;
 			}
-			if ((int)secondary.length() > maxChars)
-				secondary = secondary.substr(0, maxChars - 3) + "...";
-			drawText(secondary, objectListRect.x + 28.0f, yOffset + kTagsLineY, secondaryColor);
+			if ((int)secondary.length() > secondaryMax)
+				secondary = secondary.substr(0, secondaryMax - 3) + "...";
+			drawText(secondary, secondaryX, yOffset + kTagsLineY, secondaryColor);
 			bindRectShader();
 		}
 		yOffset += kMeshPartItemHeight;

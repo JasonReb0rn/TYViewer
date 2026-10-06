@@ -46,6 +46,8 @@ struct Ty1Instance
 	std::string extraModelFile;
 	// Character label from `type = N,name`, such as grandma.
 	std::string variantLabel;
+	// `.lv2` this instance was read from (`a1.lv2` or `a1ex.lv2`).
+	std::string sourceFile;
 	class Model* model = nullptr;
 	class Model* extraModel = nullptr;
 	glm::vec3 position{ 0.0f, 0.0f, 0.0f };
@@ -53,6 +55,8 @@ struct Ty1Instance
 	glm::vec3 rotation{ 0.0f, 0.0f, 0.0f };
 	glm::vec3 scale{ 1.0f, 1.0f, 1.0f };
 	bool visible = true;
+	// Read from the level's `{id}ex.lv2` companion, not the base file.
+	bool fromExtra = false;
 	// Gem::Draw and Portal::Draw copy the camera rotation each frame. Level rot is not used.
 	bool billboard = false;
 	// Added to world Y before the rotation. The portal value is a guess:
@@ -124,6 +128,16 @@ std::vector<Ty1InfoLine> describeTy1Instance(
 // A billboard ignores level rot. `cameraView` is Camera::getViewMatrix (eye Z negated,
 // before render flips Z). Null keeps the stored rotation.
 glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance, const glm::mat4* cameraView = nullptr);
+
+// `a1.lv2` and `a1ex.lv2` both name base `a1.lv2` and companion `a1ex.lv2`.
+// A name that is not a zone level (`a1`..`e4`, `z1`..`z4`) leaves both empty.
+struct Ty1LevelFiles
+{
+	std::string baseFile;
+	std::string companionFile;
+};
+
+Ty1LevelFiles ty1LevelFiles(const std::string& levelFile);
 
 // `globalModelText` is the archive file global.model. `mdlFiles` is every .mdl name.
 // `levelFile` is the .lv2 name (`a1.lv2`, `a1ex.lv2`). It picks the opal and thunder

@@ -435,6 +435,20 @@ namespace
 	}
 }
 
+Ty1LevelFiles ty1LevelFiles(const std::string& levelFile)
+{
+	Ty1LevelFiles files;
+	const std::string id = levelIdFromFile(levelFile);
+	if (id.size() != 2 || id[1] < '1' || id[1] > '4')
+		return files;
+	const char zone = id[0];
+	if (zone < 'a' || (zone > 'e' && zone != 'z'))
+		return files;
+	files.baseFile = id + ".lv2";
+	files.companionFile = id + "ex.lv2";
+	return files;
+}
+
 glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance, const glm::mat4* cameraView)
 {
 	// Transpose of (scale * Rx * Ry * Rz) with translation in the last row.
@@ -882,6 +896,8 @@ std::vector<Ty1InfoLine> describeTy1Instance(
 	};
 
 	push(instance.typeName.empty() ? "object" : instance.typeName, -1, false, true, 0);
+	if (!instance.sourceFile.empty())
+		push(instance.sourceFile, -1, false, false, 0);
 	push(ty1KindName(instance), -1, false, false, 0);
 	if (instance.modelFile.empty() && instance.extraModelFile.empty())
 		push("no model", -1, true, false, 0);

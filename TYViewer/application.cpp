@@ -417,6 +417,9 @@ void Application::initialize()
 		if (index >= 0 && index < static_cast<int>(levelObjects.size()))
 			levelObjects[static_cast<size_t>(index)].visible = visible;
 	});
+	gui->setOnLevelExtrasToggled([this](bool shown) {
+		showLevelExtras = shown;
+	});
 	gui->setOnPartVisibilityChanged([this]() {
 		syncCollisionVisibility();
 	});
@@ -841,6 +844,15 @@ namespace
 	}
 }
 
+bool Application::levelInstanceShown(const Ty1Instance& instance) const
+{
+	if (!instance.visible)
+		return false;
+	if (instance.fromExtra && !showLevelExtras)
+		return false;
+	return true;
+}
+
 void Application::refreshObjectInspector()
 {
 	if (!gui)
@@ -872,25 +884,46 @@ void Application::loadTy1Level(const std::string& levelName)
 {
 	clearModels();
 	drawGrid = false;
+	showLevelExtras = true;
 	content.setActiveArchive(0);
 	currentModelArchiveIndex = 0;
-	currentModelName = levelName;
 
-	std::vector<char> data;
-	if (!content.getActiveFileData(levelName, data) || data.empty())
+	auto readText = [this](const std::string& name, std::string& text) -> bool
 	{
-		Debug::log("Failed to read TY1 level: " + levelName);
+		std::vector<char> bytes;
+		if (!content.getActiveFileData(name, bytes) || bytes.empty())
+			return false;
+		text.assign(bytes.begin(), bytes.end());
+		return true;
+	};
+
+	// `a1.lv2` and `a1ex.lv2` both open the base rooms plus the companion objects.
+	// A base file that is missing keeps the single-file load of whatever was selected.
+	const Ty1LevelFiles pair = ty1LevelFiles(levelName);
+	std::string roomFile = levelName;
+	std::string companionFile;
+	if (!pair.baseFile.empty() && content.hasActiveFile(pair.baseFile))
+	{
+		roomFile = pair.baseFile;
+		if (content.hasActiveFile(pair.companionFile))
+			companionFile = pair.companionFile;
+	}
+	currentModelName = roomFile;
+
+	std::string text;
+	if (!readText(roomFile, text))
+	{
+		Debug::log("Failed to read TY1 level: " + roomFile);
 		if (gui)
 		{
-			gui->setSceneLabel(levelName, false);
-			gui->showNotification("Failed to read: " + levelName, Gui::NotificationKind::Error, 4.0f);
+			gui->setSceneLabel(roomFile, false);
+			gui->showNotification("Failed to read: " + roomFile, Gui::NotificationKind::Error, 4.0f);
 		}
 		return;
 	}
 
-	const std::string text(data.begin(), data.end());
 	const std::vector<std::string> roomNames = roomModelsFromLv2(text);
-	Debug::log("TY1 level " + levelName + " room meshes: " + std::to_string(roomNames.size()));
+	Debug::log("TY1 level " + roomFile + " room meshes: " + std::to_string(roomNames.size()));
 
 	for (const std::string& roomName : roomNames)
 	{
@@ -913,7 +946,74 @@ void Application::loadTy1Level(const std::string& levelName)
 	else
 		Debug::log("global.model missing; prop catalogs will be skipped");
 
-	levelObjects = parseTy1Instances(text, globalModelText, content.getModelList(0), levelName);
+	const std::vector<std::string> modelNames = content.getModelList(0);
+	levelObjects = parseTy1Instances(text, globalModelText, modelNames, roomFile);
+	for (Ty1Instance& instance : levelObjects)
+	{
+		instance.sourceFile = roomFile;
+		instance.fromExtra = false;
+	}
+	const size_t baseCount = levelObjects.size();
+	size_t companionCount = 0;
+	if (!companionFile.empty())
+	{
+		std::string companionText;
+		if (!readText(companionFile, companionText))
+		{
+			Debug::log("Failed to read TY1 companion: " + companionFile);
+			companionFile.clear();
+		}
+		else
+		{
+			bool companionHasSetup = false;
+			{
+				std::istringstream stream(companionText);
+				std::string line;
+				while (std::getline(stream, line))
+				{
+					if (!line.empty() && line.back() == '\r')
+						line.pop_back();
+					if (lowerCopy(trimCopy(line)) == "name setup")
+					{
+						companionHasSetup = true;
+						break;
+					}
+				}
+			}
+			const std::vector<std::string> companionRooms = roomModelsFromLv2(companionText);
+			std::vector<Ty1Instance> extras = parseTy1Instances(
+				companionText, globalModelText, modelNames, companionFile);
+			companionCount = extras.size();
+			Debug::log("TY1 companion " + companionFile + " objects: " + std::to_string(companionCount)
+				+ (companionHasSetup ? " has setup" : " no setup")
+				+ ", setup rooms: " + std::to_string(companionRooms.size()));
+
+			std::unordered_set<int> baseIds;
+			for (size_t i = 0; i < baseCount; i++)
+			{
+				const int id = levelObjects[i].objectId;
+				if (id > 0)
+					baseIds.insert(id);
+			}
+			std::string sharedIds;
+			for (Ty1Instance& instance : extras)
+			{
+				instance.sourceFile = companionFile;
+				instance.fromExtra = true;
+				if (instance.objectId > 0 && baseIds.find(instance.objectId) != baseIds.end())
+				{
+					if (!sharedIds.empty())
+						sharedIds += ", ";
+					sharedIds += std::to_string(instance.objectId);
+				}
+				levelObjects.push_back(std::move(instance));
+			}
+			if (sharedIds.empty())
+				Debug::log("TY1 companion shares no IDs with " + roomFile);
+			else
+				Debug::log("TY1 companion shares IDs with " + roomFile + ": " + sharedIds);
+		}
+	}
 	levelObjectIds = ty1IdIndex(levelObjects);
 	propModels.clear();
 	std::unordered_set<Model*> seenProps;
@@ -945,8 +1045,9 @@ void Application::loadTy1Level(const std::string& levelName)
 		if (instance.seatBottom && instance.model != nullptr)
 			instance.drawLiftY = -instance.model->bounds_crn.y * instance.scale.y;
 	}
-	Debug::log("TY1 level " + levelName + " objects: " + std::to_string(levelObjects.size())
-		+ " with mesh: " + std::to_string(propsWithMesh));
+	Debug::log("TY1 level " + roomFile + " objects: " + std::to_string(baseCount)
+		+ (companionFile.empty() ? "" : ", companion " + companionFile + " objects: " + std::to_string(companionCount))
+		+ ", with mesh: " + std::to_string(propsWithMesh));
 
 	computeInstanceWorldBounds();
 	// Collision shells only. The drawn level mesh is far too dense to raycast every tick.
@@ -958,11 +1059,11 @@ void Application::loadTy1Level(const std::string& levelName)
 
 	if (models.empty() && levelObjects.empty())
 	{
-		Debug::log("No room meshes in " + levelName);
+		Debug::log("No room meshes in " + roomFile);
 		if (gui)
 		{
-			gui->setSceneLabel(levelName, false);
-			gui->showNotification("No room meshes in " + levelName, Gui::NotificationKind::Info, 4.0f);
+			gui->setSceneLabel(roomFile, false);
+			gui->showNotification("No room meshes in " + roomFile, Gui::NotificationKind::Info, 4.0f);
 		}
 		refreshCollisionToggle();
 		return;
@@ -974,7 +1075,7 @@ void Application::loadTy1Level(const std::string& levelName)
 	frameCameraOnLoadedModels();
 	if (gui)
 	{
-		gui->setLevelModels(models, levelName);
+		gui->setLevelModels(models, roomFile);
 		std::vector<LevelObjectItem> items;
 		items.reserve(levelObjects.size());
 		for (const Ty1Instance& instance : levelObjects)
@@ -990,6 +1091,7 @@ void Application::loadTy1Level(const std::string& levelName)
 			}
 			item.visible = instance.visible;
 			item.defaultVisible = instance.visible;
+			item.fromExtra = instance.fromExtra;
 			const char* kindName = ty1KindName(instance);
 			if (std::strcmp(kindName, "prop") != 0)
 				item.kindLabel = kindName;
@@ -997,9 +1099,10 @@ void Application::loadTy1Level(const std::string& levelName)
 			items.push_back(item);
 		}
 		gui->setLevelObjects(items);
-		gui->showNotification(
-			"Loaded " + std::to_string(models.size()) + " room meshes, " + std::to_string(propsWithMesh) + " props",
-			Gui::NotificationKind::Success, 3.0f);
+		const std::string notice = companionFile.empty()
+			? ("Loaded " + std::to_string(models.size()) + " room meshes, " + std::to_string(propsWithMesh) + " props")
+			: (roomFile + " + " + std::to_string(companionCount) + " from " + companionFile);
+		gui->showNotification(notice, Gui::NotificationKind::Success, 3.0f);
 	}
 }
 
@@ -1295,7 +1398,7 @@ void Application::frameCameraOnModels(const std::vector<const Model*>& list, boo
 			return;
 		for (const Ty1Instance& instance : levelObjects)
 		{
-			if (!instance.visible || (instance.model == nullptr && instance.extraModel == nullptr))
+			if (!levelInstanceShown(instance) || (instance.model == nullptr && instance.extraModel == nullptr))
 				continue;
 			const glm::mat4 world = ty1InstanceMatrix(instance);
 			eachPlacedModel(instance, [&](const Model& placed)
@@ -1364,7 +1467,7 @@ void Application::frameCameraOnModels(const std::vector<const Model*>& list, boo
 	{
 		for (const Ty1Instance& instance : levelObjects)
 		{
-			if (!instance.visible || (instance.model == nullptr && instance.extraModel == nullptr))
+			if (!levelInstanceShown(instance) || (instance.model == nullptr && instance.extraModel == nullptr))
 				continue;
 			const glm::mat4 world = ty1InstanceMatrix(instance);
 			eachPlacedModel(instance, [&](const Model& placed)
@@ -2060,7 +2163,7 @@ void Application::render(Shader& shader)
 	for (size_t index = 0; index < levelObjects.size(); index++)
 	{
 		const Ty1Instance& instance = levelObjects[index];
-		if (!instance.visible)
+		if (!levelInstanceShown(instance))
 			continue;
 		if (instance.hasAabb && !aabbInFrustum(frustum, instance.worldAabbMin, instance.worldAabbMax))
 		{
@@ -2140,7 +2243,7 @@ void Application::render(Shader& shader)
 		for (const std::unique_ptr<CritterField>& field : critters.fields())
 		{
 			const size_t instanceIndex = static_cast<size_t>(field->instanceIndex());
-			if (instanceIndex >= levelObjects.size() || !levelObjects[instanceIndex].visible)
+			if (instanceIndex >= levelObjects.size() || !levelInstanceShown(levelObjects[instanceIndex]))
 				continue;
 			const CritterAssets* assets = field->assets();
 			if (assets == nullptr || assets->model == nullptr)
@@ -2212,7 +2315,7 @@ void Application::render(Shader& shader)
 			if (species.sprite == nullptr)
 				continue;
 			const size_t instanceIndex = static_cast<size_t>(field->instanceIndex());
-			if (instanceIndex >= levelObjects.size() || !levelObjects[instanceIndex].visible)
+			if (instanceIndex >= levelObjects.size() || !levelInstanceShown(levelObjects[instanceIndex]))
 				continue;
 			const std::vector<std::unique_ptr<Mesh>>& frames = critterSpriteFramesFor(species);
 			for (auto& entry : critterBatches)
@@ -2311,7 +2414,7 @@ void Application::render(Shader& shader)
 			if (field->species().move != CritterMove::Sprite || field->species().sprite != nullptr)
 				continue;
 			const size_t instanceIndex = static_cast<size_t>(field->instanceIndex());
-			if (instanceIndex >= levelObjects.size() || !levelObjects[instanceIndex].visible)
+			if (instanceIndex >= levelObjects.size() || !levelInstanceShown(levelObjects[instanceIndex]))
 				continue;
 			if (!started)
 			{
@@ -2368,7 +2471,7 @@ void Application::render(Shader& shader)
 	{
 		for (const Ty1Instance& instance : levelObjects)
 		{
-			if (!instance.visible)
+			if (!levelInstanceShown(instance))
 				continue;
 			const glm::mat4 world = ty1InstanceMatrix(instance, &cameraView);
 			eachPlacedModel(instance, [&](const Model& placed)
