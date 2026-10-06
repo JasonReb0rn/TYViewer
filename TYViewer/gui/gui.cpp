@@ -260,7 +260,7 @@ void Gui::initialize(int width, int height)
 	recenterButtonRect = {exportRawButtonRect.x + exportRawButtonRect.width + 10.0f, 10.0f, 30.0f, 30.0f};
 	collisionButtonRect = {recenterButtonRect.x + recenterButtonRect.width + 10.0f, 10.0f, 96.0f, 30.0f};
 	boundsButtonRect = {collisionButtonRect.x + collisionButtonRect.width + 10.0f, 10.0f, 144.0f, 30.0f};
-	crittersButtonRect = {boundsButtonRect.x + boundsButtonRect.width + 10.0f, 10.0f, 150.0f, 30.0f};
+	crittersButtonRect = {boundsButtonRect.x + boundsButtonRect.width + 10.0f, 10.0f, 168.0f, 30.0f};
 	
 	// Model info panel on the right
 	modelInfoRect = {(float)width - 310.0f, 10.0f, 300.0f, 150.0f};
@@ -919,6 +919,10 @@ void Gui::renderCrittersButton()
 	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
 	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
 
+	const char* label = (crittersAvailable && !crittersPlaying) ? "Critters: Paused [P]" : "Critters: Live [P]";
+	// 8 px per glyph plus 12 px padding on each side, like the bounds button.
+	crittersButtonRect.width = 24.0f + 8.0f * static_cast<float>(std::strlen(label));
+
 	const bool hovered = crittersAvailable && crittersButtonRect.contains(mouseX, mouseY);
 
 	glm::vec4 bgColor;
@@ -949,7 +953,6 @@ void Gui::renderCrittersButton()
 	drawRect(x, y, 2.0f, h, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
 	drawRect(x + w - 2.0f, y, 2.0f, h, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
 
-	const char* label = (crittersAvailable && !crittersPlaying) ? "Critters: Paused [P]" : "Critters: Live [P]";
 	drawText(label, x + 12.0f, y + 11.0f, textColor);
 }
 

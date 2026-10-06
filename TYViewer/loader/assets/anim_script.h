@@ -59,6 +59,8 @@ public:
 	void apply(AnmPose& pose);
 
 	int current() const { return m_anim; }
+	// The anim being tweened to, or the current one when no tween is running.
+	int target() const { return m_nextAnim >= 0 ? m_nextAnim : m_anim; }
 	// Stop-cycle anims have frozen on their last frame.
 	bool finished() const { return m_step == 0.0f && m_nextAnim < 0; }
 	int loops() const { return m_loops; }

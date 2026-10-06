@@ -235,7 +235,9 @@ void CritterField::playAnim(Critter& critter, const std::vector<int>& anims, boo
 {
 	if (m_assets == nullptr || !m_assets->animated || anims.empty())
 		return;
-	const int current = critter.anim.current();
+	// Compare against the tween target: re-issuing TweenAnim every tick would reset
+	// the tween count and hold the pose on the new anim's first frame.
+	const int current = critter.anim.target();
 	const bool playing = std::find(anims.begin(), anims.end(), current) != anims.end();
 	if (playing && !restart)
 		return;
