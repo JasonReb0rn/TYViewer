@@ -167,6 +167,12 @@ Shader* Shader::createDefault()
 		uniform int useSkinning;
 		uniform mat4 bones[64];
 		uniform int boneParents[64];
+		// PC water.shader. 1a/2a are (dirX, dirZ, frequency, phase). 1b/2b.x is negated height.
+		uniform int waterWave;
+		uniform vec4 waterWaveCoeffs1a;
+		uniform vec4 waterWaveCoeffs1b;
+		uniform vec4 waterWaveCoeffs2a;
+		uniform vec4 waterWaveCoeffs2b;
 
 		out vec4 v_colour;
 		out vec2 v_texcoord;
@@ -191,7 +197,16 @@ Shader* Shader::createDefault()
 				local = w * (bones[m1] * p) + (1.0 - w) * (bones[m2] * p);
 				local.w = 1.0;
 			}
-			gl_Position = VPMatrix * world * local;
+			vec4 worldPos = world * local;
+			if (waterWave != 0)
+			{
+				// Wave 2 reuses wave 1's direction. The PC shader does this too.
+				float dir2d = worldPos.x * waterWaveCoeffs1a.x + worldPos.z * waterWaveCoeffs1a.y;
+				float height1 = sin(dir2d * waterWaveCoeffs1a.z - waterWaveCoeffs1a.w) * waterWaveCoeffs1b.x;
+				float height2 = sin(dir2d * waterWaveCoeffs2a.z - waterWaveCoeffs2a.w) * waterWaveCoeffs2b.x;
+				worldPos.y += height1 + height2;
+			}
+			gl_Position = VPMatrix * worldPos;
 			gl_Position.xy += clipOffset * gl_Position.w;
 			v_colour = colour;
 			v_texcoord = (uvMatrix * vec3(texcoord, 1.0)).xy;

@@ -81,6 +81,9 @@
     <ClCompile Include="loader\ty1_level.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="loader\ty1_water_mesh.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="loader\assets\mdg.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -116,6 +119,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="loader\ty1_water_mesh.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="loader\ty1_level.h">
       <Filter>Header Files</Filter>
     </ClInclude>

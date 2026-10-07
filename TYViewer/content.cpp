@@ -26,6 +26,8 @@ bool Content::loadRKV(const std::string& path, int archiveIndex)
 		ty1Materials.clear();
 		ty1GrassTypesReady = false;
 		ty1GrassTypeList.clear();
+		ty1WaterTypesReady = false;
+		ty1WaterTypes.clear();
 	}
 	return archives[archiveIndex]->load(path);
 }
@@ -710,6 +712,268 @@ void Content::updateTy1WaterRipple()
 		waterRipple = Texture::createRGBA(16, 16, pixels);
 	else
 		waterRipple->updateRGBA(pixels);
+}
+
+namespace
+{
+	float bitsToFloat(std::uint32_t bits)
+	{
+		float value = 0.0f;
+		std::memcpy(&value, &bits, sizeof(value));
+		return value;
+	}
+
+	// MKWaterManager's stub type, before water_types.ini overwrites it.
+	Content::Ty1WaterType stubWaterType()
+	{
+		Content::Ty1WaterType type;
+		type.name = "default";
+		type.wave0AnimSpeed = 2.0f;
+		type.wave0DirX = 0.0f;
+		type.wave0DirZ = 1.0f;
+		type.wave0Height = bitsToFloat(0x3e4ccccdu);
+		type.wave0Freq = bitsToFloat(0x3c54fdf4u);
+		type.wave0Phase = 0.0f;
+		type.wave1AnimSpeed = 3.0f;
+		type.wave1DirX = 1.0f;
+		type.wave1DirZ = 0.0f;
+		type.wave1Height = bitsToFloat(0x3e99999au);
+		type.wave1Freq = 0.02f;
+		type.wave1Phase = bitsToFloat(0x4154cccdu);
+		type.color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+		type.wobbleUVScale = bitsToFloat(0x3d75c28fu);
+		type.noiseScale = bitsToFloat(0x3a83126fu);
+		type.animSpeed = 8.0f;
+		return type;
+	}
+
+	std::string trimCopy(const std::string& value)
+	{
+		size_t begin = 0;
+		while (begin < value.size() && (value[begin] == ' ' || value[begin] == '\t' || value[begin] == '\r'))
+			begin++;
+		size_t end = value.size();
+		while (end > begin && (value[end - 1] == ' ' || value[end - 1] == '\t' || value[end - 1] == '\r'))
+			end--;
+		return value.substr(begin, end - begin);
+	}
+
+	std::vector<float> floatsIn(const std::string& text)
+	{
+		std::vector<float> values;
+		const char* cursor = text.c_str();
+		while (*cursor != '\0')
+		{
+			while (*cursor == ' ' || *cursor == '\t' || *cursor == ',')
+				cursor++;
+			if (*cursor == '\0')
+				break;
+			char* end = nullptr;
+			const float parsed = std::strtof(cursor, &end);
+			if (end == cursor)
+			{
+				cursor++;
+				continue;
+			}
+			values.push_back(parsed);
+			cursor = end;
+		}
+		return values;
+	}
+
+	void applyWaterKey(Content::Ty1WaterType& type, const std::string& key, const std::string& valueText)
+	{
+		const std::vector<float> values = floatsIn(valueText);
+		if (key == "wave0animspeed" && !values.empty())
+			type.wave0AnimSpeed = values[0];
+		else if (key == "wave0dir")
+		{
+			if (values.size() > 0)
+				type.wave0DirX = values[0];
+			if (values.size() > 1)
+				type.wave0DirZ = values[1];
+		}
+		else if (key == "wave0height" && !values.empty())
+			type.wave0Height = values[0];
+		else if (key == "wave0freq" && !values.empty())
+			type.wave0Freq = values[0];
+		else if (key == "wave1animspeed" && !values.empty())
+			type.wave1AnimSpeed = values[0];
+		else if (key == "wave1dir")
+		{
+			if (values.size() > 0)
+				type.wave1DirX = values[0];
+			if (values.size() > 1)
+				type.wave1DirZ = values[1];
+		}
+		else if (key == "wave1height" && !values.empty())
+			type.wave1Height = values[0];
+		else if (key == "wave1freq" && !values.empty())
+			type.wave1Freq = values[0];
+		else if (key == "color")
+		{
+			if (values.size() > 0)
+				type.color.r = values[0];
+			if (values.size() > 1)
+				type.color.g = values[1];
+			if (values.size() > 2)
+				type.color.b = values[2];
+			if (values.size() > 3)
+				type.color.a = values[3];
+		}
+		else if (key == "wobbleuvscale" && !values.empty())
+			type.wobbleUVScale = values[0];
+		else if (key == "noisescale" && !values.empty())
+			type.noiseScale = values[0];
+		else if (key == "envmapanimspeed" && !values.empty())
+			type.animSpeed = values[0] * 2.0f;
+		else if (key == "animspeed" && !values.empty())
+			type.animSpeed = values[0];
+	}
+
+	float wrapAngle(float angle)
+	{
+		const float turn = 6.28318530718f;
+		angle = std::fmod(angle, turn);
+		if (angle < 0.0f)
+			angle += turn;
+		return angle;
+	}
+}
+
+void Content::loadTy1WaterTypes()
+{
+	if (ty1WaterTypesReady || archives[0] == nullptr)
+		return;
+
+	ty1WaterTypesReady = true;
+
+	std::vector<char> data;
+	if (!archives[0]->getFileData("water_types.ini", data) || data.empty())
+	{
+		Debug::log("water_types.ini missing");
+		return;
+	}
+
+	std::string text(data.begin(), data.end());
+	std::string currentName;
+	bool inSection = false;
+	size_t lineStart = 0;
+	while (lineStart <= text.size())
+	{
+		size_t lineEnd = text.find('\n', lineStart);
+		if (lineEnd == std::string::npos)
+			lineEnd = text.size();
+		std::string line = text.substr(lineStart, lineEnd - lineStart);
+		lineStart = lineEnd + 1;
+
+		const size_t comment = line.find("//");
+		if (comment != std::string::npos)
+			line.erase(comment);
+		line = trimCopy(line);
+		if (line.empty())
+		{
+			if (lineStart > text.size())
+				break;
+			continue;
+		}
+
+		if (line.front() == '[')
+		{
+			const size_t close = line.find(']');
+			if (close == std::string::npos)
+				continue;
+			currentName = lowerCopy(trimCopy(line.substr(1, close - 1)));
+			if (currentName.empty())
+				continue;
+			// Copy [default] by value before inserting. operator[] can rehash.
+			Ty1WaterType created = stubWaterType();
+			if (currentName != "default")
+			{
+				const auto found = ty1WaterTypes.find("default");
+				if (found != ty1WaterTypes.end())
+					created = found->second;
+			}
+			created.name = currentName;
+			ty1WaterTypes[currentName] = created;
+			inSection = true;
+			continue;
+		}
+
+		if (!inSection)
+			continue;
+
+		std::string key;
+		std::string valueText;
+		const size_t equals = line.find('=');
+		if (equals != std::string::npos)
+		{
+			key = lowerCopy(trimCopy(line.substr(0, equals)));
+			valueText = line.substr(equals + 1);
+		}
+		else
+		{
+			const std::vector<std::string> words = splitWords(line);
+			if (words.empty())
+				continue;
+			key = lowerCopy(words[0]);
+			for (size_t i = 1; i < words.size(); i++)
+			{
+				if (!valueText.empty())
+					valueText.push_back(' ');
+				valueText += words[i];
+			}
+		}
+		if (key.empty())
+			continue;
+
+		auto it = ty1WaterTypes.find(currentName);
+		if (it == ty1WaterTypes.end())
+			continue;
+		applyWaterKey(it->second, key, valueText);
+	}
+
+	Debug::log("water_types.ini: " + std::to_string(ty1WaterTypes.size()) + " types");
+}
+
+bool Content::ty1IsWaterTypeName(const std::string& name) const
+{
+	const std::string key = lowerCopy(name);
+	if (key.empty() || key == "default")
+		return false;
+	return ty1WaterTypes.find(key) != ty1WaterTypes.end();
+}
+
+bool Content::ty1WaterWaveFor(const std::string& typeName, glm::vec4& coeffs1a, glm::vec4& coeffs1b,
+	glm::vec4& coeffs2a, glm::vec4& coeffs2b, glm::vec4& colour) const
+{
+	const auto it = ty1WaterTypes.find(lowerCopy(typeName));
+	if (it == ty1WaterTypes.end())
+		return false;
+
+	const Ty1WaterType& type = it->second;
+	// 0x5c0060. 1a is dir x, dir z, frequency, phase. 1b.x is the negated height.
+	coeffs1a = glm::vec4(type.wave0DirX, type.wave0DirZ, type.wave0Freq, type.wave0Phase);
+	coeffs1b = glm::vec4(-type.wave0Height, 0.0f, 0.0f, 0.0f);
+	coeffs2a = glm::vec4(type.wave1DirX, type.wave1DirZ, type.wave1Freq, type.wave1Phase);
+	coeffs2b = glm::vec4(-type.wave1Height, 0.0f, 0.0f, 0.0f);
+	colour = type.color;
+	return true;
+}
+
+void Content::updateTy1WaterWaves(float dtSeconds)
+{
+	if (!ty1WaterTypesReady)
+		return;
+
+	// 0x5bf100. The game steps at a fixed 1/60. Real dt matches that on a 60 Hz clock.
+	for (auto& entry : ty1WaterTypes)
+	{
+		Ty1WaterType& type = entry.second;
+		type.wave0Phase = wrapAngle(type.wave0Phase + type.wave0AnimSpeed * dtSeconds);
+		type.wave1Phase = wrapAngle(type.wave1Phase + type.wave1AnimSpeed * dtSeconds);
+		type.time += type.animSpeed * dtSeconds;
+	}
 }
 
 void Content::setTy1AnimClock(float timeSeconds, float yawRadians, float pitchRadians)

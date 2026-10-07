@@ -1,6 +1,7 @@
 #include "mesh.h"
 
 #include <cctype>
+#include <cmath>
 #include <limits>
 
 #include <glad/glad.h>
@@ -165,6 +166,20 @@ void Mesh::computeLocalAabb()
 	m_hasLocalAabb = true;
 }
 
+void Mesh::setWaterType(const std::string& typeName)
+{
+	m_waterType = toLowerAscii(typeName);
+}
+
+void Mesh::expandLocalAabb(float padY)
+{
+	if (!m_hasLocalAabb || padY == 0.0f)
+		return;
+	const float pad = std::fabs(padY);
+	m_localAabbMin.y -= pad;
+	m_localAabbMax.y += pad;
+}
+
 void Mesh::draw(Shader& shader) const
 {
 	draw(shader, glm::mat4(1.0f), MeshDrawStyle{});
@@ -199,7 +214,25 @@ void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 		}
 	}
 
-	shader.setUniform4f("tintColour", style.solid ? style.tint : glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+	glm::vec4 wave1a(0.0f);
+	glm::vec4 wave1b(0.0f);
+	glm::vec4 wave2a(0.0f);
+	glm::vec4 wave2b(0.0f);
+	glm::vec4 waveColour(1.0f);
+	int waterWave = 0;
+	if (!m_waterType.empty() && m_content
+		&& m_content->ty1WaterWaveFor(m_waterType, wave1a, wave1b, wave2a, wave2b, waveColour))
+	{
+		waterWave = 1;
+		shader.setUniform4f("waterWaveCoeffs1a", wave1a);
+		shader.setUniform4f("waterWaveCoeffs1b", wave1b);
+		shader.setUniform4f("waterWaveCoeffs2a", wave2a);
+		shader.setUniform4f("waterWaveCoeffs2b", wave2b);
+	}
+	shader.setUniform1i("waterWave", waterWave);
+
+	const glm::vec4 tint = style.solid ? style.tint : (waterWave != 0 ? waveColour : glm::vec4(1.0f));
+	shader.setUniform4f("tintColour", tint);
 	shader.setUniform2f("clipOffset", style.solid ? style.clipOffset : glm::vec2(0.0f));
 	shader.setUniform1i("solidColour", style.solid ? 1 : 0);
 	shader.setUniform1f("alphaRef", m_alphaRef);

@@ -177,7 +177,39 @@ Terrain segment UVs follow the same 4.12 rule as models. Terrain tiles go past 1
 
 ### Water
 
-Animated UVs and indirect water come from `global.mad` (scroll, ripple, and clamp). The water surface is the room mesh with that material state. A `WATERVOLUME` instance marks the gameplay volume and is drawn as a box when selected.
+Animated UVs and indirect water come from `global.mad` (scroll, ripple, and clamp). That ripple is the GameCube indirect texture. The PC port (and the Xbox original) also move the vertices. A `WATERVOLUME` instance marks the gameplay volume and is drawn as a box when selected.
+
+The drawn surface is `Room_<level>_water.wmh` in `Data_PC.rkv`. `.wml` is the same file with fewer vertices; the viewer uses `.wmh` and falls back to `.wml`. The coarse water parts in the room `.mdl` (A3 `003 000 004 ocean`, E2 `ocean`, A1 `A1_Water`) are hidden while the `.wmh` is loaded. They stay in the part list. Collision shells (`C_Water`, `invis_waterplane`) are not those parts, so critter floors are unchanged.
+
+`water_types.ini` is the parameter file. Each `[section]` starts as a copy of `[default]` (`TY.exe` `0x5becc0`). A chunk's type string is matched to a section, case-insensitive (`0x5bccd0`). E2's mesh is section `Z2_water` even though the room part is named `ocean`. Two waves, each with `waveNAnimSpeed`, `waveNDir` (x, z), `waveNHeight`, and `waveNFreq`. `envMapAnimSpeed` is stored doubled; a later `animSpeed` line replaces it (`0x5be880`, `0x5bea38`).
+
+A3 `[ocean]`, C3 `[c3_water]`, and D4 `[D4_Water]` set `wave1Height=-10` and `wave1Freq=0.0001`. That wavelength is about 63,000 units, so the whole surface rises and falls together by about ±10, once every 6.3 s (`animSpeed` 1). Wave 0 (`height` 2, `freq` 0.01, `animSpeed` 3) is the smaller ripple along X. Other levels use heights of ±1. A few types use 0 and stay flat.
+
+Phases are not in the ini. Wave 0 starts at 0 and wave 1 at 13.3. Each frame (`0x5bf100`, `dt` = 1/60) does `phase += animSpeed * dt`. The viewer uses real seconds, so the speed matches a 60 Hz clock, and **P** freezes it with the critters.
+
+The vertex formula is `water.shader` in `Override_PC.rkv`. Uniforms come from `0x5c0060`: `waterWaveCoeffs1a = (dirX, dirZ, freq, phase)` and `1b.x = -height`, and the same for wave 2. Height is added in world space:
+
+```
+dir = pos.x * dir0.x + pos.z * dir0.z
+pos.y += sin(dir * freq0 - phase0) * -height0
+pos.y += sin(dir * freq1 - phase1) * -height1
+```
+
+Wave 2 reuses wave 1's direction. That is what the PC shader does. The CPU height query at `0x5be5fc` uses wave 2's own direction; the viewer follows the shader.
+
+`.wmh` / `.wml` is one or more groups. A group is `uint32 chunkCount`, then that many chunks:
+
+```
+uint32 length; char material[length]; pad to 4
+uint32 length; char type[length];     pad to 4
+uint32 indexCount
+uint32 vertexCount
+float  surfaceY, minX, minY, minZ, maxX, maxY, maxZ
+vertexCount * 24 bytes: float3 position, float2 uv, uint8 rgba
+indexCount * uint32     triangle list
+```
+
+The next group follows immediately. The file ends with 4 unused bytes. Vertex alpha is the shore fade, so the mesh is drawn alpha-blended. C3's file has two chunks, `c3_minigame_water` and `c3_water`.
 
 ### Critters
 

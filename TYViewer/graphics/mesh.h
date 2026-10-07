@@ -87,6 +87,11 @@ public:
 	float getAlphaRef() const { return m_alphaRef; }
 	// TY1 materials look up their UV animation from this. Null stays untransformed.
 	void setContent(Content* content) { m_content = content; }
+	// water_types.ini section for this mesh. Empty meshes are not displaced.
+	void setWaterType(const std::string& typeName);
+	const std::string& getWaterType() const { return m_waterType; }
+	// Grow the cached bounds. Water verts move by the wave amplitude after the box is built.
+	void expandLocalAabb(float padY);
 	bool isTransparent() const { return m_blend != MeshBlend::Opaque; }
 	
 	// NOTE: UI/debug code expects `int`, but containers use `size_t`.
@@ -123,6 +128,7 @@ private:
 	// times per draw call (uv matrix, wrap, water), each re-lowercasing the name.
 	std::string m_materialNameLower;
 	std::string m_partName;
+	std::string m_waterType;
 	int m_subobjectGroup = -1;
 	bool m_hasLocalAabb = false;
 	glm::vec3 m_localAabbMin{ 0.0f, 0.0f, 0.0f };

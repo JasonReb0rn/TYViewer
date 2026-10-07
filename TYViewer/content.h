@@ -176,6 +176,42 @@ public:
 	Texture* ty1WaterRipple() const { return waterRipple; }
 	void updateTy1WaterRipple();
 
+	// One water_types.ini section. Every section starts as a copy of [default].
+	// Phases are not in the file: wave 0 starts at 0, wave 1 at 13.3.
+	struct Ty1WaterType
+	{
+		std::string name;
+		float wave0AnimSpeed = 2.0f;
+		float wave0DirX = 0.0f;
+		float wave0DirZ = 1.0f;
+		float wave0Height = 0.2f;
+		float wave0Freq = 0.013f;
+		float wave0Phase = 0.0f;
+		float wave1AnimSpeed = 3.0f;
+		float wave1DirX = 1.0f;
+		float wave1DirZ = 0.0f;
+		float wave1Height = 0.3f;
+		float wave1Freq = 0.02f;
+		float wave1Phase = 13.3f;
+		glm::vec4 color{ 1.0f, 1.0f, 1.0f, 1.0f };
+		float wobbleUVScale = 0.06f;
+		float noiseScale = 0.001f;
+		// envMapAnimSpeed is stored doubled. A later animSpeed line replaces it.
+		float animSpeed = 8.0f;
+		// Integrated animSpeed. The fragment wobble reads this; the vertex wave does not.
+		float time = 0.0f;
+	};
+	// Reads water_types.ini from the TY1 archive. Safe to call more than once.
+	void loadTy1WaterTypes();
+	// False for an unknown name, and for the [default] section itself.
+	bool ty1IsWaterTypeName(const std::string& name) const;
+	// PC uniform upload. Heights are negated. False when the type is unknown.
+	bool ty1WaterWaveFor(const std::string& typeName, glm::vec4& coeffs1a, glm::vec4& coeffs1b,
+		glm::vec4& coeffs2a, glm::vec4& coeffs2b, glm::vec4& colour) const;
+	// Real seconds, not the halved animation clock. No-op until the ini is loaded.
+	// Paused with the critters by the caller.
+	void updateTy1WaterWaves(float dtSeconds);
+
 private:
 	void createDefaultTexture();
 	void loadTy1Materials();
@@ -192,6 +228,8 @@ private:
 	std::unordered_map<std::string, Ty1MaterialDraw> ty1Materials;
 	bool ty1GrassTypesReady = false;
 	std::vector<Ty1GrassType> ty1GrassTypeList;
+	bool ty1WaterTypesReady = false;
+	std::unordered_map<std::string, Ty1WaterType> ty1WaterTypes;
 	float ty1AnimTimeSeconds = 0.0f;
 	float ty1AnimYawRadians = 0.0f;
 	float ty1AnimPitchRadians = 0.0f;

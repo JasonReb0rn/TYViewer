@@ -1,4 +1,5 @@
 #include "application.h"
+#include "loader/ty1_water_mesh.h"
 
 #include <algorithm>
 #include <chrono>
@@ -938,6 +939,36 @@ void Application::loadTy1Level(const std::string& levelName)
 	}
 	// Hidden guides emit too, so this runs before collision meshes are disabled.
 	grassCards.build(models, content);
+
+	// PC water is the tessellated Room_<id>_water.wmh, not the coarse room part.
+	// Hide room parts whose name (or its last word) is a water_types.ini section.
+	content.loadTy1WaterTypes();
+	if (Model* water = loadTy1WaterModel(content, roomFile))
+	{
+		int hidden = 0;
+		for (Model* model : models)
+		{
+			if (model == nullptr)
+				continue;
+			for (Mesh* mesh : model->getMeshes())
+			{
+				if (mesh == nullptr)
+					continue;
+				const std::string part = lowerCopy(mesh->getPartName());
+				std::string token = part;
+				const size_t space = part.find_last_of(" \t");
+				if (space != std::string::npos)
+					token = part.substr(space + 1);
+				if (content.ty1IsWaterTypeName(part) || content.ty1IsWaterTypeName(token))
+				{
+					mesh->setEnabled(false);
+					hidden++;
+				}
+			}
+		}
+		models.push_back(water);
+		Debug::log("TY1 water replaced " + std::to_string(hidden) + " room parts");
+	}
 
 	std::string globalModelText;
 	std::vector<char> globalModel;
@@ -1887,6 +1918,9 @@ void Application::update(float dt)
 		glm::radians(camera.getRotation().x),
 		glm::radians(camera.getRotation().y));
 	content.updateTy1WaterRipple();
+	// Wave phase is radians per real second. P freezes it with the critters.
+	if (!critters.paused())
+		content.updateTy1WaterWaves(dt);
 	const auto simStart = std::chrono::high_resolution_clock::now();
 	RenderStats::simTicks = critters.update(dt);
 	RenderStats::lastSimMs = std::chrono::duration<float, std::milli>(
