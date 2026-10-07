@@ -189,6 +189,12 @@ namespace
 			{ "FRILLLIZARD", "Act_07_Frill" },
 			{ "SWIMMINGCROC", "Act_02_croc" },
 			{ "MUDCRAB", "act_03_muddie" },
+			// Act_04_SoldierCrab shares the suffix, so the unique-name fallback gives up.
+			// The critter script names Act_45.
+			{ "SOLDIERCRAB", "Act_45_SoldierCrab" },
+			// MorayEel::Init loads Prop_0259_EelHole (the eel and the hole).
+			// Act_74_Moray is the same rig at several times the size.
+			{ "MORAYEEL", "Prop_0259_EelHole" },
 			{ "RHINORUNNER", "Act_36_Rhino" },
 			{ "RHINORUNNERGROUND", "Act_36_Rhino" },
 			{ "TELEPORTER", "Prop_0365_WarpMushroom" },
