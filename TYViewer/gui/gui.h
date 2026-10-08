@@ -127,7 +127,7 @@ public:
 	// panels (draws counts level geometry too, not just placed objects).
 	void setRenderStats(int drawCalls, int instancedBatches, int instancesVisited, int instancesCulled,
 		int partsVisited, int partsCulled, long long trianglesDrawn, float sceneMs,
-		int simTicks, float simMs);
+		int simTicks, float simMs, int reflectionPlanes, int reflectionDrawCalls, float reflectionMs);
 	
 	// Input handling
 	void onMouseButton(int button, int action, float x, float y);
@@ -163,7 +163,7 @@ private:
 	// Height of the bottom scene stats bar (Gui::renderSceneStatsBar), always drawn
 	// once a level has rendered a frame. Layouts in the OBJECTS column reserve this
 	// much space (plus a gap) above it so the INFO panel never sits behind it.
-	static constexpr float kSceneStatsBarHeight = 24.0f;
+	static constexpr float kSceneStatsBarHeight = 28.0f;
 
 	// ---------------------------------------------------------------------
 	// TY2 "material" name parsing (rudimentary suffix identification)
@@ -331,6 +331,9 @@ private:
 	float statSceneMs = 0.0f;
 	int statSimTicks = 0;
 	float statSimMs = 0.0f;
+	int statReflectionPlanes = 0;
+	int statReflectionDrawCalls = 0;
+	float statReflectionMs = 0.0f;
 	void renderSceneStatsBar();
 	
 	bool dropdownOpen;

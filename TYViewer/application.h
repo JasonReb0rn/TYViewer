@@ -17,6 +17,7 @@
 #include "graphics/shader.h"
 
 #include "graphics/grass_cards.h"
+#include "graphics/water_reflection.h"
 #include "graphics/mesh.h"
 #include "graphics/texture.h"
 #include "graphics/text.h"
@@ -71,6 +72,9 @@ private:
 	bool drawBones = true;
 	bool drawVertexIds = false;
 	bool drawGrass = true;
+	// Planar water reflections. R toggles this, matching ReflectionDetail = off.
+	bool waterReflections = true;
+	WaterReflection waterReflection;
 
 	bool wireframe = false;
 	bool viewingLevel = false;

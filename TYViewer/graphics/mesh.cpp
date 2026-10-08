@@ -12,6 +12,7 @@
 
 #include "content.h"
 #include "render_stats.h"
+#include "water_reflection.h"
 
 namespace
 {
@@ -171,6 +172,12 @@ void Mesh::setWaterType(const std::string& typeName)
 	m_waterType = toLowerAscii(typeName);
 }
 
+void Mesh::setWaterSurfaceY(float y)
+{
+	m_waterSurfaceY = y;
+	m_hasWaterSurface = true;
+}
+
 void Mesh::expandLocalAabb(float padY)
 {
 	if (!m_hasLocalAabb || padY == 0.0f)
@@ -214,23 +221,43 @@ void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 		}
 	}
 
-	glm::vec4 wave1a(0.0f);
-	glm::vec4 wave1b(0.0f);
-	glm::vec4 wave2a(0.0f);
-	glm::vec4 wave2b(0.0f);
-	glm::vec4 waveColour(1.0f);
+	const Content::Ty1WaterType* waterType = nullptr;
+	if (!m_waterType.empty() && m_content)
+		waterType = m_content->ty1WaterTypeFor(m_waterType);
+
+	// Coefficient vectors are only read while pcWater is set. Non-water draws just
+	// clear the flags, and the draw after a water surface clears them too so the
+	// displacement does not leak onto the next mesh.
+	static bool previousDrawWasWater = false;
+	const bool waterSurface = isWaterSurface() && waterType != nullptr;
 	int waterWave = 0;
-	if (!m_waterType.empty() && m_content
-		&& m_content->ty1WaterWaveFor(m_waterType, wave1a, wave1b, wave2a, wave2b, waveColour))
+	int pcWater = 0;
+	if (waterSurface)
 	{
 		waterWave = 1;
-		shader.setUniform4f("waterWaveCoeffs1a", wave1a);
-		shader.setUniform4f("waterWaveCoeffs1b", wave1b);
-		shader.setUniform4f("waterWaveCoeffs2a", wave2a);
-		shader.setUniform4f("waterWaveCoeffs2b", wave2b);
+		pcWater = 1;
+		// 0x5c0060. 1a is dir x, dir z, frequency, phase. 1b.x is the negated height.
+		shader.setUniform4f("waterWaveCoeffs1a", glm::vec4(waterType->wave0DirX, waterType->wave0DirZ, waterType->wave0Freq, waterType->wave0Phase));
+		shader.setUniform4f("waterWaveCoeffs1b", glm::vec4(-waterType->wave0Height, 0.0f, 0.0f, 0.0f));
+		shader.setUniform4f("waterWaveCoeffs2a", glm::vec4(waterType->wave1DirX, waterType->wave1DirZ, waterType->wave1Freq, waterType->wave1Phase));
+		shader.setUniform4f("waterWaveCoeffs2b", glm::vec4(-waterType->wave1Height, 0.0f, 0.0f, 0.0f));
+		shader.setUniform4f("waterWobbleCoeffs1", glm::vec4(waterType->distanceScale, 0.0f, 0.0f, waterType->time));
+		shader.setUniform4f("waterWobbleCoeffs2", glm::vec4(waterType->wobbleUVScale, waterType->wobbleUVScale, waterType->noiseScale, waterType->reflectWobble));
+		const float invSize = 1.0f / static_cast<float>(WaterReflection::kSize);
+		shader.setUniform4f("waterReflectCoeff", glm::vec4(invSize, invSize, waterType->reflectMix, waterType->reflectAdd));
 	}
-	shader.setUniform1i("waterWave", waterWave);
+	if (waterSurface || previousDrawWasWater)
+	{
+		shader.setUniform1i("waterWave", waterWave);
+		shader.setUniform1i("pcWater", pcWater);
+	}
+	else
+	{
+		shader.setUniform1i("waterWave", 0);
+		shader.setUniform1i("pcWater", 0);
+	}
 
+	const glm::vec4 waveColour = waterType != nullptr ? waterType->color : glm::vec4(1.0f);
 	const glm::vec4 tint = style.solid ? style.tint : (waterWave != 0 ? waveColour : glm::vec4(1.0f));
 	shader.setUniform4f("tintColour", tint);
 	shader.setUniform2f("clipOffset", style.solid ? style.clipOffset : glm::vec2(0.0f));
@@ -260,7 +287,8 @@ void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 
 	glm::vec4 waterScale(0.0f);
 	int water = 0;
-	if (m_content && m_content->ty1IndirectWaterFor(materialDraw, waterScale))
+	// A .wml/.wmh chunk uses the PC noise wobble instead of the GameCube ripple.
+	if (pcWater == 0 && m_content && m_content->ty1IndirectWaterFor(materialDraw, waterScale))
 	{
 		Texture* ripple = m_content->ty1WaterRipple();
 		if (ripple != nullptr)
@@ -272,6 +300,32 @@ void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 		}
 	}
 	shader.setUniform1i("water", water);
+
+	int reflectEnabled = 0;
+	if (waterSurface && m_hasWaterSurface && m_content != nullptr)
+	{
+		Texture* noise = m_content->ty1WaterNoise();
+		if (noise != nullptr)
+		{
+			noise->bind(2);
+			shader.setUniform1i("noiseTexture", 2);
+		}
+		const int plane = m_content->ty1ReflectionPlaneFor(m_waterSurfaceY);
+		const unsigned reflectTex = m_content->ty1ReflectionTexture(plane);
+		if (plane >= 0 && reflectTex != 0)
+		{
+			reflectEnabled = 1;
+			glActiveTexture(GL_TEXTURE3);
+			glBindTexture(GL_TEXTURE_2D, reflectTex);
+			shader.setUniform1i("reflectTexture", 3);
+		}
+	}
+	if (waterSurface || previousDrawWasWater)
+		shader.setUniform1i("reflectEnabled", reflectEnabled);
+	else
+		shader.setUniform1i("reflectEnabled", 0);
+	previousDrawWasWater = waterSurface;
+	glActiveTexture(GL_TEXTURE0);
 }
 
 void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& style) const
@@ -331,18 +385,25 @@ void Mesh::drawInstanced(Shader& shader, const std::vector<glm::mat4>& worlds, c
 	shader.setUniform1i("useInstancing", 1);
 
 	// The mesh-local transform is identity for every TY1 part today (nothing calls
-	// Transformable::setPosition/setRotation/setScale on a Mesh), but fold it in so a
-	// future per-part offset keeps working without touching call sites.
+	// Transformable::setPosition/setRotation/setScale on a Mesh), so the instance
+	// matrices upload as-is. A future per-part offset still folds in through the
+	// scratch vector, which stays allocated across draws.
 	const glm::mat4 local = getMatrix();
-	std::vector<glm::mat4> combined(worlds.size());
-	for (size_t i = 0; i < worlds.size(); i++)
-		combined[i] = worlds[i] * local;
+	static std::vector<glm::mat4> combined;
+	const glm::mat4* upload = worlds.data();
+	if (local != glm::mat4(1.0f))
+	{
+		combined.resize(worlds.size());
+		for (size_t i = 0; i < worlds.size(); i++)
+			combined[i] = worlds[i] * local;
+		upload = combined.data();
+	}
 
 	glBindBuffer(GL_ARRAY_BUFFER, sharedInstanceBuffer());
-	glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(combined.size() * sizeof(glm::mat4)), combined.data(), GL_DYNAMIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(worlds.size() * sizeof(glm::mat4)), upload, GL_DYNAMIC_DRAW);
 
 	glBindVertexArray(vao);
-	glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(m_indices.size()), GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(combined.size()));
+	glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(m_indices.size()), GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(worlds.size()));
 
 	// Other draw paths (room meshes, debug/text draws reusing this shader program)
 	// never touch useInstancing. Leaving it at 1 would make their next modelMatrix

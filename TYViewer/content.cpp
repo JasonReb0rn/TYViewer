@@ -28,6 +28,9 @@ bool Content::loadRKV(const std::string& path, int archiveIndex)
 		ty1GrassTypeList.clear();
 		ty1WaterTypesReady = false;
 		ty1WaterTypes.clear();
+		waterNoise = nullptr;
+		ty1ReflectionPlaneCount = 0;
+		ty1WaterClipOn = false;
 	}
 	return archives[archiveIndex]->load(path);
 }
@@ -744,6 +747,12 @@ namespace
 		type.wobbleUVScale = bitsToFloat(0x3d75c28fu);
 		type.noiseScale = bitsToFloat(0x3a83126fu);
 		type.animSpeed = 8.0f;
+		// 0x5bee7f. distanceScale at +0xa8.
+		type.distanceScale = bitsToFloat(0x453b8000u);
+		// 0x5bee4d. reflectAdd at +0xac, reflectMix at +0xb0, reflectWobble at +0xb4.
+		type.reflectAdd = bitsToFloat(0x3e4ccccdu);
+		type.reflectMix = bitsToFloat(0x3e4ccccdu);
+		type.reflectWobble = bitsToFloat(0x3d4ccccdu);
 		return type;
 	}
 
@@ -825,6 +834,14 @@ namespace
 			type.wobbleUVScale = values[0];
 		else if (key == "noisescale" && !values.empty())
 			type.noiseScale = values[0];
+		else if (key == "distancescale" && !values.empty())
+			type.distanceScale = values[0];
+		else if (key == "reflectmix" && !values.empty())
+			type.reflectMix = values[0];
+		else if (key == "reflectadd" && !values.empty())
+			type.reflectAdd = values[0];
+		else if (key == "reflectwobble" && !values.empty())
+			type.reflectWobble = values[0];
 		else if (key == "envmapanimspeed" && !values.empty())
 			type.animSpeed = values[0] * 2.0f;
 		else if (key == "animspeed" && !values.empty())
@@ -849,6 +866,9 @@ void Content::loadTy1WaterTypes()
 	ty1WaterTypesReady = true;
 
 	std::vector<char> data;
+	if (waterNoise == nullptr)
+		waterNoise = load<Texture>("noise.dds");
+
 	if (!archives[0]->getFileData("water_types.ini", data) || data.empty())
 	{
 		Debug::log("water_types.ini missing");
@@ -944,21 +964,46 @@ bool Content::ty1IsWaterTypeName(const std::string& name) const
 	return ty1WaterTypes.find(key) != ty1WaterTypes.end();
 }
 
-bool Content::ty1WaterWaveFor(const std::string& typeName, glm::vec4& coeffs1a, glm::vec4& coeffs1b,
-	glm::vec4& coeffs2a, glm::vec4& coeffs2b, glm::vec4& colour) const
+const Content::Ty1WaterType* Content::ty1WaterTypeFor(const std::string& typeName) const
 {
 	const auto it = ty1WaterTypes.find(lowerCopy(typeName));
 	if (it == ty1WaterTypes.end())
-		return false;
+		return nullptr;
+	return &it->second;
+}
 
-	const Ty1WaterType& type = it->second;
-	// 0x5c0060. 1a is dir x, dir z, frequency, phase. 1b.x is the negated height.
-	coeffs1a = glm::vec4(type.wave0DirX, type.wave0DirZ, type.wave0Freq, type.wave0Phase);
-	coeffs1b = glm::vec4(-type.wave0Height, 0.0f, 0.0f, 0.0f);
-	coeffs2a = glm::vec4(type.wave1DirX, type.wave1DirZ, type.wave1Freq, type.wave1Phase);
-	coeffs2b = glm::vec4(-type.wave1Height, 0.0f, 0.0f, 0.0f);
-	colour = type.color;
-	return true;
+void Content::setTy1ReflectionPlanes(const Ty1ReflectionPlane* planes, int count)
+{
+	if (count < 0)
+		count = 0;
+	if (count > 2)
+		count = 2;
+	ty1ReflectionPlaneCount = count;
+	for (int i = 0; i < count; i++)
+		ty1ReflectionPlanes[i] = planes[i];
+}
+
+int Content::ty1ReflectionPlaneFor(float surfaceY) const
+{
+	for (int i = 0; i < ty1ReflectionPlaneCount; i++)
+	{
+		if (std::fabs(ty1ReflectionPlanes[i].height - surfaceY) < 0.05f)
+			return i;
+	}
+	return -1;
+}
+
+unsigned Content::ty1ReflectionTexture(int index) const
+{
+	if (index < 0 || index >= ty1ReflectionPlaneCount)
+		return 0;
+	return ty1ReflectionPlanes[index].texture;
+}
+
+void Content::setTy1WaterClip(bool enabled, float planeY)
+{
+	ty1WaterClipOn = enabled;
+	ty1WaterClipPlaneY = planeY;
 }
 
 void Content::updateTy1WaterWaves(float dtSeconds)

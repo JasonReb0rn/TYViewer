@@ -196,6 +196,13 @@ public:
 		glm::vec4 color{ 1.0f, 1.0f, 1.0f, 1.0f };
 		float wobbleUVScale = 0.06f;
 		float noiseScale = 0.001f;
+		// waterWobbleCoeffs1.x. Stub is 3000.
+		float distanceScale = 3000.0f;
+		// water.shader REFL path. waterReflectCoeff.z / .w. Stub defaults are 0.2.
+		float reflectMix = 0.2f;
+		float reflectAdd = 0.2f;
+		// waterWobbleCoeffs2.w. Stub is 0.05. The ini key reflectScale is not read.
+		float reflectWobble = 0.05f;
 		// envMapAnimSpeed is stored doubled. A later animSpeed line replaces it.
 		float animSpeed = 8.0f;
 		// Integrated animSpeed. The fragment wobble reads this; the vertex wave does not.
@@ -205,9 +212,24 @@ public:
 	void loadTy1WaterTypes();
 	// False for an unknown name, and for the [default] section itself.
 	bool ty1IsWaterTypeName(const std::string& name) const;
-	// PC uniform upload. Heights are negated. False when the type is unknown.
-	bool ty1WaterWaveFor(const std::string& typeName, glm::vec4& coeffs1a, glm::vec4& coeffs1b,
-		glm::vec4& coeffs2a, glm::vec4& coeffs2b, glm::vec4& colour) const;
+	// Null when the type is unknown. Valid until the next archive load.
+	const Ty1WaterType* ty1WaterTypeFor(const std::string& typeName) const;
+	// noise.dds. Null when the archive has no such file.
+	Texture* ty1WaterNoise() const { return waterNoise; }
+	// Planes filled by the reflection pass. A water chunk samples the one whose height matches.
+	struct Ty1ReflectionPlane
+	{
+		float height = 0.0f;
+		unsigned texture = 0;
+	};
+	void setTy1ReflectionPlanes(const Ty1ReflectionPlane* planes, int count);
+	// -1 when this surface has no reflection this frame.
+	int ty1ReflectionPlaneFor(float surfaceY) const;
+	unsigned ty1ReflectionTexture(int index) const;
+	// Clip for the reflection pass. Meshes read it every draw so it cannot leak.
+	void setTy1WaterClip(bool enabled, float planeY);
+	bool ty1WaterClipEnabled() const { return ty1WaterClipOn; }
+	float ty1WaterClipY() const { return ty1WaterClipPlaneY; }
 	// Real seconds, not the halved animation clock. No-op until the ini is loaded.
 	// Paused with the critters by the caller.
 	void updateTy1WaterWaves(float dtSeconds);
@@ -235,6 +257,11 @@ private:
 	float ty1AnimPitchRadians = 0.0f;
 
 	Texture* waterRipple = nullptr;
+	Texture* waterNoise = nullptr;
+	Ty1ReflectionPlane ty1ReflectionPlanes[2] = {};
+	int ty1ReflectionPlaneCount = 0;
+	bool ty1WaterClipOn = false;
+	float ty1WaterClipPlaneY = 0.0f;
 	bool waterPhasesReady = false;
 	// Fixed phase of each ripple texel, from the game's RandomFR hash. Angle is added at upload.
 	float waterPhaseA[256] = {};

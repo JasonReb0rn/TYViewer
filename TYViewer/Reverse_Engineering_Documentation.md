@@ -179,7 +179,7 @@ Terrain segment UVs follow the same 4.12 rule as models. Terrain tiles go past 1
 
 Animated UVs and indirect water come from `global.mad` (scroll, ripple, and clamp). That ripple is the GameCube indirect texture. The PC port (and the Xbox original) also move the vertices. A `WATERVOLUME` instance marks the gameplay volume and is drawn as a box when selected.
 
-The drawn surface is `Room_<level>_water.wmh` in `Data_PC.rkv`. `.wml` is the same file with fewer vertices; the viewer uses `.wmh` and falls back to `.wml`. The coarse water parts in the room `.mdl` (A3 `003 000 004 ocean`, E2 `ocean`, A1 `A1_Water`) are hidden while the `.wmh` is loaded. They stay in the part list. Collision shells (`C_Water`, `invis_waterplane`) are not those parts, so critter floors are unchanged.
+The drawn surface is `Room_<level>_water.wml` in `Data_PC.rkv`. The PC loader strips `.qsm` and opens `%s.wml` (`0x5bd8d1`), then uploads the vertices as they are (`0x5bcd30`, `0x5bffc0`). `.wmh` is the same mesh with about four times the vertices; the viewer uses it only when the `.wml` is missing. The coarse water parts in the room `.mdl` (A3 `003 000 004 ocean`, E2 `ocean`, A1 `A1_Water`) are hidden while the water file is loaded. They stay in the part list. Collision shells (`C_Water`, `invis_waterplane`) are not those parts, so critter floors are unchanged.
 
 `water_types.ini` is the parameter file. Each `[section]` starts as a copy of `[default]` (`TY.exe` `0x5becc0`). A chunk's type string is matched to a section, case-insensitive (`0x5bccd0`). E2's mesh is section `Z2_water` even though the room part is named `ocean`. Two waves, each with `waveNAnimSpeed`, `waveNDir` (x, z), `waveNHeight`, and `waveNFreq`. `envMapAnimSpeed` is stored doubled; a later `animSpeed` line replaces it (`0x5be880`, `0x5bea38`).
 
@@ -209,7 +209,23 @@ vertexCount * 24 bytes: float3 position, float2 uv, uint8 rgba
 indexCount * uint32     triangle list
 ```
 
-The next group follows immediately. The file ends with 4 unused bytes. Vertex alpha is the shore fade, so the mesh is drawn alpha-blended. C3's file has two chunks, `c3_minigame_water` and `c3_water`.
+The next group follows immediately. The file ends with 4 unused bytes. C3's file has two chunks, `c3_minigame_water` and `c3_water`. The mesh is drawn alpha-blended.
+
+Vertex colour is bound as normalized RGBA8 (`0x5c03ef`). On A3 the ocean RGB is 255. Alpha sits at 199 (0.78) on open water, then falls to 0 in a jagged sawtooth along the outer edge and some shores. `a3_ocean_envmap.dds` is opaque, so that sawtooth is in the mesh. The `.wml` has the same alpha. The game does not smooth it. The reflection colour is what hides it.
+
+`ReflectionDetail` defaults to `mid` (`0x5c0470`); only `off` skips reflections. `high` (this machine's `settings.ini`) is 2 planes at 1024. Each frame (`0x4767d0`) the nearest visible chunks get a plane. There is no view-angle test. The pass clears that plane's target to transparent black, draws the skybox, restores the camera, and draws the level (`0x478ba0`). While it runs, materials go through `waterReflect.shader`, which discards `worldPos.y < planeHeight`. The viewer mirrors Y in the view-projection (`translate(h) * scale(1,-1,1) * translate(-h)`), clips with `gl_ClipDistance` on the undisplaced world Y, and draws room meshes (the skybox is one of them), props, and critters. Water chunks and grass are not in that pass. **R** toggles it.
+
+The water draw (`0x5c0060`) enables `REFL` only when the chunk's `surfaceY` equals its plane. The fragment is `water.shader`. `noise.dds` is `noiseTexture` (`0x5a0392`). Two samples, `mod((xz + (5.3, 3.7) * time) * noiseScale)` and `mod((zx + (-9.4, -4.2) * time) * noiseScale)`, combine as `n1 + n2 - 1`. That wobbles the diffuse UV (V negated, because the mesh V is flipped) and the reflection's screen UV. Then:
+
+```
+reflect.w = 1.0;
+diffuseColour = mix(diffuseColour, reflect, reflectMix);
+diffuseColour.xyz += reflect.xyz * reflectAdd;
+```
+
+`waterWobbleCoeffs1 = (distanceScale +0xa8, 0, 0, time +0xd4)`. `waterWobbleCoeffs2 = (wobbleUVScale +0xa0, wobbleUVScale, noiseScale +0xa4, reflectWobble +0xb4)`. `waterReflectCoeff = (1/width, 1/height, reflectMix * s, reflectAdd * s)`. The crossfade `s` is 1 once a plane is steady, which is the value used here. Stub defaults (`0x5bee4d`, `0x5bee61`, `0x5bee7f`): `distanceScale` 3000, `reflectMix` 0.2, `reflectAdd` 0.2, `reflectWobble` 0.05. `[ocean]` sets `reflectMix=0.5` and `reflectAdd=0.1`. Its `reflectScale=0.35` matches no key (`0x62106c` is `reflectWobble`), so it stays 0.05. With `REFL` on, A3's alpha is `0.5 + 0.5 * vertexAlpha` (0.5 at the sawtooth, 0.89 on open water) and half the colour is the reflection. Looking across the surface shows the mirrored level. Looking down shows the same mix, so the bottom still reads through the other half.
+
+`A3_Ocean_EnvMap`'s `indirectWater` line (`0x59f533`) sets material type 8 and flag 0x80 and ignores the numbers after it. Blend stays at the default 1 (`0x676054`): `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`, with the depth write left on. `waterFadeSphere` is uploaded from `0x5bf040`, not from the water draw loop, so it is not this edge. Room-part water that is not a `.wml` keeps the GameCube ripple.
 
 ### Critters
 

@@ -19,8 +19,12 @@ struct RenderStats
 	// Enabled level parts skipped by the frustum test (off-screen). Disabled parts
 	// (hidden collision, user toggles) are not counted either way.
 	static int partsCulled;
-	// Wall time for the scene draw section (room meshes + prop batches), in milliseconds.
+	// Wall time for the scene draw section (reflections + room meshes + prop batches), in milliseconds.
 	static float lastSceneMs;
+	// The reflection passes inside that section. Draws are not included in drawCalls.
+	static float lastReflectionMs;
+	static int reflectionDrawCalls;
+	static int reflectionPlanes;
 	// CritterSystem::update, which runs before the scene timer. 0 or 1 tick per frame.
 	static float lastSimMs;
 	static int simTicks;

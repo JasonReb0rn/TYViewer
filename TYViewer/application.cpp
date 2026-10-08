@@ -2001,6 +2001,14 @@ void Application::update(float dt)
 		drawGrass = !drawGrass;
 	}
 
+	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_R))
+	{
+		waterReflections = !waterReflections;
+		if (gui)
+			gui->showNotification(waterReflections ? "Water reflections on" : "Water reflections off",
+				Gui::NotificationKind::Info, 2.0f);
+	}
+
 	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_P) && !critters.empty())
 	{
 		critters.setPaused(!critters.paused());
@@ -2188,26 +2196,62 @@ void Application::render(Shader& shader)
 	RenderStats::beginFrame();
 	const auto sceneStart = std::chrono::high_resolution_clock::now();
 
-	// One matrix and one frustum test per instance per frame, shared by every mesh
-	// part that instance places (a multi-part prop used to pay for this twice, once
-	// per blend pass, and once more per part within each pass).
-	const FrustumPlanes frustum = extractFrustumPlanes(vpmatrix);
+	// Matrices do not depend on the reflection mirror (that lives in the VP), so they
+	// are built once. Each pass only retests the frustum. A reflection pass also
+	// drops instances that sit fully under the plane or cover only a sliver of the
+	// view; the noise wobble and the half mix hide them.
+	// A box whose top sits at least this far under the plane is fully clipped.
+	// The margin is subtracted, so a sheet lying on the water stays in the reflection.
+	constexpr float kReflectPlaneEpsilon = 0.001f;
+	constexpr float kReflectMinAngularSize = 0.01f;
+	const glm::vec3 eye = camera.getPosition();
+	const glm::vec3 propCamera(eye.x, eye.y, -eye.z);
+	bool inReflection = false;
+	float reflectionPlaneY = 0.0f;
+	FrustumPlanes frustum = extractFrustumPlanes(vpmatrix);
+	const FrustumPlanes mainFrustum = frustum;
 	std::vector<bool> instanceDrawable(levelObjects.size(), false);
 	std::vector<glm::mat4> instanceWorld(levelObjects.size());
+	std::vector<char> instanceShown(levelObjects.size(), 0);
 	for (size_t index = 0; index < levelObjects.size(); index++)
 	{
-		const Ty1Instance& instance = levelObjects[index];
-		if (!levelInstanceShown(instance))
+		if (!levelInstanceShown(levelObjects[index]))
 			continue;
-		if (instance.hasAabb && !aabbInFrustum(frustum, instance.worldAabbMin, instance.worldAabbMax))
-		{
-			RenderStats::instancesCulled++;
-			continue;
-		}
-		instanceWorld[index] = ty1InstanceMatrix(instance, &cameraView);
-		instanceDrawable[index] = true;
-		RenderStats::instancesVisited++;
+		instanceShown[index] = 1;
+		instanceWorld[index] = ty1InstanceMatrix(levelObjects[index], &cameraView);
 	}
+	bool skipWaterSurfaces = false;
+	auto refreshInstanceVisibility = [&](const FrustumPlanes& planes, bool countStats)
+	{
+		frustum = planes;
+		for (size_t index = 0; index < levelObjects.size(); index++)
+		{
+			instanceDrawable[index] = false;
+			if (!instanceShown[index])
+				continue;
+			const Ty1Instance& instance = levelObjects[index];
+			if (inReflection && instance.hasAabb)
+			{
+				if (instance.worldAabbMax.y <= reflectionPlaneY - kReflectPlaneEpsilon)
+					continue;
+				const glm::vec3 halfExtent = 0.5f * (instance.worldAabbMax - instance.worldAabbMin);
+				const float radius = glm::length(halfExtent);
+				const glm::vec3 center = instance.worldAabbMin + halfExtent;
+				const float distance = glm::length(center - propCamera);
+				if (distance > 1.0e-3f && radius / distance < kReflectMinAngularSize)
+					continue;
+			}
+			if (instance.hasAabb && !aabbInFrustum(planes, instance.worldAabbMin, instance.worldAabbMax))
+			{
+				if (countStats)
+					RenderStats::instancesCulled++;
+				continue;
+			}
+			instanceDrawable[index] = true;
+			if (countStats)
+				RenderStats::instancesVisited++;
+		}
+	};
 
 	// Every instance sharing a mesh part draws in one glDrawElementsInstanced call
 	// instead of one glDrawElements call each. `transparentPass` matches the mesh's
@@ -2243,6 +2287,10 @@ void Application::render(Shader& shader)
 		{
 			if (model == nullptr)
 				continue;
+			// Fully under the plane. The clip would discard it, so skip the draws.
+			if (inReflection && model->hasLocalAabb()
+				&& model->getLocalAabbMax().y <= reflectionPlaneY - kReflectPlaneEpsilon)
+				continue;
 			if (model->hasLocalAabb() && !aabbInFrustum(frustum, model->getLocalAabbMin(), model->getLocalAabbMax()))
 			{
 				for (const Mesh* mesh : model->getMeshes())
@@ -2256,6 +2304,11 @@ void Application::render(Shader& shader)
 			for (Mesh* mesh : model->getMeshes())
 			{
 				if (mesh == nullptr || !mesh->isEnabled() || mesh->isTransparent() != transparentPass)
+					continue;
+				if (skipWaterSurfaces && mesh->isWaterSurface())
+					continue;
+				if (inReflection && mesh->hasLocalAabb()
+					&& mesh->getLocalAabbMax().y <= reflectionPlaneY - kReflectPlaneEpsilon)
 					continue;
 				if (mesh->hasLocalAabb() && !aabbInFrustum(frustum, mesh->getLocalAabbMin(), mesh->getLocalAabbMax()))
 				{
@@ -2315,6 +2368,125 @@ void Application::render(Shader& shader)
 				entry.first->drawInstanced(shader, entry.second);
 		}
 	};
+
+	// Up to two reflection planes, nearest visible water chunk first. The mirror is
+	// in the VP, so mesh positions stay in prop space. Clip drops whatever is below
+	// the plane. Water itself is not drawn into its own reflection.
+	Content::Ty1ReflectionPlane reflectionPlanes[WaterReflection::kMaxPlanes] = {};
+	int reflectionPlaneCount = 0;
+	if (waterReflections)
+	{
+		const auto reflectionStart = std::chrono::high_resolution_clock::now();
+		struct PlanePick
+		{
+			float height;
+			float distance;
+		};
+		std::vector<PlanePick> picks;
+		// cameraView stores the eye with world Z negated. propCamera is that eye in prop space.
+		for (Model* model : models)
+		{
+			if (model == nullptr)
+				continue;
+			for (Mesh* mesh : model->getMeshes())
+			{
+				if (mesh == nullptr || !mesh->isEnabled() || !mesh->isWaterSurface()
+					|| !mesh->hasWaterSurface() || !mesh->hasLocalAabb())
+					continue;
+				if (!aabbInFrustum(mainFrustum, mesh->getLocalAabbMin(), mesh->getLocalAabbMax()))
+					continue;
+				const glm::vec3 closest = glm::clamp(propCamera, mesh->getLocalAabbMin(), mesh->getLocalAabbMax());
+				const float distance = glm::length(closest - propCamera);
+				const float height = mesh->getWaterSurfaceY();
+				bool merged = false;
+				for (PlanePick& pick : picks)
+				{
+					if (std::fabs(pick.height - height) < 0.05f)
+					{
+						if (distance < pick.distance)
+							pick.distance = distance;
+						merged = true;
+						break;
+					}
+				}
+				if (!merged)
+					picks.push_back(PlanePick{ height, distance });
+			}
+		}
+		std::sort(picks.begin(), picks.end(), [](const PlanePick& a, const PlanePick& b)
+		{
+			return a.distance < b.distance;
+		});
+		if (picks.size() > static_cast<size_t>(WaterReflection::kMaxPlanes))
+			picks.resize(WaterReflection::kMaxPlanes);
+
+		const int savedDrawCalls = RenderStats::drawCalls;
+		const int savedBatches = RenderStats::instancedBatches;
+		const long long savedTriangles = RenderStats::trianglesDrawn;
+		const int savedVisited = RenderStats::instancesVisited;
+		const int savedCulled = RenderStats::instancesCulled;
+		const int savedParts = RenderStats::partsVisited;
+		const int savedPartsCulled = RenderStats::partsCulled;
+
+		inReflection = true;
+		for (size_t planeIndex = 0; planeIndex < picks.size(); planeIndex++)
+		{
+			if (!waterReflection.begin(static_cast<int>(planeIndex)))
+				break;
+			const float height = picks[planeIndex].height;
+			reflectionPlaneY = height;
+			const glm::mat4 mirror =
+				glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, height, 0.0f)) *
+				glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f)) *
+				glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -height, 0.0f));
+			const glm::mat4 mirroredVp = vpmatrix * mirror;
+			shader.setUniformMat4("VPMatrix", mirroredVp);
+			shader.setUniform1i("clipEnabled", 1);
+			shader.setUniform1f("clipPlaneY", height);
+			content.setTy1WaterClip(true, height);
+			glEnable(GL_CLIP_DISTANCE0);
+			refreshInstanceVisibility(extractFrustumPlanes(mirroredVp), false);
+			skipWaterSurfaces = true;
+			drawRoomMeshes(false);
+			drawPropBatches(false);
+			drawRoomMeshes(true);
+			drawPropBatches(true);
+			skipWaterSurfaces = false;
+			glDisable(GL_CLIP_DISTANCE0);
+			waterReflection.end();
+			reflectionPlanes[reflectionPlaneCount].height = height;
+			reflectionPlanes[reflectionPlaneCount].texture = waterReflection.colorTexture(static_cast<int>(planeIndex));
+			reflectionPlaneCount++;
+		}
+		inReflection = false;
+
+		RenderStats::reflectionDrawCalls = RenderStats::drawCalls - savedDrawCalls;
+		RenderStats::reflectionPlanes = reflectionPlaneCount;
+		RenderStats::lastReflectionMs = std::chrono::duration<float, std::milli>(
+			std::chrono::high_resolution_clock::now() - reflectionStart).count();
+
+		RenderStats::drawCalls = savedDrawCalls;
+		RenderStats::instancedBatches = savedBatches;
+		RenderStats::trianglesDrawn = savedTriangles;
+		RenderStats::instancesVisited = savedVisited;
+		RenderStats::instancesCulled = savedCulled;
+		RenderStats::partsVisited = savedParts;
+		RenderStats::partsCulled = savedPartsCulled;
+	}
+	else
+	{
+		RenderStats::lastReflectionMs = 0.0f;
+		RenderStats::reflectionPlanes = 0;
+		RenderStats::reflectionDrawCalls = 0;
+	}
+	content.setTy1ReflectionPlanes(reflectionPlanes, reflectionPlaneCount);
+	content.setTy1WaterClip(false, 0.0f);
+	shader.bind();
+	shader.setUniformMat4("VPMatrix", vpmatrix);
+	shader.setUniform1i("clipEnabled", 0);
+	shader.setUniform1f("clipPlaneY", 0.0f);
+	glDisable(GL_CLIP_DISTANCE0);
+	refreshInstanceVisibility(mainFrustum, true);
 
 	// Opaque world first, then alpha and additive sheets. A waterfall drawn in
 	// file order writes depth and hides the cliff that is stored in a later room.
@@ -2398,7 +2570,9 @@ void Application::render(Shader& shader)
 			RenderStats::instancesVisited, RenderStats::instancesCulled,
 			RenderStats::partsVisited, RenderStats::partsCulled,
 			RenderStats::trianglesDrawn, RenderStats::lastSceneMs,
-			RenderStats::simTicks, RenderStats::lastSimMs);
+			RenderStats::simTicks, RenderStats::lastSimMs,
+			RenderStats::reflectionPlanes, RenderStats::reflectionDrawCalls,
+			RenderStats::lastReflectionMs);
 	}
 
 	if (selectedLevelObject >= 0 && selectedLevelObject < static_cast<int>(levelObjects.size()))

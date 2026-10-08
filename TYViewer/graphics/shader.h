@@ -2,6 +2,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
@@ -37,6 +38,18 @@ public:
 	void setUniformMat4Array(const std::string& name, const glm::mat4* mats, int count);
 	void setUniform1iArray(const std::string& name, const int* values, int count);
 
+	// String literals keep a stable address, so these skip the std::string allocation
+	// and the heap-backed name lookup. Call sites that pass a literal pick them.
+	void setUniform1i(const char* name, int v);
+	void setUniform1f(const char* name, float v);
+	void setUniform2f(const char* name, glm::vec2 v);
+	void setUniform3f(const char* name, glm::vec3 v);
+	void setUniform4f(const char* name, glm::vec4 v);
+	void setUniformMat4(const char* name, glm::mat4 mat);
+	void setUniformMat3(const char* name, glm::mat3 mat);
+	void setUniformMat4Array(const char* name, const glm::mat4* mats, int count);
+	void setUniform1iArray(const char* name, const int* values, int count);
+
 	static Shader* createDefault();
 
 private:
@@ -49,4 +62,20 @@ private:
 	unsigned int compile(unsigned int type, const std::string& source);
 
 	int getUniformLocation(const std::string& name);
+	int getUniformLocation(const char* name);
+
+	// Last uploaded scalar or vec4 per location. A repeat of the same value skips the GL call.
+	struct CachedUniform
+	{
+		unsigned char kind = 0;
+		int i = 0;
+		float f = 0.0f;
+		glm::vec4 v4{ 0.0f };
+	};
+	bool cachedInt(int location, int value);
+	bool cachedFloat(int location, float value);
+	bool cachedVec4(int location, const glm::vec4& value);
+
+	std::unordered_map<const char*, int> m_uniformLocationLiterals;
+	std::vector<CachedUniform> m_uniformValues;
 };

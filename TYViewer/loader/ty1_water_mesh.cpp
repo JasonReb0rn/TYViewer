@@ -58,6 +58,7 @@ namespace
 	{
 		std::string material;
 		std::string type;
+		float surfaceY = 0.0f;
 		std::vector<Vertex> vertices;
 		std::vector<unsigned int> indices;
 	};
@@ -87,6 +88,7 @@ namespace
 
 				const std::uint32_t indexCount = from_bytes<std::uint32_t>(data, cursor);
 				const std::uint32_t vertexCount = from_bytes<std::uint32_t>(data, cursor + 4);
+				chunk.surfaceY = from_bytes<float>(data, cursor + 8);
 				cursor += 8 + 28;
 				if (vertexCount > 2000000u || indexCount > 8000000u)
 					return !chunks.empty();
@@ -150,10 +152,11 @@ Model* loadTy1WaterModel(Content& content, const std::string& levelFile)
 	if (id.empty())
 		return nullptr;
 
-	std::string fileName = "room_" + id + "_water.wmh";
+	// The PC loader opens the .wml (0x5bd8d1). .wmh is the same mesh, tessellated further.
+	std::string fileName = "room_" + id + "_water.wml";
 	if (!content.hasActiveFile(fileName))
 	{
-		fileName = "room_" + id + "_water.wml";
+		fileName = "room_" + id + "_water.wmh";
 		if (!content.hasActiveFile(fileName))
 			return nullptr;
 	}
@@ -183,18 +186,14 @@ Model* loadTy1WaterModel(Content& content, const std::string& levelFile)
 
 		Mesh* mesh = new Mesh(chunk.vertices, chunk.indices, texture, chunk.material, chunk.type);
 		mesh->setContent(&content);
-		// Shore fade is vertex alpha. Indirect water in global.mad also skips the depth write.
+		// Vertex alpha is the shore fade. The reflection mix is what keeps the edge from cutting a hole.
 		mesh->setBlend(MeshBlend::Alpha);
 		mesh->setWaterType(chunk.type);
+		mesh->setWaterSurfaceY(chunk.surfaceY);
 		vertices += chunk.vertices.size();
 
-		glm::vec4 coeffs1a(0.0f);
-		glm::vec4 coeffs1b(0.0f);
-		glm::vec4 coeffs2a(0.0f);
-		glm::vec4 coeffs2b(0.0f);
-		glm::vec4 colour(1.0f);
-		if (content.ty1WaterWaveFor(chunk.type, coeffs1a, coeffs1b, coeffs2a, coeffs2b, colour))
-			mesh->expandLocalAabb(std::fabs(coeffs1b.x) + std::fabs(coeffs2b.x));
+		if (const Content::Ty1WaterType* type = content.ty1WaterTypeFor(chunk.type))
+			mesh->expandLocalAabb(std::fabs(type->wave0Height) + std::fabs(type->wave1Height));
 		meshes.push_back(mesh);
 	}
 

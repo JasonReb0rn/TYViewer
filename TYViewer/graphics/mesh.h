@@ -90,6 +90,12 @@ public:
 	// water_types.ini section for this mesh. Empty meshes are not displaced.
 	void setWaterType(const std::string& typeName);
 	const std::string& getWaterType() const { return m_waterType; }
+	// True for a Room_*_water chunk. Those are skipped while drawing a reflection.
+	bool isWaterSurface() const { return !m_waterType.empty(); }
+	// Header surfaceY. Reflection planes match this.
+	void setWaterSurfaceY(float y);
+	bool hasWaterSurface() const { return m_hasWaterSurface; }
+	float getWaterSurfaceY() const { return m_waterSurfaceY; }
 	// Grow the cached bounds. Water verts move by the wave amplitude after the box is built.
 	void expandLocalAabb(float padY);
 	bool isTransparent() const { return m_blend != MeshBlend::Opaque; }
@@ -129,6 +135,8 @@ private:
 	std::string m_materialNameLower;
 	std::string m_partName;
 	std::string m_waterType;
+	bool m_hasWaterSurface = false;
+	float m_waterSurfaceY = 0.0f;
 	int m_subobjectGroup = -1;
 	bool m_hasLocalAabb = false;
 	glm::vec3 m_localAabbMin{ 0.0f, 0.0f, 0.0f };
