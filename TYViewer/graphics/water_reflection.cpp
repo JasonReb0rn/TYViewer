@@ -42,11 +42,11 @@ bool WaterReflection::ensure()
 
 		glGenRenderbuffers(1, &target.depth);
 		glBindRenderbuffer(GL_RENDERBUFFER, target.depth);
-		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH32F_STENCIL8, kSize, kSize);
+		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, kSize, kSize);
 
 		glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
 		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target.color, 0);
-		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, target.depth);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, target.depth);
 		const GLenum drawBuffer = GL_COLOR_ATTACHMENT0;
 		glDrawBuffers(1, &drawBuffer);
 
@@ -59,6 +59,14 @@ bool WaterReflection::ensure()
 			glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFbo));
 			return false;
 		}
+
+		// Pixels a partial clear never touches stay transparent instead of undefined.
+		glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+		glClearDepth(0.0);
+		glDepthMask(GL_TRUE);
+		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+		glDisable(GL_SCISSOR_TEST);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	}
 
 	glBindTexture(GL_TEXTURE_2D, 0);
@@ -67,29 +75,62 @@ bool WaterReflection::ensure()
 	return true;
 }
 
-bool WaterReflection::begin(int plane)
+bool WaterReflection::begin(int plane, unsigned savedFbo, int viewportX, int viewportY, int viewportW, int viewportH)
 {
 	if (plane < 0 || plane >= kMaxPlanes)
 		return false;
 
-	glGetIntegerv(GL_VIEWPORT, m_savedViewport);
-	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &m_savedFbo);
+	m_savedFbo = static_cast<GLint>(savedFbo);
+	m_savedViewport[0] = viewportX;
+	m_savedViewport[1] = viewportY;
+	m_savedViewport[2] = viewportW > 0 ? viewportW : 1;
+	m_savedViewport[3] = viewportH > 0 ? viewportH : 1;
 	if (!ensure())
 		return false;
 	glBindFramebuffer(GL_FRAMEBUFFER, m_targets[plane].fbo);
 	glViewport(0, 0, kSize, kSize);
+	glDisable(GL_SCISSOR_TEST);
 	glEnable(GL_DEPTH_TEST);
 	glDepthFunc(GL_GEQUAL);
 	glDepthMask(GL_TRUE);
 	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	return true;
+}
+
+void WaterReflection::clear()
+{
 	glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
 	glClearDepth(0.0);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	return true;
+}
+
+void WaterReflection::setDrawRect(int x, int y, int width, int height)
+{
+	if (x < 0)
+	{
+		width += x;
+		x = 0;
+	}
+	if (y < 0)
+	{
+		height += y;
+		y = 0;
+	}
+	if (x + width > kSize)
+		width = kSize - x;
+	if (y + height > kSize)
+		height = kSize - y;
+	if (width < 0)
+		width = 0;
+	if (height < 0)
+		height = 0;
+	glEnable(GL_SCISSOR_TEST);
+	glScissor(x, y, width, height);
 }
 
 void WaterReflection::end()
 {
+	glDisable(GL_SCISSOR_TEST);
 	glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(m_savedFbo));
 	glViewport(m_savedViewport[0], m_savedViewport[1], m_savedViewport[2], m_savedViewport[3]);
 }

@@ -21,9 +21,20 @@ public:
 	inline void setScale(const glm::vec3& s) { scale = s; }
 	inline const glm::vec3& getScale() const { return scale; }
 
+	// Room parts are constructed at the origin with scale 1 and never moved.
+	// Building the scale and three rotations for that case is wasted work.
+	inline bool isIdentity() const
+	{
+		return position.x == 0.0f && position.y == 0.0f && position.z == 0.0f
+			&& rotation.x == 0.0f && rotation.y == 0.0f && rotation.z == 0.0f
+			&& scale.x == 1.0f && scale.y == 1.0f && scale.z == 1.0f;
+	}
 
 	inline const glm::mat4 getMatrix() const
 	{
+		if (isIdentity())
+			return glm::mat4(1.0f);
+
 		glm::mat4 matrix(1.0f);
 		matrix = glm::scale(matrix, scale);
 		matrix = glm::rotate(matrix, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));

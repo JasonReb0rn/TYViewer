@@ -2252,7 +2252,8 @@ void Gui::setObjectVisible(int index, bool visible)
 
 void Gui::setRenderStats(int drawCalls, int instancedBatches, int instancesVisited, int instancesCulled,
 	int partsVisited, int partsCulled, long long trianglesDrawn, float sceneMs,
-	int simTicks, float simMs, int reflectionPlanes, int reflectionDrawCalls, float reflectionMs)
+	int simTicks, float simMs, int reflectionPlanes, int reflectionDrawCalls, float reflectionMs,
+	float reflectionGpuMs)
 {
 	statsValid = true;
 	statDrawCalls = drawCalls;
@@ -2268,6 +2269,7 @@ void Gui::setRenderStats(int drawCalls, int instancedBatches, int instancesVisit
 	statReflectionPlanes = reflectionPlanes;
 	statReflectionDrawCalls = reflectionDrawCalls;
 	statReflectionMs = reflectionMs;
+	statReflectionGpuMs = reflectionGpuMs;
 }
 
 void Gui::renderSceneStatsBar()
@@ -2295,8 +2297,8 @@ void Gui::renderSceneStatsBar()
 
 	char reflection[128];
 	std::snprintf(reflection, sizeof(reflection),
-		"REFL   %d planes, %d draws, %.2fms",
-		statReflectionPlanes, statReflectionDrawCalls, statReflectionMs);
+		"REFL   %d planes, %d draws, %.2fms cpu, %.2fms gpu",
+		statReflectionPlanes, statReflectionDrawCalls, statReflectionMs, statReflectionGpuMs);
 	drawText(reflection, 10.0f, y + 15.0f, glm::vec4(0.75f, 0.9f, 0.8f, 1.0f));
 }
 

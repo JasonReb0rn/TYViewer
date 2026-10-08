@@ -45,6 +45,135 @@ namespace
 			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 		return lower;
 	}
+
+	// Last GL state written by Mesh. A repeat of the same program, blend, texture,
+	// wrap, or matrix skips the call. Invalidated when something else touches that state.
+	struct DrawState
+	{
+		bool blendValid = false;
+		MeshBlend blend = MeshBlend::Opaque;
+		const Texture* texture = nullptr;
+		int wrapS = -1;
+		int wrapT = -1;
+		int activeUnit = -1;
+		const Shader* uvShader = nullptr;
+		glm::mat3 uv{ 1.0f };
+		bool uvValid = false;
+		const Shader* modelShader = nullptr;
+		glm::mat4 model{ 1.0f };
+		bool modelValid = false;
+	};
+
+	DrawState g_drawState;
+
+	void uploadModelMatrix(Shader& program, const glm::mat4& model)
+	{
+		if (g_drawState.modelValid && g_drawState.modelShader == &program && g_drawState.model == model)
+			return;
+		program.setUniformMat4("modelMatrix", model);
+		g_drawState.model = model;
+		g_drawState.modelShader = &program;
+		g_drawState.modelValid = true;
+	}
+
+	const glm::mat4 kIdentity(1.0f);
+
+	void applyMeshBlend(MeshBlend blend)
+	{
+		if (g_drawState.blendValid && g_drawState.blend == blend)
+			return;
+
+		glBlendEquation(GL_FUNC_ADD);
+		glDepthMask(GL_TRUE);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		if (blend == MeshBlend::Additive)
+		{
+			glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+			glDepthMask(GL_FALSE);
+		}
+		else if (blend == MeshBlend::Subtractive)
+		{
+			glBlendEquation(GL_FUNC_REVERSE_SUBTRACT);
+			glBlendFunc(GL_ONE, GL_ONE);
+			glDepthMask(GL_FALSE);
+		}
+		else if (blend == MeshBlend::Alpha)
+		{
+			glDepthMask(GL_FALSE);
+		}
+		g_drawState.blend = blend;
+		g_drawState.blendValid = true;
+	}
+
+	void uploadModelAt(Shader& program, int location, const glm::mat4& model)
+	{
+		if (location < 0)
+			return;
+		if (g_drawState.modelValid && g_drawState.modelShader == &program && g_drawState.model == model)
+			return;
+		program.setUniformMat4(location, model);
+		g_drawState.model = model;
+		g_drawState.modelShader = &program;
+		g_drawState.modelValid = true;
+	}
+
+	// world is the placed instance. An identity room part does not rebuild or re-upload.
+	void uploadWorldModel(Shader& program, const glm::mat4& world, bool localIdentity, const glm::mat4& local)
+	{
+		if (localIdentity)
+		{
+			if (world == kIdentity)
+				uploadModelMatrix(program, kIdentity);
+			else
+				uploadModelMatrix(program, world);
+		}
+		else if (world == kIdentity)
+			uploadModelMatrix(program, local);
+		else
+			uploadModelMatrix(program, world * local);
+	}
+
+	struct ReflectLocs
+	{
+		const Shader* shader = nullptr;
+		int uvMatrix = -1;
+		int alphaRef = -1;
+		int useInstancing = -1;
+		int modelMatrix = -1;
+	};
+
+	const ReflectLocs& reflectLocs(Shader& shader, bool cutout)
+	{
+		static ReflectLocs slots[4];
+		for (const ReflectLocs& slot : slots)
+		{
+			if (slot.shader == &shader)
+				return slot;
+		}
+		ReflectLocs* dest = nullptr;
+		for (ReflectLocs& slot : slots)
+		{
+			if (slot.shader == nullptr)
+			{
+				dest = &slot;
+				break;
+			}
+		}
+		if (dest == nullptr)
+			dest = &slots[0];
+		dest->shader = &shader;
+		dest->uvMatrix = shader.uniformLocation("uvMatrix");
+		dest->useInstancing = shader.uniformLocation("useInstancing");
+		dest->modelMatrix = shader.uniformLocation("modelMatrix");
+		dest->alphaRef = cutout ? shader.uniformLocation("alphaRef") : -1;
+		return *dest;
+	}
+
+	void uploadReflectInstances(const glm::mat4* matrices, size_t count)
+	{
+		glBindBuffer(GL_ARRAY_BUFFER, sharedInstanceBuffer());
+		glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(count * sizeof(glm::mat4)), matrices, GL_DYNAMIC_DRAW);
+	}
 }
 
 Mesh::Mesh() :
@@ -192,50 +321,131 @@ void Mesh::draw(Shader& shader) const
 	draw(shader, glm::mat4(1.0f), MeshDrawStyle{});
 }
 
+Shader* Mesh::s_waterSurfaceShader = nullptr;
+
+void Mesh::setWaterSurfaceShader(Shader* shader)
+{
+	s_waterSurfaceShader = shader;
+}
+
+void Mesh::invalidateDrawState()
+{
+	g_drawState = DrawState{};
+	Shader::invalidateBind();
+}
+
+bool Mesh::reflectionCutsOut() const
+{
+	if (m_blend != MeshBlend::Opaque || m_alphaRef > 0.02f)
+		return true;
+	ensureMaterial();
+	return m_materialCutout;
+}
+
+void Mesh::ensureMaterial() const
+{
+	if (m_materialReady)
+		return;
+
+	m_materialReady = true;
+	m_materialDraw = nullptr;
+	m_materialCutout = false;
+	m_uvAnimated = false;
+	m_wrapS = GL_REPEAT;
+	m_wrapT = GL_REPEAT;
+	if (m_content == nullptr)
+		return;
+
+	const Content::Ty1MaterialDraw* draw = m_content->findTy1MaterialLower(m_materialNameLower);
+	m_materialDraw = draw;
+	if (draw == nullptr)
+		return;
+
+	m_materialCutout = draw->masked || draw->blend != MeshBlend::Opaque;
+	m_uvAnimated = draw->uvAnim != Content::Ty1UvAnim::None || draw->manualScroll;
+	bool clampU = false;
+	bool clampV = false;
+	m_content->ty1UvWrapFor(draw, clampU, clampV);
+	m_wrapS = clampU ? GL_CLAMP_TO_EDGE : GL_REPEAT;
+	m_wrapT = clampV ? GL_CLAMP_TO_EDGE : GL_REPEAT;
+}
+
+const void* Mesh::materialDraw() const
+{
+	ensureMaterial();
+	return m_materialDraw;
+}
+
+void Mesh::bindCachedTexture() const
+{
+	ensureMaterial();
+	if (g_drawState.texture != m_texture)
+	{
+		m_texture->bind();
+		g_drawState.texture = m_texture;
+		g_drawState.activeUnit = 0;
+		g_drawState.wrapS = -1;
+		g_drawState.wrapT = -1;
+	}
+	if (g_drawState.wrapS != m_wrapS || g_drawState.wrapT != m_wrapT)
+	{
+		if (g_drawState.activeUnit != 0)
+		{
+			glActiveTexture(GL_TEXTURE0);
+			g_drawState.activeUnit = 0;
+		}
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, m_wrapS);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, m_wrapT);
+		g_drawState.wrapS = m_wrapS;
+		g_drawState.wrapT = m_wrapT;
+	}
+}
+
+glm::mat3 Mesh::cachedUvMatrix() const
+{
+	ensureMaterial();
+	if (!m_uvAnimated || m_content == nullptr)
+		return glm::mat3(1.0f);
+
+	return m_content->ty1UvMatrixFor(
+		static_cast<const Content::Ty1MaterialDraw*>(m_materialDraw),
+		m_content->ty1AnimTime(),
+		m_content->ty1AnimYaw(),
+		m_content->ty1AnimPitch());
+}
+
+Shader& Mesh::programFor(Shader& passed, const MeshDrawStyle& style) const
+{
+	if (!style.reflection && s_waterSurfaceShader != nullptr && isWaterSurface()
+		&& m_content != nullptr && m_content->ty1WaterTypeFor(m_waterType) != nullptr)
+		return *s_waterSurfaceShader;
+	return passed;
+}
+
 void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 {
 	shader.bind();
 
 	// A solid pass is the selection outline. The caller owns depth, stencil, and blend.
 	if (!style.solid)
-	{
-		// Opaque keeps the default blend and writes depth. Transparent modes are
-		// drawn in a later pass and must not punch a hole through the world.
-		glBlendEquation(GL_FUNC_ADD);
-		glDepthMask(GL_TRUE);
-		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-		if (m_blend == MeshBlend::Additive)
-		{
-			glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-			glDepthMask(GL_FALSE);
-		}
-		else if (m_blend == MeshBlend::Subtractive)
-		{
-			glBlendEquation(GL_FUNC_REVERSE_SUBTRACT);
-			glBlendFunc(GL_ONE, GL_ONE);
-			glDepthMask(GL_FALSE);
-		}
-		else if (m_blend == MeshBlend::Alpha)
-		{
-			glDepthMask(GL_FALSE);
-		}
-	}
+		applyMeshBlend(m_blend);
+	else
+		g_drawState.blendValid = false;
 
 	const Content::Ty1WaterType* waterType = nullptr;
 	if (!m_waterType.empty() && m_content)
 		waterType = m_content->ty1WaterTypeFor(m_waterType);
 
-	// Coefficient vectors are only read while pcWater is set. Non-water draws just
-	// clear the flags, and the draw after a water surface clears them too so the
-	// displacement does not leak onto the next mesh.
-	static bool previousDrawWasWater = false;
-	const bool waterSurface = isWaterSurface() && waterType != nullptr;
-	int waterWave = 0;
-	int pcWater = 0;
-	if (waterSurface)
+	const bool waterProgram = s_waterSurfaceShader != nullptr && &shader == s_waterSurfaceShader;
+	const glm::vec4 waveColour = waterType != nullptr ? waterType->color : glm::vec4(1.0f);
+	const glm::vec4 tint = style.solid ? style.tint : (waterProgram ? waveColour : glm::vec4(1.0f));
+	shader.setUniform4f("tintColour", tint);
+	// The opaque reflection program has no alpha test, and no alphaRef uniform.
+	if (!style.reflection || style.cutout)
+		shader.setUniform1f("alphaRef", m_alphaRef);
+
+	if (waterProgram && waterType != nullptr)
 	{
-		waterWave = 1;
-		pcWater = 1;
 		// 0x5c0060. 1a is dir x, dir z, frequency, phase. 1b.x is the negated height.
 		shader.setUniform4f("waterWaveCoeffs1a", glm::vec4(waterType->wave0DirX, waterType->wave0DirZ, waterType->wave0Freq, waterType->wave0Phase));
 		shader.setUniform4f("waterWaveCoeffs1b", glm::vec4(-waterType->wave0Height, 0.0f, 0.0f, 0.0f));
@@ -246,68 +456,37 @@ void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 		const float invSize = 1.0f / static_cast<float>(WaterReflection::kSize);
 		shader.setUniform4f("waterReflectCoeff", glm::vec4(invSize, invSize, waterType->reflectMix, waterType->reflectAdd));
 	}
-	if (waterSurface || previousDrawWasWater)
+	else if (!style.reflection)
 	{
-		shader.setUniform1i("waterWave", waterWave);
-		shader.setUniform1i("pcWater", pcWater);
-	}
-	else
-	{
-		shader.setUniform1i("waterWave", 0);
-		shader.setUniform1i("pcWater", 0);
+		shader.setUniform2f("clipOffset", style.solid ? style.clipOffset : glm::vec2(0.0f));
+		shader.setUniform1i("solidColour", style.solid ? 1 : 0);
+		shader.setUniform1i("useSkinning", 0);
 	}
 
-	const glm::vec4 waveColour = waterType != nullptr ? waterType->color : glm::vec4(1.0f);
-	const glm::vec4 tint = style.solid ? style.tint : (waterWave != 0 ? waveColour : glm::vec4(1.0f));
-	shader.setUniform4f("tintColour", tint);
-	shader.setUniform2f("clipOffset", style.solid ? style.clipOffset : glm::vec2(0.0f));
-	shader.setUniform1i("solidColour", style.solid ? 1 : 0);
-	shader.setUniform1f("alphaRef", m_alphaRef);
-	shader.setUniform1i("useSkinning", 0);
-
-	// One hash lookup (on the name this mesh already lowercased at construction)
-	// feeds the uv matrix, wrap, and water queries below, instead of each of them
-	// separately lowercasing m_materialName and hashing it again.
-	const auto* materialDraw = m_content ? m_content->findTy1MaterialLower(m_materialNameLower) : nullptr;
-
-	const glm::mat3 uv = m_content
-		? m_content->ty1UvMatrixFor(materialDraw, m_content->ty1AnimTime(), m_content->ty1AnimYaw(), m_content->ty1AnimPitch())
-		: glm::mat3(1.0f);
-	shader.setUniformMat3("uvMatrix", uv);
-	
-	m_texture->bind();
-	// Wrap is per material and textures are shared, so set it on every draw.
-	// Waterfalls repeat. clampUV / address clamp an axis on their own.
-	bool clampU = false;
-	bool clampV = false;
-	if (m_content)
-		m_content->ty1UvWrapFor(materialDraw, clampU, clampV);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, clampU ? GL_CLAMP_TO_EDGE : GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, clampV ? GL_CLAMP_TO_EDGE : GL_REPEAT);
-
-	glm::vec4 waterScale(0.0f);
-	int water = 0;
-	// A .wml/.wmh chunk uses the PC noise wobble instead of the GameCube ripple.
-	if (pcWater == 0 && m_content && m_content->ty1IndirectWaterFor(materialDraw, waterScale))
+	// Cutout, wrap, and whether the UV matrix moves were copied on the first use.
+	// Static materials keep an identity UV and do not hash the material again.
+	const glm::mat3 uv = cachedUvMatrix();
+	if (!g_drawState.uvValid || g_drawState.uvShader != &shader || g_drawState.uv != uv)
 	{
-		Texture* ripple = m_content->ty1WaterRipple();
-		if (ripple != nullptr)
-		{
-			water = 1;
-			ripple->bind(1);
-			shader.setUniform1i("waterRipple", 1);
-			shader.setUniform4f("waterScale", waterScale);
-		}
+		shader.setUniformMat3("uvMatrix", uv);
+		g_drawState.uv = uv;
+		g_drawState.uvShader = &shader;
+		g_drawState.uvValid = true;
 	}
-	shader.setUniform1i("water", water);
 
-	int reflectEnabled = 0;
-	if (waterSurface && m_hasWaterSurface && m_content != nullptr)
+	// Wrap is per material and textures are shared. Waterfalls repeat.
+	// Setting the parameter on a texture the GPU is already sampling flushes the
+	// pipeline, so only do it when this texture's wrap actually changes.
+	bindCachedTexture();
+
+	if (waterProgram && waterType != nullptr && m_hasWaterSurface && m_content != nullptr)
 	{
+		int reflectEnabled = 0;
 		Texture* noise = m_content->ty1WaterNoise();
 		if (noise != nullptr)
 		{
 			noise->bind(2);
+			g_drawState.activeUnit = 2;
 			shader.setUniform1i("noiseTexture", 2);
 		}
 		const int plane = m_content->ty1ReflectionPlaneFor(m_waterSurfaceY);
@@ -316,16 +495,36 @@ void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 		{
 			reflectEnabled = 1;
 			glActiveTexture(GL_TEXTURE3);
+			g_drawState.activeUnit = 3;
 			glBindTexture(GL_TEXTURE_2D, reflectTex);
 			shader.setUniform1i("reflectTexture", 3);
 		}
-	}
-	if (waterSurface || previousDrawWasWater)
 		shader.setUniform1i("reflectEnabled", reflectEnabled);
-	else
-		shader.setUniform1i("reflectEnabled", 0);
-	previousDrawWasWater = waterSurface;
-	glActiveTexture(GL_TEXTURE0);
+	}
+	else if (!style.reflection)
+	{
+		glm::vec4 waterScale(0.0f);
+		int water = 0;
+		// A .wml/.wmh chunk uses the PC noise wobble instead of the GameCube ripple.
+		if (m_content && m_content->ty1IndirectWaterFor(static_cast<const Content::Ty1MaterialDraw*>(materialDraw()), waterScale))
+		{
+			Texture* ripple = m_content->ty1WaterRipple();
+			if (ripple != nullptr)
+			{
+				water = 1;
+				ripple->bind(1);
+				g_drawState.activeUnit = 1;
+				shader.setUniform1i("waterRipple", 1);
+				shader.setUniform4f("waterScale", waterScale);
+			}
+		}
+		shader.setUniform1i("water", water);
+	}
+	if (g_drawState.activeUnit != 0)
+	{
+		glActiveTexture(GL_TEXTURE0);
+		g_drawState.activeUnit = 0;
+	}
 }
 
 void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& style) const
@@ -336,9 +535,13 @@ void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& sty
 		return;
 	}
 
-	prepareDraw(shader, style);
-	shader.setUniform1i("useInstancing", 0);
-	shader.setUniformMat4("modelMatrix", world * getMatrix());
+	Shader& program = programFor(shader, style);
+	prepareDraw(program, style);
+	program.setUniform1i("useInstancing", 0);
+	if (isIdentity())
+		uploadWorldModel(program, world, true, kIdentity);
+	else
+		uploadWorldModel(program, world, false, getMatrix());
 
 	glBindVertexArray(vao);
 	glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(m_indices.size()), GL_UNSIGNED_INT, nullptr);
@@ -358,17 +561,21 @@ void Mesh::drawSkinned(Shader& shader, const glm::mat4& world, const glm::mat4* 
 		return;
 	}
 
-	prepareDraw(shader, style);
-	shader.setUniform1i("useInstancing", 0);
-	shader.setUniformMat4("modelMatrix", world * getMatrix());
-	shader.setUniformMat4Array("bones", bones, boneCount);
-	shader.setUniform1iArray("boneParents", boneParents, boneCount);
-	shader.setUniform1i("useSkinning", 1);
+	Shader& program = programFor(shader, style);
+	prepareDraw(program, style);
+	program.setUniform1i("useInstancing", 0);
+	if (isIdentity())
+		uploadWorldModel(program, world, true, kIdentity);
+	else
+		uploadWorldModel(program, world, false, getMatrix());
+	program.setUniformMat4Array("bones", bones, boneCount);
+	program.setUniform1iArray("boneParents", boneParents, boneCount);
+	program.setUniform1i("useSkinning", 1);
 
 	glBindVertexArray(vao);
 	glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(m_indices.size()), GL_UNSIGNED_INT, nullptr);
 
-	shader.setUniform1i("useSkinning", 0);
+	program.setUniform1i("useSkinning", 0);
 
 	RenderStats::drawCalls++;
 	RenderStats::trianglesDrawn += static_cast<long long>(m_indices.size() / 3);
@@ -381,26 +588,26 @@ void Mesh::drawInstanced(Shader& shader, const std::vector<glm::mat4>& worlds, c
 		return;
 	}
 
-	prepareDraw(shader, style);
-	shader.setUniform1i("useInstancing", 1);
+	Shader& program = programFor(shader, style);
+	prepareDraw(program, style);
+	program.setUniform1i("useInstancing", 1);
 
 	// The mesh-local transform is identity for every TY1 part today (nothing calls
 	// Transformable::setPosition/setRotation/setScale on a Mesh), so the instance
 	// matrices upload as-is. A future per-part offset still folds in through the
 	// scratch vector, which stays allocated across draws.
-	const glm::mat4 local = getMatrix();
 	static std::vector<glm::mat4> combined;
 	const glm::mat4* upload = worlds.data();
-	if (local != glm::mat4(1.0f))
+	if (!isIdentity())
 	{
+		const glm::mat4 local = getMatrix();
 		combined.resize(worlds.size());
 		for (size_t i = 0; i < worlds.size(); i++)
 			combined[i] = worlds[i] * local;
 		upload = combined.data();
 	}
 
-	glBindBuffer(GL_ARRAY_BUFFER, sharedInstanceBuffer());
-	glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(worlds.size() * sizeof(glm::mat4)), upload, GL_DYNAMIC_DRAW);
+	uploadReflectInstances(upload, worlds.size());
 
 	glBindVertexArray(vao);
 	glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(m_indices.size()), GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(worlds.size()));
@@ -409,9 +616,85 @@ void Mesh::drawInstanced(Shader& shader, const std::vector<glm::mat4>& worlds, c
 	// never touch useInstancing. Leaving it at 1 would make their next modelMatrix
 	// uniform update silently do nothing, since the vertex shader would keep
 	// reading the instance attributes instead.
-	shader.setUniform1i("useInstancing", 0);
+	program.setUniform1i("useInstancing", 0);
 
 	RenderStats::drawCalls++;
 	RenderStats::instancedBatches++;
-	RenderStats::trianglesDrawn += static_cast<long long>(m_indices.size() / 3) * static_cast<long long>(combined.size());
+	RenderStats::trianglesDrawn += static_cast<long long>(m_indices.size() / 3) * static_cast<long long>(worlds.size());
+}
+
+void Mesh::drawReflection(Shader& shader, bool cutout) const
+{
+	if (!m_enabled)
+		return;
+
+	const ReflectLocs& locs = reflectLocs(shader, cutout);
+	shader.bind();
+	applyMeshBlend(m_blend);
+	bindCachedTexture();
+
+	const glm::mat3 uv = cachedUvMatrix();
+	if (!g_drawState.uvValid || g_drawState.uvShader != &shader || g_drawState.uv != uv)
+	{
+		shader.setUniformMat3(locs.uvMatrix, uv);
+		g_drawState.uv = uv;
+		g_drawState.uvShader = &shader;
+		g_drawState.uvValid = true;
+	}
+	if (cutout)
+		shader.setUniform1f(locs.alphaRef, m_alphaRef);
+	shader.setUniform1i(locs.useInstancing, 0);
+	if (isIdentity())
+		uploadModelAt(shader, locs.modelMatrix, kIdentity);
+	else
+		uploadModelAt(shader, locs.modelMatrix, getMatrix());
+
+	glBindVertexArray(vao);
+	glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(m_indices.size()), GL_UNSIGNED_INT, nullptr);
+
+	RenderStats::drawCalls++;
+	RenderStats::trianglesDrawn += static_cast<long long>(m_indices.size() / 3);
+}
+
+void Mesh::drawReflectionInstanced(Shader& shader, const std::vector<glm::mat4>& worlds, bool cutout) const
+{
+	if (!m_enabled || worlds.empty())
+		return;
+
+	const ReflectLocs& locs = reflectLocs(shader, cutout);
+	shader.bind();
+	applyMeshBlend(m_blend);
+	bindCachedTexture();
+
+	const glm::mat3 uv = cachedUvMatrix();
+	if (!g_drawState.uvValid || g_drawState.uvShader != &shader || g_drawState.uv != uv)
+	{
+		shader.setUniformMat3(locs.uvMatrix, uv);
+		g_drawState.uv = uv;
+		g_drawState.uvShader = &shader;
+		g_drawState.uvValid = true;
+	}
+	if (cutout)
+		shader.setUniform1f(locs.alphaRef, m_alphaRef);
+	shader.setUniform1i(locs.useInstancing, 1);
+
+	static std::vector<glm::mat4> combined;
+	const glm::mat4* upload = worlds.data();
+	if (!isIdentity())
+	{
+		const glm::mat4 local = getMatrix();
+		combined.resize(worlds.size());
+		for (size_t i = 0; i < worlds.size(); i++)
+			combined[i] = worlds[i] * local;
+		upload = combined.data();
+	}
+	uploadReflectInstances(upload, worlds.size());
+
+	glBindVertexArray(vao);
+	glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(m_indices.size()), GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(worlds.size()));
+	shader.setUniform1i(locs.useInstancing, 0);
+
+	RenderStats::drawCalls++;
+	RenderStats::instancedBatches++;
+	RenderStats::trianglesDrawn += static_cast<long long>(m_indices.size() / 3) * static_cast<long long>(worlds.size());
 }

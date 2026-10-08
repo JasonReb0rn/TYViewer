@@ -91,6 +91,21 @@ private:
 
 	Shader* shader;
 	Shader* basic;
+	// Water surfaces only. The world program does not carry their varyings.
+	Shader* waterShader = nullptr;
+	// Reflection programs. Opaque has no discard and no clip distance, so early-Z stays on.
+	// Cutout is masked and blended cards. The clip pair is only for meshes that cross the
+	// plane when the oblique near plane cannot be built.
+	Shader* reflectOpaqueShader = nullptr;
+	Shader* reflectCutoutShader = nullptr;
+	Shader* reflectClipShader = nullptr;
+	Shader* reflectCutoutClipShader = nullptr;
+	// GL_TIME_ELAPSED for the reflection pass. The result is read a frame later so the
+	// CPU timer does not wait on the GPU. Slot 0 and 1 alternate.
+	unsigned int reflectionQueries[2] = { 0, 0 };
+	int reflectionQuerySlot = 0;
+	bool reflectionQueryPending[2] = { false, false };
+	float reflectionGpuMs = 0.0f;
 
 	Grid* grid;
 

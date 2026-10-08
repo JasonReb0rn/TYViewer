@@ -25,6 +25,8 @@ public:
 	// World colour and a 32-bit float depth buffer. The camera projection is reversed,
 	// so this target is cleared to depth 0 and keeps the greater value.
 	void beginWorldTarget(int width, int height, const glm::vec4& colour);
+	// The framebuffer beginWorldTarget just bound. Zero before the first successful target.
+	unsigned worldFramebuffer() const { return m_worldFbo; }
 	// Copies the world colour onto the window. The UI draws after this.
 	void presentWorldTarget();
 	void draw(const Drawable& drawable, Shader& shader);

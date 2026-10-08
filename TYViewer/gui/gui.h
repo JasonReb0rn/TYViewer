@@ -127,7 +127,8 @@ public:
 	// panels (draws counts level geometry too, not just placed objects).
 	void setRenderStats(int drawCalls, int instancedBatches, int instancesVisited, int instancesCulled,
 		int partsVisited, int partsCulled, long long trianglesDrawn, float sceneMs,
-		int simTicks, float simMs, int reflectionPlanes, int reflectionDrawCalls, float reflectionMs);
+		int simTicks, float simMs, int reflectionPlanes, int reflectionDrawCalls, float reflectionMs,
+		float reflectionGpuMs);
 	
 	// Input handling
 	void onMouseButton(int button, int action, float x, float y);
@@ -334,6 +335,7 @@ private:
 	int statReflectionPlanes = 0;
 	int statReflectionDrawCalls = 0;
 	float statReflectionMs = 0.0f;
+	float statReflectionGpuMs = 0.0f;
 	void renderSceneStatsBar();
 	
 	bool dropdownOpen;

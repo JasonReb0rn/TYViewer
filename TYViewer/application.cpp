@@ -10,6 +10,7 @@
 #include <filesystem>
 
 #include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/common.hpp>
@@ -327,6 +328,33 @@ void Application::initialize()
 	shader->setUniform1i("waterRipple", 1);
 	shader->setUniform1i("water", 0);
 	shader->setUniformMat3("uvMatrix", glm::mat3(1.0f));
+
+	waterShader = Shader::createWater();
+	reflectOpaqueShader = Shader::createReflection(false, false);
+	reflectCutoutShader = Shader::createReflection(true, false);
+	reflectClipShader = Shader::createReflection(false, true);
+	reflectCutoutClipShader = Shader::createReflection(true, true);
+	Mesh::setWaterSurfaceShader(waterShader);
+	if (waterShader != nullptr)
+	{
+		waterShader->bind();
+		waterShader->setUniform1i("diffuseTexture", 0);
+		waterShader->setUniform1i("noiseTexture", 2);
+		waterShader->setUniform1i("reflectTexture", 3);
+		waterShader->setUniform1i("useInstancing", 0);
+		waterShader->setUniform1i("reflectEnabled", 0);
+	}
+	Shader* reflectPrograms[] = { reflectOpaqueShader, reflectCutoutShader, reflectClipShader, reflectCutoutClipShader };
+	for (Shader* reflectProgram : reflectPrograms)
+	{
+		if (reflectProgram == nullptr)
+			continue;
+		reflectProgram->bind();
+		reflectProgram->setUniform1i("diffuseTexture", 0);
+		reflectProgram->setUniform1i("useInstancing", 0);
+		reflectProgram->setUniform4f("tintColour", glm::vec4(1.0f));
+	}
+	shader->bind();
 
 	basic = content.load<Shader>("standard.shader");
 	if (basic == nullptr)
@@ -689,6 +717,221 @@ namespace
 			if (glm::dot(glm::vec3(plane), positiveCorner) + plane.w < 0.0f)
 				return false;
 		}
+		return true;
+	}
+
+	struct PixelRect
+	{
+		int x = 0;
+		int y = 0;
+		int w = 0;
+		int h = 0;
+	};
+
+	// Eight corners through vp, in the reflection target's pixel space (origin at the bottom).
+	// False when a corner is behind the camera: the box may cover the whole target.
+	bool tryProjectAabb(const glm::mat4& vp, const glm::vec3& boxMin, const glm::vec3& boxMax, int target, PixelRect& out)
+	{
+		float minX = 1.0e9f;
+		float minY = 1.0e9f;
+		float maxX = -1.0e9f;
+		float maxY = -1.0e9f;
+		const float xs[2] = { boxMin.x, boxMax.x };
+		const float ys[2] = { boxMin.y, boxMax.y };
+		const float zs[2] = { boxMin.z, boxMax.z };
+		for (float x : xs)
+		{
+			for (float y : ys)
+			{
+				for (float z : zs)
+				{
+					const glm::vec4 clip = vp * glm::vec4(x, y, z, 1.0f);
+					if (clip.w <= 1.0e-4f)
+						return false;
+					const float invW = 1.0f / clip.w;
+					const float px = (clip.x * invW * 0.5f + 0.5f) * static_cast<float>(target);
+					const float py = (clip.y * invW * 0.5f + 0.5f) * static_cast<float>(target);
+					minX = std::min(minX, px);
+					minY = std::min(minY, py);
+					maxX = std::max(maxX, px);
+					maxY = std::max(maxY, py);
+				}
+			}
+		}
+
+		int x0 = static_cast<int>(std::floor(minX));
+		int y0 = static_cast<int>(std::floor(minY));
+		int x1 = static_cast<int>(std::ceil(maxX));
+		int y1 = static_cast<int>(std::ceil(maxY));
+		if (x0 < 0)
+			x0 = 0;
+		if (y0 < 0)
+			y0 = 0;
+		if (x1 > target)
+			x1 = target;
+		if (y1 > target)
+			y1 = target;
+		out.x = x0;
+		out.y = y0;
+		out.w = x1 - x0;
+		out.h = y1 - y0;
+		return true;
+	}
+
+	PixelRect inflatePixelRect(PixelRect rect, int margin, int target)
+	{
+		rect.x -= margin;
+		rect.y -= margin;
+		rect.w += margin * 2;
+		rect.h += margin * 2;
+		if (rect.x < 0)
+		{
+			rect.w += rect.x;
+			rect.x = 0;
+		}
+		if (rect.y < 0)
+		{
+			rect.h += rect.y;
+			rect.y = 0;
+		}
+		if (rect.x + rect.w > target)
+			rect.w = target - rect.x;
+		if (rect.y + rect.h > target)
+			rect.h = target - rect.y;
+		if (rect.w < 0)
+			rect.w = 0;
+		if (rect.h < 0)
+			rect.h = 0;
+		return rect;
+	}
+
+	// The noise wobble hides props smaller than this in the reflection. About 8 pixels
+	// at a 70 degree view on the 1024 target.
+	bool reflectBoundsTooSmall(const glm::vec3& boxMin, const glm::vec3& boxMax, const glm::vec3& camera, float minAngular)
+	{
+		const glm::vec3 halfExtent = 0.5f * (boxMax - boxMin);
+		const float radius = glm::length(halfExtent);
+		const float distance = glm::length(boxMin + halfExtent - camera);
+		return distance > 1.0e-3f && radius / distance < minAngular;
+	}
+
+	bool reflectRectsOverlap(const PixelRect& a, const PixelRect& b)
+	{
+		return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+	}
+
+	// False when the reflected box misses the water rectangle. A corner behind the
+	// camera may still cover the rect, so that box is kept.
+	bool reflectAabbOverlapsRect(const glm::mat4& vp, const glm::vec3& boxMin, const glm::vec3& boxMax, const PixelRect& rect)
+	{
+		PixelRect projected;
+		if (!tryProjectAabb(vp, boxMin, boxMax, WaterReflection::kSize, projected))
+			return true;
+		if (projected.w <= 0 || projected.h <= 0)
+			return false;
+		return reflectRectsOverlap(projected, rect);
+	}
+
+	bool reflectAabbStraddles(const glm::vec3& boxMin, const glm::vec3& boxMax, float planeY, float epsilon)
+	{
+		const float limit = planeY - epsilon;
+		return boxMin.y < limit && boxMax.y > limit;
+	}
+
+	// One reflected mesh, or a run of prop instances that share it. instanceCount 0 is a room mesh.
+	struct ReflectItem
+	{
+		Mesh* mesh = nullptr;
+		Texture* texture = nullptr;
+		int instanceBegin = 0;
+		int instanceCount = 0;
+		bool env = false;
+		bool cutout = false;
+		bool clip = false;
+	};
+
+	// Opaque unclipped ground first, then the sky, then anything that has to discard or clip.
+	int reflectBucket(const ReflectItem& item)
+	{
+		if (item.cutout)
+			return item.clip ? 5 : 4;
+		if (item.clip)
+			return item.env ? 3 : 2;
+		return item.env ? 1 : 0;
+	}
+
+	// Lengyel's oblique near plane, for reversed-Z clip space (near is clip.z == clip.w,
+	// far is clip.z == 0). Only the depth row changes, so the reflection's screen x/y
+	// still lines up with the main camera. The kept side is the reflection; the camera
+	// side of the water is clipped. False when the plane does not cross the frustum.
+	bool obliqueReflectionProjection(const glm::mat4& projection, const glm::mat4& viewMirror, float planeY, float epsilon, glm::mat4& outProjection)
+	{
+		// Keep world y >= planeY - epsilon. Negated so that side is the negative
+		// half-space, which is the one the near plane keeps.
+		const glm::vec4 worldPlane(0.0f, -1.0f, 0.0f, planeY - epsilon);
+		const float det = glm::determinant(viewMirror);
+		if (!std::isfinite(det) || std::fabs(det) < 1.0e-8f)
+			return false;
+		glm::vec4 viewPlane = glm::transpose(glm::inverse(viewMirror)) * worldPlane;
+		const float length = glm::length(glm::vec3(viewPlane));
+		if (!(length > 1.0e-6f))
+			return false;
+		viewPlane /= length;
+		if (!(viewPlane.w > 1.0e-3f))
+			return false;
+
+		const float px = projection[0][0];
+		const float py = projection[1][1];
+		const float depthZ = projection[2][2];
+		const float depthW = projection[3][2];
+		if (std::fabs(px) < 1.0e-8f || std::fabs(py) < 1.0e-8f || std::fabs(depthW) < 1.0e-8f)
+			return false;
+
+		// Far corners (NDC z = 0). Scale from the one furthest into the kept half-space
+		// so the other kept corners stay inside the far plane. A corner on the camera
+		// side of the water is meant to be clipped.
+		const float cornerW = depthZ / depthW;
+		float worst = 0.0f;
+		bool any = false;
+		const float signs[2] = { -1.0f, 1.0f };
+		for (float sx : signs)
+		{
+			for (float sy : signs)
+			{
+				const glm::vec4 corner(sx / px, sy / py, -1.0f, cornerW);
+				const float dotted = glm::dot(viewPlane, corner);
+				if (dotted < -1.0e-8f && (!any || dotted < worst))
+				{
+					worst = dotted;
+					any = true;
+				}
+			}
+		}
+		if (!any)
+			return false;
+		const float scale = -1.0f / worst;
+		if (!std::isfinite(scale) || !(scale > 0.0f))
+			return false;
+
+		glm::mat4 oblique = projection;
+		oblique[0][2] = projection[0][3] + scale * viewPlane.x;
+		oblique[1][2] = projection[1][3] + scale * viewPlane.y;
+		oblique[2][2] = projection[2][3] + scale * viewPlane.z;
+		oblique[3][2] = projection[3][3] + scale * viewPlane.w;
+
+		const glm::vec3 closest = -viewPlane.w * glm::vec3(viewPlane);
+		const glm::vec3 normal(viewPlane);
+		const glm::vec4 onPlane = oblique * glm::vec4(closest, 1.0f);
+		const glm::vec4 kept = oblique * glm::vec4(closest - normal, 1.0f);
+		const glm::vec4 clipped = oblique * glm::vec4(closest + normal, 1.0f);
+		const float onMetric = onPlane.z - onPlane.w;
+		const float metricLimit = 1.0e-2f * std::max(1.0f, std::fabs(onPlane.w));
+		if (!std::isfinite(onMetric) || std::fabs(onMetric) > metricLimit)
+			return false;
+		if (!(kept.z - kept.w < 0.0f) || !(clipped.z - clipped.w > 0.0f))
+			return false;
+
+		outProjection = oblique;
 		return true;
 	}
 
@@ -1862,6 +2105,21 @@ void Application::run()
 void Application::terminate()
 {
 	cleanupVertexIdOverlay();
+	Mesh::setWaterSurfaceShader(nullptr);
+	delete waterShader;
+	delete reflectOpaqueShader;
+	delete reflectCutoutShader;
+	delete reflectClipShader;
+	delete reflectCutoutClipShader;
+	waterShader = nullptr;
+	reflectOpaqueShader = nullptr;
+	reflectCutoutShader = nullptr;
+	reflectClipShader = nullptr;
+	reflectCutoutClipShader = nullptr;
+	if (reflectionQueries[0] != 0)
+		glDeleteQueries(2, reflectionQueries);
+	reflectionQueries[0] = 0;
+	reflectionQueries[1] = 0;
 	Config::save(Application::APPLICATION_PATH + "config.cfg");
 	glfwTerminate();
 }
@@ -2169,6 +2427,9 @@ void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& i
 
 void Application::render(Shader& shader)
 {
+	// The GUI bound its own program with glUseProgram after the previous frame.
+	Mesh::invalidateDrawState();
+
 	renderer.beginWorldTarget(Config::windowResolutionX, Config::windowResolutionY,
 		glm::vec4(Config::backgroundR, Config::backgroundG, Config::backgroundB, 1.0f));
 
@@ -2192,6 +2453,12 @@ void Application::render(Shader& shader)
 	shader.setUniformMat4("VPMatrix", vpmatrix);
 	shader.setUniformMat3("uvMatrix", glm::mat3(1.0f));
 	shader.setUniform1i("useInstancing", 0);
+	if (waterShader != nullptr)
+	{
+		waterShader->bind();
+		waterShader->setUniformMat4("VPMatrix", vpmatrix);
+		shader.bind();
+	}
 
 	RenderStats::beginFrame();
 	const auto sceneStart = std::chrono::high_resolution_clock::now();
@@ -2204,10 +2471,20 @@ void Application::render(Shader& shader)
 	// The margin is subtracted, so a sheet lying on the water stays in the reflection.
 	constexpr float kReflectPlaneEpsilon = 0.001f;
 	constexpr float kReflectMinAngularSize = 0.01f;
+	// reflectWobble is 0.05 and the noise offset reaches about 1, so 64 pixels at 1024.
+	constexpr int kReflectWobbleMargin = 64;
+	// A plane this small on screen is not worth a second scene draw.
+	constexpr int kReflectMinPlanePixels = 48;
+	// Scissor only when the water covers less than this fraction of the target.
+	// A full-frame ocean would still shade the whole target, and testing every mesh
+	// against that rect costs more than it saves.
+	constexpr int kReflectScissorLimit = (WaterReflection::kSize * 85) / 100;
 	const glm::vec3 eye = camera.getPosition();
 	const glm::vec3 propCamera(eye.x, eye.y, -eye.z);
 	bool inReflection = false;
 	float reflectionPlaneY = 0.0f;
+	Shader* passShader = &shader;
+	MeshDrawStyle passStyle;
 	FrustumPlanes frustum = extractFrustumPlanes(vpmatrix);
 	const FrustumPlanes mainFrustum = frustum;
 	std::vector<bool> instanceDrawable(levelObjects.size(), false);
@@ -2221,6 +2498,14 @@ void Application::render(Shader& shader)
 		instanceWorld[index] = ty1InstanceMatrix(levelObjects[index], &cameraView);
 	}
 	bool skipWaterSurfaces = false;
+	// Reflection collection. The pass sorts what these flags gather instead of drawing in file order.
+	bool collectReflection = false;
+	bool reflectCullRect = false;
+	bool reflectUseOblique = false;
+	const glm::mat4* reflectProjectVp = nullptr;
+	PixelRect reflectRect;
+	static std::vector<ReflectItem> reflectItems;
+	static std::vector<int> reflectInstanceIds;
 	auto refreshInstanceVisibility = [&](const FrustumPlanes& planes, bool countStats)
 	{
 		frustum = planes;
@@ -2234,11 +2519,7 @@ void Application::render(Shader& shader)
 			{
 				if (instance.worldAabbMax.y <= reflectionPlaneY - kReflectPlaneEpsilon)
 					continue;
-				const glm::vec3 halfExtent = 0.5f * (instance.worldAabbMax - instance.worldAabbMin);
-				const float radius = glm::length(halfExtent);
-				const glm::vec3 center = instance.worldAabbMin + halfExtent;
-				const float distance = glm::length(center - propCamera);
-				if (distance > 1.0e-3f && radius / distance < kReflectMinAngularSize)
+				if (reflectBoundsTooSmall(instance.worldAabbMin, instance.worldAabbMax, propCamera, kReflectMinAngularSize))
 					continue;
 			}
 			if (instance.hasAabb && !aabbInFrustum(planes, instance.worldAabbMin, instance.worldAabbMax))
@@ -2264,13 +2545,51 @@ void Application::render(Shader& shader)
 			if (mesh == nullptr || !mesh->isEnabled() || mesh->isTransparent() != transparentPass)
 				continue;
 
+			if (collectReflection)
+			{
+				auto appendGroup = [&](bool wantClip)
+				{
+					const int begin = static_cast<int>(reflectInstanceIds.size());
+					int count = 0;
+					for (int index : entry.second)
+					{
+						if (!instanceDrawable[static_cast<size_t>(index)])
+							continue;
+						const Ty1Instance& instance = levelObjects[static_cast<size_t>(index)];
+						if (reflectCullRect && reflectProjectVp != nullptr && instance.hasAabb
+							&& !reflectAabbOverlapsRect(*reflectProjectVp, instance.worldAabbMin, instance.worldAabbMax, reflectRect))
+							continue;
+						const bool clip = !reflectUseOblique && (!instance.hasAabb
+							|| reflectAabbStraddles(instance.worldAabbMin, instance.worldAabbMax, reflectionPlaneY, kReflectPlaneEpsilon));
+						if (clip != wantClip)
+							continue;
+						reflectInstanceIds.push_back(index);
+						count++;
+					}
+					if (count == 0)
+						return;
+					ReflectItem item;
+					item.mesh = mesh;
+					item.texture = mesh->getTexture();
+					item.instanceBegin = begin;
+					item.instanceCount = count;
+					item.cutout = mesh->reflectionCutsOut();
+					item.clip = wantClip;
+					reflectItems.push_back(item);
+				};
+				appendGroup(false);
+				if (!reflectUseOblique)
+					appendGroup(true);
+				continue;
+			}
+
 			scratchInstanceMatrices.clear();
 			for (int index : entry.second)
 			{
 				if (instanceDrawable[static_cast<size_t>(index)])
 					scratchInstanceMatrices.push_back(instanceWorld[static_cast<size_t>(index)]);
 			}
-			mesh->drawInstanced(shader, scratchInstanceMatrices);
+			mesh->drawInstanced(*passShader, scratchInstanceMatrices, passStyle);
 		}
 	};
 
@@ -2300,6 +2619,9 @@ void Application::render(Shader& shader)
 				}
 				continue;
 			}
+			if (reflectCullRect && reflectProjectVp != nullptr && model->hasLocalAabb()
+				&& !reflectAabbOverlapsRect(*reflectProjectVp, model->getLocalAabbMin(), model->getLocalAabbMax(), reflectRect))
+				continue;
 
 			for (Mesh* mesh : model->getMeshes())
 			{
@@ -2315,7 +2637,26 @@ void Application::render(Shader& shader)
 					RenderStats::partsCulled++;
 					continue;
 				}
-				mesh->draw(shader, glm::mat4(1.0f));
+				if (collectReflection)
+				{
+					if (reflectCullRect && reflectProjectVp != nullptr && mesh->hasLocalAabb()
+						&& !reflectAabbOverlapsRect(*reflectProjectVp, mesh->getLocalAabbMin(), mesh->getLocalAabbMax(), reflectRect))
+					{
+						RenderStats::partsCulled++;
+						continue;
+					}
+					ReflectItem item;
+					item.mesh = mesh;
+					item.texture = mesh->getTexture();
+					item.env = isEnvPartName(mesh->getPartName());
+					item.cutout = mesh->reflectionCutsOut();
+					item.clip = !reflectUseOblique && (!mesh->hasLocalAabb()
+						|| reflectAabbStraddles(mesh->getLocalAabbMin(), mesh->getLocalAabbMax(), reflectionPlaneY, kReflectPlaneEpsilon));
+					reflectItems.push_back(item);
+					RenderStats::partsVisited++;
+					continue;
+				}
+				mesh->draw(*passShader, glm::mat4(1.0f), passStyle);
 				RenderStats::partsVisited++;
 			}
 		}
@@ -2370,8 +2711,26 @@ void Application::render(Shader& shader)
 	};
 
 	// Up to two reflection planes, nearest visible water chunk first. The mirror is
-	// in the VP, so mesh positions stay in prop space. Clip drops whatever is below
-	// the plane. Water itself is not drawn into its own reflection.
+	// in the VP, so mesh positions stay in prop space. The oblique near plane drops
+	// whatever is below the water. Water itself is not drawn into its own reflection.
+	auto pollReflectionGpu = [&]()
+	{
+		for (int i = 0; i < 2; i++)
+		{
+			if (reflectionQueries[i] == 0 || !reflectionQueryPending[i])
+				continue;
+			GLuint available = 0;
+			glGetQueryObjectuiv(reflectionQueries[i], GL_QUERY_RESULT_AVAILABLE, &available);
+			if (available == 0)
+				continue;
+			GLuint64 elapsedNs = 0;
+			glGetQueryObjectui64v(reflectionQueries[i], GL_QUERY_RESULT, &elapsedNs);
+			reflectionGpuMs = static_cast<float>(static_cast<double>(elapsedNs) / 1.0e6);
+			reflectionQueryPending[i] = false;
+		}
+	};
+	pollReflectionGpu();
+
 	Content::Ty1ReflectionPlane reflectionPlanes[WaterReflection::kMaxPlanes] = {};
 	int reflectionPlaneCount = 0;
 	if (waterReflections)
@@ -2429,22 +2788,109 @@ void Application::render(Shader& shader)
 		const int savedPartsCulled = RenderStats::partsCulled;
 
 		inReflection = true;
+		const int viewW = static_cast<int>(Config::windowResolutionX);
+		const int viewH = static_cast<int>(Config::windowResolutionY);
+		bool gpuQueryOpen = false;
+		auto beginReflectionGpu = [&]()
+		{
+			if (reflectionQueries[0] == 0)
+				glGenQueries(2, reflectionQueries);
+			if (reflectionQueryPending[reflectionQuerySlot])
+				return false;
+			glBeginQuery(GL_TIME_ELAPSED, reflectionQueries[reflectionQuerySlot]);
+			return true;
+		};
 		for (size_t planeIndex = 0; planeIndex < picks.size(); planeIndex++)
 		{
-			if (!waterReflection.begin(static_cast<int>(planeIndex)))
-				break;
 			const float height = picks[planeIndex].height;
+			PixelRect coverage;
+			bool anyCoverage = false;
+			bool crossesNear = false;
+			for (Model* model : models)
+			{
+				if (model == nullptr || crossesNear)
+					continue;
+				for (Mesh* mesh : model->getMeshes())
+				{
+					if (mesh == nullptr || !mesh->isEnabled() || !mesh->isWaterSurface()
+						|| !mesh->hasWaterSurface() || !mesh->hasLocalAabb())
+						continue;
+					if (std::fabs(mesh->getWaterSurfaceY() - height) >= 0.05f)
+						continue;
+					if (!aabbInFrustum(mainFrustum, mesh->getLocalAabbMin(), mesh->getLocalAabbMax()))
+						continue;
+					PixelRect projected;
+					if (!tryProjectAabb(vpmatrix, mesh->getLocalAabbMin(), mesh->getLocalAabbMax(), WaterReflection::kSize, projected))
+					{
+						crossesNear = true;
+						break;
+					}
+					if (projected.w <= 0 || projected.h <= 0)
+						continue;
+					if (!anyCoverage)
+					{
+						coverage = projected;
+						anyCoverage = true;
+					}
+					else
+					{
+						const int x1 = std::max(coverage.x + coverage.w, projected.x + projected.w);
+						const int y1 = std::max(coverage.y + coverage.h, projected.y + projected.h);
+						coverage.x = std::min(coverage.x, projected.x);
+						coverage.y = std::min(coverage.y, projected.y);
+						coverage.w = x1 - coverage.x;
+						coverage.h = y1 - coverage.y;
+					}
+				}
+			}
+			if (crossesNear)
+				coverage = PixelRect{ 0, 0, WaterReflection::kSize, WaterReflection::kSize };
+			else if (!anyCoverage || coverage.w <= 0 || coverage.h <= 0
+				|| std::max(coverage.w, coverage.h) < kReflectMinPlanePixels)
+				continue;
+
+			const PixelRect scissor = inflatePixelRect(coverage, kReflectWobbleMargin, WaterReflection::kSize);
+			if (scissor.w <= 0 || scissor.h <= 0)
+				continue;
+			if (reflectOpaqueShader == nullptr || reflectCutoutShader == nullptr
+				|| reflectClipShader == nullptr || reflectCutoutClipShader == nullptr)
+				break;
+
 			reflectionPlaneY = height;
 			const glm::mat4 mirror =
 				glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, height, 0.0f)) *
 				glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f)) *
 				glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -height, 0.0f));
-			const glm::mat4 mirroredVp = vpmatrix * mirror;
-			shader.setUniformMat4("VPMatrix", mirroredVp);
-			shader.setUniform1i("clipEnabled", 1);
-			shader.setUniform1f("clipPlaneY", height);
+			const glm::mat4 viewMirror = view * mirror;
+			glm::mat4 obliqueProjection;
+			reflectUseOblique = obliqueReflectionProjection(projection, viewMirror, height, kReflectPlaneEpsilon, obliqueProjection);
+			const glm::mat4 mirroredVp = (reflectUseOblique ? obliqueProjection : projection) * viewMirror;
+			const bool partialTarget = scissor.w < kReflectScissorLimit || scissor.h < kReflectScissorLimit;
+
+			if (!gpuQueryOpen)
+				gpuQueryOpen = beginReflectionGpu();
+			if (!waterReflection.begin(static_cast<int>(planeIndex), renderer.worldFramebuffer(), 0, 0, viewW, viewH))
+				break;
+			if (partialTarget)
+				waterReflection.setDrawRect(scissor.x, scissor.y, scissor.w, scissor.h);
+			waterReflection.clear();
+
+			reflectCullRect = partialTarget;
+			reflectRect = scissor;
+			reflectProjectVp = &mirroredVp;
 			content.setTy1WaterClip(true, height);
-			glEnable(GL_CLIP_DISTANCE0);
+			Shader* reflectPrograms[] = { reflectOpaqueShader, reflectCutoutShader, reflectClipShader, reflectCutoutClipShader };
+			for (Shader* reflectProgram : reflectPrograms)
+			{
+				reflectProgram->bind();
+				reflectProgram->setUniformMat4("VPMatrix", mirroredVp);
+			}
+			reflectClipShader->setUniform1f("clipPlaneY", height);
+			reflectCutoutClipShader->setUniform1f("clipPlaneY", height);
+
+			reflectItems.clear();
+			reflectInstanceIds.clear();
+			collectReflection = true;
 			refreshInstanceVisibility(extractFrustumPlanes(mirroredVp), false);
 			skipWaterSurfaces = true;
 			drawRoomMeshes(false);
@@ -2452,13 +2898,73 @@ void Application::render(Shader& shader)
 			drawRoomMeshes(true);
 			drawPropBatches(true);
 			skipWaterSurfaces = false;
-			glDisable(GL_CLIP_DISTANCE0);
+			collectReflection = false;
+			reflectCullRect = false;
+			reflectProjectVp = nullptr;
+
+			std::sort(reflectItems.begin(), reflectItems.end(), [](const ReflectItem& a, const ReflectItem& b)
+			{
+				const int bucketA = reflectBucket(a);
+				const int bucketB = reflectBucket(b);
+				if (bucketA != bucketB)
+					return bucketA < bucketB;
+				return a.texture < b.texture;
+			});
+
+			bool clipOn = false;
+			passStyle.reflection = true;
+			for (const ReflectItem& item : reflectItems)
+			{
+				if (item.mesh == nullptr)
+					continue;
+				Shader* reflectProgram = reflectOpaqueShader;
+				if (item.clip)
+					reflectProgram = item.cutout ? reflectCutoutClipShader : reflectClipShader;
+				else if (item.cutout)
+					reflectProgram = reflectCutoutShader;
+				if (item.clip != clipOn)
+				{
+					if (item.clip)
+						glEnable(GL_CLIP_DISTANCE0);
+					else
+						glDisable(GL_CLIP_DISTANCE0);
+					clipOn = item.clip;
+				}
+				if (item.instanceCount > 0)
+				{
+					scratchInstanceMatrices.clear();
+					for (int n = 0; n < item.instanceCount; n++)
+					{
+						const int index = reflectInstanceIds[static_cast<size_t>(item.instanceBegin + n)];
+						scratchInstanceMatrices.push_back(instanceWorld[static_cast<size_t>(index)]);
+					}
+					item.mesh->drawReflectionInstanced(*reflectProgram, scratchInstanceMatrices, item.cutout);
+				}
+				else
+				{
+					item.mesh->drawReflection(*reflectProgram, item.cutout);
+				}
+			}
+			passStyle.cutout = false;
+			if (clipOn)
+				glDisable(GL_CLIP_DISTANCE0);
 			waterReflection.end();
 			reflectionPlanes[reflectionPlaneCount].height = height;
 			reflectionPlanes[reflectionPlaneCount].texture = waterReflection.colorTexture(static_cast<int>(planeIndex));
 			reflectionPlaneCount++;
 		}
+		if (gpuQueryOpen)
+		{
+			glEndQuery(GL_TIME_ELAPSED);
+			reflectionQueryPending[reflectionQuerySlot] = true;
+			reflectionQuerySlot ^= 1;
+		}
+		collectReflection = false;
+		reflectCullRect = false;
+		reflectProjectVp = nullptr;
 		inReflection = false;
+		passStyle.reflection = false;
+		passShader = &shader;
 
 		RenderStats::reflectionDrawCalls = RenderStats::drawCalls - savedDrawCalls;
 		RenderStats::reflectionPlanes = reflectionPlaneCount;
@@ -2483,8 +2989,6 @@ void Application::render(Shader& shader)
 	content.setTy1WaterClip(false, 0.0f);
 	shader.bind();
 	shader.setUniformMat4("VPMatrix", vpmatrix);
-	shader.setUniform1i("clipEnabled", 0);
-	shader.setUniform1f("clipPlaneY", 0.0f);
 	glDisable(GL_CLIP_DISTANCE0);
 	refreshInstanceVisibility(mainFrustum, true);
 
@@ -2501,6 +3005,8 @@ void Application::render(Shader& shader)
 		{
 			return aabbInFrustum(frustum, boxMin, boxMax);
 		});
+		// Grass rebinds a texture's wrap and the blend mode.
+		Mesh::invalidateDrawState();
 		shader.bind();
 	}
 	drawRoomMeshes(true);
@@ -2572,7 +3078,8 @@ void Application::render(Shader& shader)
 			RenderStats::trianglesDrawn, RenderStats::lastSceneMs,
 			RenderStats::simTicks, RenderStats::lastSimMs,
 			RenderStats::reflectionPlanes, RenderStats::reflectionDrawCalls,
-			RenderStats::lastReflectionMs);
+			RenderStats::lastReflectionMs,
+			(waterReflections && reflectionPlaneCount > 0) ? reflectionGpuMs : 0.0f);
 	}
 
 	if (selectedLevelObject >= 0 && selectedLevelObject < static_cast<int>(levelObjects.size()))

@@ -26,6 +26,9 @@ public:
 
 	void bind() const;
 	void unbind() const;
+	// The GUI and the vertex overlay call glUseProgram directly. The next bind
+	// must not assume this program is still current.
+	static void invalidateBind();
 
 	void setUniform1i(const std::string& name, int v);
 	void setUniform1f(const std::string& name, float v);
@@ -50,7 +53,22 @@ public:
 	void setUniformMat4Array(const char* name, const glm::mat4* mats, int count);
 	void setUniform1iArray(const char* name, const int* values, int count);
 
+	// Resolve once, then upload from the int. The reflection pass does this so a
+	// repeated tint or useInstancing does not hash the uniform name.
+	int uniformLocation(const char* name);
+	void setUniform1i(int location, int v);
+	void setUniform1f(int location, float v);
+	void setUniformMat4(int location, const glm::mat4& mat);
+	void setUniformMat3(int location, const glm::mat3& mat);
+
+	// Level and prop draws. No water displacement and no reflection varyings.
 	static Shader* createDefault();
+	// PC water surfaces only. Wave displacement, noise wobble, reflection sample.
+	static Shader* createWater();
+	// Reflection pass. cutout discards low alpha (tree cards, blended sheets).
+	// clip writes a clip distance for meshes that cross the plane when the oblique
+	// near plane is not in use. Opaque reflections use neither, so early-Z stays on.
+	static Shader* createReflection(bool cutout, bool clip);
 
 private:
 	unsigned int m_id;

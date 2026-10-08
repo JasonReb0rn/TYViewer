@@ -24,11 +24,15 @@ enum class MeshBlend
 };
 
 // solid skips the mesh's blend and depth setup so a stencil outline can own that state.
+// reflection draws with the reflection program, which has none of the water uniforms.
 struct MeshDrawStyle
 {
 	glm::vec4 tint{ 1.0f, 1.0f, 1.0f, 1.0f };
 	glm::vec2 clipOffset{ 0.0f, 0.0f };
 	bool solid = false;
+	bool reflection = false;
+	// Reflection cutout program. Opaque reflections have no alpha test.
+	bool cutout = false;
 };
 
 class Mesh : public Drawable, public Transformable
@@ -48,11 +52,25 @@ public:
 	// One draw call for every entry in `worlds`. Used when many level objects share
 	// this mesh (the common case for props). Skips the call when disabled or empty.
 	void drawInstanced(Shader& shader, const std::vector<glm::mat4>& worlds, const MeshDrawStyle& style = {}) const;
+	// Reflection bucket already bound this program and set the view-projection.
+	// Binds the texture when it changes, then the VAO and the draw. No water,
+	// skinning, or ripple work, and no material-name hash.
+	void drawReflection(Shader& shader, bool cutout) const;
+	void drawReflectionInstanced(Shader& shader, const std::vector<glm::mat4>& worlds, bool cutout) const;
 	// TY1 skinned draw. `bones` are model-space matrices (0 is the model root) and
 	// `boneParents[i]` is the parent matrix of bones[i]. Falls back to draw() past kMaxSkinBones.
 	static const int kMaxSkinBones = 64;
 	void drawSkinned(Shader& shader, const glm::mat4& world, const glm::mat4* bones, const int* boneParents,
 		int boneCount, const MeshDrawStyle& style = {}) const;
+
+	// Water surfaces bind this instead of the world program. Null keeps the caller's shader.
+	static void setWaterSurfaceShader(Shader* shader);
+	// Drop the cached program, blend, texture, wrap, and matrices. Call after any draw
+	// that changes that GL state without going through Mesh.
+	static void invalidateDrawState();
+	Texture* getTexture() const { return m_texture; }
+	// Masked and blended materials keep an alpha test in the reflection. Opaque ones do not.
+	bool reflectionCutsOut() const;
 
 	// Raw vertex access (debug/overlay). Order matches parsed file order.
 	const std::vector<Vertex>& getVertices() const { return m_vertices; }
@@ -86,7 +104,7 @@ public:
 	void setAlphaRef(float alphaRef) { m_alphaRef = alphaRef; }
 	float getAlphaRef() const { return m_alphaRef; }
 	// TY1 materials look up their UV animation from this. Null stays untransformed.
-	void setContent(Content* content) { m_content = content; }
+	void setContent(Content* content) { m_content = content; m_materialReady = false; }
 	// water_types.ini section for this mesh. Empty meshes are not displaced.
 	void setWaterType(const std::string& typeName);
 	const std::string& getWaterType() const { return m_waterType; }
@@ -121,6 +139,17 @@ private:
 	// Shared uniform/texture/blend state for both draw paths. Leaves modelMatrix,
 	// useInstancing, the VAO bind, and the draw call itself to the caller.
 	void prepareDraw(Shader& shader, const MeshDrawStyle& style) const;
+	// First use copies cutout, wrap, and whether the UV matrix moves. Later frames
+	// read those fields. Animated materials still look up the clocked matrix.
+	void ensureMaterial() const;
+	const void* materialDraw() const;
+	void bindCachedTexture() const;
+	// Identity when the material does not scroll. Animated materials build the clocked matrix.
+	glm::mat3 cachedUvMatrix() const;
+	// Water surfaces draw with the water program. Reflection draws keep the caller's shader.
+	Shader& programFor(Shader& passed, const MeshDrawStyle& style) const;
+
+	static Shader* s_waterSurfaceShader;
 
 	unsigned int vao, vbo, ebo;
 
@@ -146,4 +175,12 @@ private:
 	MeshBlend m_blend = MeshBlend::Opaque;
 	float m_alphaRef = 0.01f;
 	Content* m_content = nullptr;
+
+	mutable bool m_materialReady = false;
+	// Content::Ty1MaterialDraw*, stored without the type so mesh.h does not include content.h.
+	mutable const void* m_materialDraw = nullptr;
+	mutable bool m_materialCutout = false;
+	mutable bool m_uvAnimated = false;
+	mutable int m_wrapS = 0x2901;
+	mutable int m_wrapT = 0x2901;
 };
