@@ -9,6 +9,14 @@
 class Mesh;
 class Model;
 
+// Ground ignores water sheets, so a crab walks the creek bed. Support returns the sheet
+// when it is the closest hit, so a flyer stays above the river.
+enum class FloorKind
+{
+	Ground,
+	Support,
+};
+
 // Level triangles bucketed on an XZ grid. Stands in for the game's collision queries
 // (CritterField2::GetFloor / TestFloor go through CollisionTool, which is not decompiled).
 class CritterFloor
@@ -19,15 +27,17 @@ public:
 	void clear();
 	bool empty() const { return m_triangles.empty(); }
 
-	// Nearest ground hit along `dir` (unit length) within `maxDistance`. Both triangle sides hit.
-	// Water-surface collision is not ground. A hit underneath a water plane is not ground either.
-	// `outTriangle` receives the hit index when non-null, and it is never a water triangle.
+	// Nearest hit along `dir` (unit length) within `maxDistance`. Both triangle sides hit.
+	// Ground: water-surface collision is not a floor, and neither is ground under a nearer sheet.
+	// Support: the closer of the sheet and the ground. The bed under a nearer sheet is not returned.
+	// `outTriangle` receives the hit index when non-null. Ground never stores a water triangle.
 	bool cast(const glm::vec3& from, const glm::vec3& dir, float maxDistance,
-		float& outDistance, glm::vec3& outNormal, int* outTriangle = nullptr) const;
+		float& outDistance, glm::vec3& outNormal, int* outTriangle = nullptr,
+		FloorKind kind = FloorKind::Ground) const;
 	// The same test against one triangle from a previous cast. False when `triangle` is stale,
-	// a water plane, or ground that sits under a water plane.
+	// a water plane on a ground query, or a surface the other kind would not return.
 	bool testTriangle(int triangle, const glm::vec3& from, const glm::vec3& dir, float maxDistance,
-		float& outDistance, glm::vec3& outNormal) const;
+		float& outDistance, glm::vec3& outNormal, FloorKind kind = FloorKind::Ground) const;
 	// Highest ground below `from`, at most `maxDrop` down. The normal faces up.
 	// Water planes, and ground underneath them, do not count.
 	bool floorBelow(const glm::vec3& from, float maxDrop, float& outY, glm::vec3& outNormal) const;
@@ -49,9 +59,12 @@ private:
 	static bool rayTriangle(const Triangle& tri, const glm::vec3& from, const glm::vec3& dir,
 		float maxDistance, float& outDistance, glm::vec3& outNormal);
 	void testCell(int cell, const glm::vec3& from, const glm::vec3& dir, float maxDistance,
-		float& bestGround, glm::vec3& bestNormal, int& bestTriangle, float& bestWater) const;
+		float& bestGround, glm::vec3& bestNormal, int& bestTriangle,
+		float& bestWater, glm::vec3& bestWaterNormal, int& bestWaterTriangle) const;
 	// True when a water plane is hit closer than `thanDistance` by more than the shore slack.
 	bool nearerWater(const glm::vec3& from, const glm::vec3& dir, float maxDistance, float thanDistance) const;
+	// True when ground is hit closer than `thanDistance`.
+	bool nearerGround(const glm::vec3& from, const glm::vec3& dir, float maxDistance, float thanDistance) const;
 
 	std::vector<Triangle> m_triangles;
 	std::vector<std::vector<uint32_t>> m_cells;

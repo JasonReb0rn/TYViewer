@@ -190,9 +190,13 @@ private:
 	void turnToward(Critter& critter, const glm::vec3& direction, float rate) const;
 	void stepToward(Critter& critter, float speed, bool keepUpright);
 	bool snapToFloor(Critter& critter);
-	void keepAboveFloor(Critter& critter, float clearance);
+	// Ground leaves a flyer free to sink through a water sheet. Support holds them above it.
+	void keepAboveFloor(Critter& critter, float clearance, FloorKind kind = FloorKind::Ground);
+	// Raises `point` to `clearance` above the support surface when it sits lower than that.
+	void liftOntoSupport(glm::vec3& point, float clearance) const;
 	// Cached triangle first. A cell walk only runs when that triangle misses.
-	bool sampleFloor(Critter& critter, float above, float below, glm::vec3& outPoint, glm::vec3& outNormal);
+	bool sampleFloor(Critter& critter, float above, float below, glm::vec3& outPoint, glm::vec3& outNormal,
+		FloorKind kind = FloorKind::Ground);
 
 	void updateGround(Critter& critter);
 	void updateHopper(Critter& critter);

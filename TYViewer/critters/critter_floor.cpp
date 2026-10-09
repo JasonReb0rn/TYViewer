@@ -147,7 +147,8 @@ bool CritterFloor::rayTriangle(const Triangle& tri, const glm::vec3& from, const
 }
 
 void CritterFloor::testCell(int cell, const glm::vec3& from, const glm::vec3& dir, float maxDistance,
-	float& bestGround, glm::vec3& bestNormal, int& bestTriangle, float& bestWater) const
+	float& bestGround, glm::vec3& bestNormal, int& bestTriangle,
+	float& bestWater, glm::vec3& bestWaterNormal, int& bestWaterTriangle) const
 {
 	for (uint32_t t : m_cells[static_cast<size_t>(cell)])
 	{
@@ -162,8 +163,11 @@ void CritterFloor::testCell(int cell, const glm::vec3& from, const glm::vec3& di
 			continue;
 		if (tri.water)
 		{
-			if (distance < bestWater)
-				bestWater = distance;
+			if (distance >= bestWater)
+				continue;
+			bestWater = distance;
+			bestWaterNormal = normal;
+			bestWaterTriangle = static_cast<int>(t);
 			continue;
 		}
 		if (distance >= bestGround)
@@ -210,8 +214,44 @@ bool CritterFloor::nearerWater(const glm::vec3& from, const glm::vec3& dir, floa
 	return false;
 }
 
+bool CritterFloor::nearerGround(const glm::vec3& from, const glm::vec3& dir, float maxDistance, float thanDistance) const
+{
+	if (m_triangles.empty() || maxDistance <= 0.0f)
+		return false;
+	bumpStamp();
+
+	const float flat = std::sqrt(dir.x * dir.x + dir.z * dir.z) * maxDistance;
+	const int samples = std::max(1, static_cast<int>(std::ceil(flat / (m_cellSize * 0.5f)))) + 1;
+	int lastCell = -1;
+	for (int i = 0; i < samples; i++)
+	{
+		const float t = samples == 1 ? 0.0f : maxDistance * static_cast<float>(i) / static_cast<float>(samples - 1);
+		const glm::vec3 point = from + dir * t;
+		int x, z;
+		cellOf(point.x, point.z, x, z);
+		const int cell = cellIndex(x, z);
+		if (cell == lastCell)
+			continue;
+		lastCell = cell;
+		for (uint32_t index : m_cells[static_cast<size_t>(cell)])
+		{
+			if (m_stamps[index] == m_stamp)
+				continue;
+			m_stamps[index] = m_stamp;
+			const Triangle& tri = m_triangles[index];
+			if (tri.water)
+				continue;
+			float distance = 0.0f;
+			glm::vec3 normal(0.0f);
+			if (rayTriangle(tri, from, dir, maxDistance, distance, normal) && distance < thanDistance)
+				return true;
+		}
+	}
+	return false;
+}
+
 bool CritterFloor::cast(const glm::vec3& from, const glm::vec3& dir, float maxDistance,
-	float& outDistance, glm::vec3& outNormal, int* outTriangle) const
+	float& outDistance, glm::vec3& outNormal, int* outTriangle, FloorKind kind) const
 {
 	if (m_triangles.empty() || maxDistance <= 0.0f)
 		return false;
@@ -220,7 +260,9 @@ bool CritterFloor::cast(const glm::vec3& from, const glm::vec3& dir, float maxDi
 	float bestGround = std::numeric_limits<float>::max();
 	float bestWater = std::numeric_limits<float>::max();
 	glm::vec3 bestNormal(0.0f, 1.0f, 0.0f);
+	glm::vec3 bestWaterNormal(0.0f, 1.0f, 0.0f);
 	int bestTriangle = -1;
+	int bestWaterTriangle = -1;
 
 	// Visit each cell the XZ projection crosses, sampled at half a cell.
 	const float flat = std::sqrt(dir.x * dir.x + dir.z * dir.z) * maxDistance;
@@ -236,11 +278,21 @@ bool CritterFloor::cast(const glm::vec3& from, const glm::vec3& dir, float maxDi
 		if (cell == lastCell)
 			continue;
 		lastCell = cell;
-		testCell(cell, from, dir, maxDistance, bestGround, bestNormal, bestTriangle, bestWater);
+		testCell(cell, from, dir, maxDistance, bestGround, bestNormal, bestTriangle,
+			bestWater, bestWaterNormal, bestWaterTriangle);
 	}
 
-	// The seabed is under the water plane. The beach and island sit above it.
-	if (bestTriangle < 0 || bestWater + kSubmergedSlack < bestGround)
+	// The sheet is above the bed. Shore and island ground sit above the sheet, or within the slack.
+	const bool sheetFirst = bestWaterTriangle >= 0 && bestWater + kSubmergedSlack < bestGround;
+	if (kind == FloorKind::Support && sheetFirst)
+	{
+		outDistance = bestWater;
+		outNormal = bestWaterNormal;
+		if (outTriangle != nullptr)
+			*outTriangle = bestWaterTriangle;
+		return true;
+	}
+	if (bestTriangle < 0 || sheetFirst)
 		return false;
 	outDistance = bestGround;
 	outNormal = bestNormal;
@@ -250,15 +302,21 @@ bool CritterFloor::cast(const glm::vec3& from, const glm::vec3& dir, float maxDi
 }
 
 bool CritterFloor::testTriangle(int triangle, const glm::vec3& from, const glm::vec3& dir, float maxDistance,
-	float& outDistance, glm::vec3& outNormal) const
+	float& outDistance, glm::vec3& outNormal, FloorKind kind) const
 {
 	if (triangle < 0 || static_cast<size_t>(triangle) >= m_triangles.size() || maxDistance <= 0.0f)
 		return false;
-	if (m_triangles[static_cast<size_t>(triangle)].water)
+	const Triangle& tri = m_triangles[static_cast<size_t>(triangle)];
+	if (tri.water && kind != FloorKind::Support)
 		return false;
-	if (!rayTriangle(m_triangles[static_cast<size_t>(triangle)], from, dir, maxDistance, outDistance, outNormal))
+	if (!rayTriangle(tri, from, dir, maxDistance, outDistance, outNormal))
 		return false;
-	// A cached water triangle used to win for the whole plane, including under an island.
+	if (tri.water)
+	{
+		// An island closer than this cached sheet has to win, including the shore slack.
+		return !nearerGround(from, dir, maxDistance, outDistance + kSubmergedSlack);
+	}
+	// A cached bed triangle used to win for the whole plane, including under an island.
 	return !nearerWater(from, dir, maxDistance, outDistance);
 }
 

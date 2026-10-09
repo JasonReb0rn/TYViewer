@@ -447,7 +447,8 @@ void CritterField::stepToward(Critter& critter, float speed, bool keepUpright)
 	critter.position += critter.forward * speed;
 }
 
-bool CritterField::sampleFloor(Critter& critter, float above, float below, glm::vec3& outPoint, glm::vec3& outNormal)
+bool CritterField::sampleFloor(Critter& critter, float above, float below, glm::vec3& outPoint, glm::vec3& outNormal,
+	FloorKind kind)
 {
 	if (m_floor == nullptr || m_floor->empty())
 		return false;
@@ -456,14 +457,14 @@ bool CritterField::sampleFloor(Critter& critter, float above, float below, glm::
 	const float reach = above + below;
 	float distance = 0.0f;
 	glm::vec3 normal(0.0f);
-	if (m_floor->testTriangle(critter.floorTriangle, start, down, reach, distance, normal))
+	if (m_floor->testTriangle(critter.floorTriangle, start, down, reach, distance, normal, kind))
 	{
 		outPoint = start + down * distance;
 		outNormal = normal;
 		return true;
 	}
 	int triangle = -1;
-	if (!m_floor->cast(start, down, reach, distance, normal, &triangle))
+	if (!m_floor->cast(start, down, reach, distance, normal, &triangle, kind))
 	{
 		critter.floorTriangle = -1;
 		return false;
@@ -495,15 +496,34 @@ bool CritterField::snapToFloor(Critter& critter)
 	return true;
 }
 
-void CritterField::keepAboveFloor(Critter& critter, float clearance)
+void CritterField::keepAboveFloor(Critter& critter, float clearance, FloorKind kind)
 {
 	glm::vec3 hit, normal;
-	if (sampleFloor(critter, clearance, clearance, hit, normal))
+	if (sampleFloor(critter, clearance, clearance, hit, normal, kind))
 	{
 		const float height = glm::dot(critter.position - hit, fieldUp());
 		if (height < clearance)
 			critter.position += fieldUp() * (clearance - height) * 0.5f;
 	}
+}
+
+void CritterField::liftOntoSupport(glm::vec3& point, float clearance) const
+{
+	if (m_floor == nullptr || m_floor->empty() || clearance <= 0.0f)
+		return;
+	const glm::vec3 down = -fieldUp();
+	// The point may already be under the sheet. Start above the field and cast past it.
+	const float above = clearance + m_half.y + 300.0f;
+	const float reach = above + m_half.y * 2.0f + 600.0f;
+	const glm::vec3 start = point - down * above;
+	float distance = 0.0f;
+	glm::vec3 normal(0.0f);
+	if (!m_floor->cast(start, down, reach, distance, normal, nullptr, FloorKind::Support))
+		return;
+	const glm::vec3 hit = start + down * distance;
+	const float height = glm::dot(point - hit, fieldUp());
+	if (height < clearance)
+		point += fieldUp() * (clearance - height);
 }
 
 // Ibis_Idle / Ibis_Walk / Ibis_Run, Gecko_Idle / Gecko_Walk, SmallCrab_Scurry.
@@ -639,7 +659,7 @@ void CritterField::updateFlySit(Critter& critter)
 	if (!landing)
 	{
 		critter.position = clipPointToField(critter.position);
-		keepAboveFloor(critter, m_species.hopHeight);
+		keepAboveFloor(critter, m_species.hopHeight, FloorKind::Support);
 	}
 
 	if (distance > m_species.speed * 2.0f)
@@ -676,9 +696,11 @@ void CritterField::updateHover(Critter& critter)
 		glm::vec3 point;
 		if (generatePointInField(point, false))
 		{
+			liftOntoSupport(point, m_species.hopHeight);
 			critter.target = point;
 			critter.state = CritterState::Moving;
 		}
+		keepAboveFloor(critter, m_species.hopHeight, FloorKind::Support);
 		break;
 	}
 	case CritterState::Moving:
@@ -688,7 +710,7 @@ void CritterField::updateHover(Critter& critter)
 		turnToward(critter, flatten(toTarget, fieldUp()), m_species.turnRate);
 		const glm::vec3 direction = safeNormalize(toTarget, critter.forward);
 		critter.position += direction * std::min(distance, m_species.speed);
-		keepAboveFloor(critter, m_species.hopHeight);
+		keepAboveFloor(critter, m_species.hopHeight, FloorKind::Support);
 		if (distance <= m_species.speed)
 		{
 			critter.state = CritterState::WaitingMove;
@@ -698,6 +720,7 @@ void CritterField::updateHover(Critter& critter)
 	}
 	default:
 		critter.position += fieldUp() * std::sin(static_cast<float>(critter.timer) * 0.3f) * 0.6f;
+		keepAboveFloor(critter, m_species.hopHeight, FloorKind::Support);
 		if (--critter.timer <= 0)
 			critter.state = CritterState::FindPoint;
 		break;
@@ -722,7 +745,7 @@ void CritterField::updateFlock(Critter& critter)
 	climb = std::clamp(climb, -0.42f, 0.42f);
 	critter.forward = safeNormalize(safeNormalize(flat, before) * std::sqrt(1.0f - climb * climb) + fieldUp() * climb, before);
 	critter.position += critter.forward * m_species.speed;
-	keepAboveFloor(critter, m_species.hopHeight);
+	keepAboveFloor(critter, m_species.hopHeight, FloorKind::Support);
 
 	const float turn = glm::dot(glm::cross(before, critter.forward), fieldUp());
 	critter.bank += (std::clamp(-turn * 12.0f, -0.6f, 0.6f) - critter.bank) * 0.1f;
