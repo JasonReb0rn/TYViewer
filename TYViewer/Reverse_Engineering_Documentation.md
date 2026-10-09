@@ -229,7 +229,7 @@ diffuseColour.xyz += reflect.xyz * reflectAdd;
 
 ### Critters
 
-Critter fields come from instances the level marks as critters, with a large `scale` as the roam box. The species table and state names follow the TY 1 decomp (`CritterField2`, `BlitterCritter`, and the per-species states): ground animals, hoppers, flyers that land, hoverers, flocks, perchers, swimmers, turtles, surface skimmers, point idles, and sprites. The simulation runs at 30 Hz. Counts, speeds, turn rates, and timers are guesses. The game's values live in `global.model` descriptors that are not decompiled.
+Critter fields come from instances the level marks as critters, with a large `scale` as the roam box. The species table and state names follow the TY 1 decomp (`CritterField2`, `BlitterCritter`, and the per-species states): ground animals, hoppers, flyers that land, hoverers, flocks, perchers, swimmers, turtles, surface skimmers, point idles, and sprites. The simulation runs at 30 Hz. Counts, speeds, turn rates, and timers are guesses, except the kingfisher. Kingfishers cruise inside the roam box and dive along a spline to a waypoint; the wait is 30 to 60 seconds per bird, and they do not land. Kookaburras and lorikeets still perch. The other species' values live in `global.model` descriptors that are not decompiled.
 
 A species with a `.bad` script and a matching `.anm` is skinned, up to 64 bones. Fish shoals and similar entries have no script and draw a static mesh. Dragonflies and fireflies use sprite sheets. A plain fly with no sheet draws as a small marker. The walkable floor is the room meshes that are neither transparent nor named `env*`. **P** pauses the fields. Water dragons and synkers stay on their placed point and play idle.
 

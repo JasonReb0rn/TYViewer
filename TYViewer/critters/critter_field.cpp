@@ -26,9 +26,10 @@ namespace
 	const float kFloorValidDot = 0.6f;
 	const int kMaxCritters = 64;
 
-	// Every speed, turn rate, and timer below is a guess tuned by eye. The game's
-	// CritterDesc2 values come from global.model / the Desc constructors, which are
-	// not decompiled.
+	// Every speed, turn rate, and timer below is a guess tuned by eye, except the
+	// kingfisher row. CritterDesc2 values come from global.model / the Desc
+	// constructors, which are not decompiled. KingFisher::Fly and Dive are in TY.exe.
+	// The executable uses 300 and 500 units/second; the row below is four fifths of that.
 	const CritterSpecies kSpecies[] =
 	{
 		// type          move                  script                     count speed run   turn  idle      idle anims                                    move anims                    alt anims         land   hop    hopH  align
@@ -47,7 +48,7 @@ namespace
 		{ "DRAGONFLY",   CritterMove::Hover,   nullptr,                   1,    10.0f, 10.0f, 0.40f, 15, 90, "",                                          "",                           "",               "",     0.0f,  100.0f, false, "DFly_A3.dds", 40.0f, 16, true, false },
 		{ "SEAGULL",     CritterMove::Flock,   "Act_33_Seagull.bad",      1,    10.0f, 10.0f, 0.04f, 0, 0,   "",                                          "flap",                       "glide",          "",     0.0f,  300.0f, false },
 		{ "BIRDFLOCK",   CritterMove::Flock,   "ACT1_37_BIRDFLOCK.BAD",   1,    12.0f, 12.0f, 0.05f, 0, 0,   "",                                          "flap",                       "glide",          "",     0.0f,  300.0f, false },
-		{ "KINGFISHER",  CritterMove::Perch,   "Act_21_Kingfisher.bad",   1,    9.0f, 9.0f, 0.08f, 90, 300,  "idle01",                                    "fly",                        "glide",          "land", 0.0f,  200.0f, false },
+		{ "KINGFISHER",  CritterMove::Fisher,  "Act_21_Kingfisher.bad",   1,    8.0f, 13.333f, 0.05236f, 30, 90, "idle01",                                    "fly",                        "glide",          "land", 0.0f,  0.0f, false },
 		{ "KOOKABURRA",  CritterMove::Perch,   "act1_04_kookaburra.bad",  1,    9.0f, 9.0f, 0.08f, 90, 300,  "idle01|idle02|idle03",                      "flap01",                     "glide01",        "land", 0.0f,  200.0f, false },
 		{ "LORIKEET",    CritterMove::Perch,   "Act_59_Lorikeet.bad",     1,    8.0f, 8.0f, 0.10f, 60, 240,  "idle01_LR|idle02|idle03|idle04",            "fly",                        "fly",            "",     0.0f,  150.0f, false },
 		{ "CUTTLEFISH",  CritterMove::Swim,    "act1_05_cuttlefish.bad",  1,    1.5f, 6.0f, 0.06f, 30, 120,  "swim",                                      "swim",                       "swim",           "",     0.0f,  30.0f, false },
@@ -138,6 +139,68 @@ namespace
 	{
 		const float length = glm::length(v);
 		return length > 1e-5f ? v / length : fallback;
+	}
+
+	// KingFisher::Fly / Dive in TY.exe bake 300 and 500 units/second at 60 Hz.
+	// Those read a little fast against the PC game, so both are four fifths of that.
+	// A 1.5 degree yaw step is 90 degrees per second. Pitch is 1.6 degrees per frame,
+	// and the dive turns at 4 degrees per frame.
+	const float kFisherCruiseSpeed = 240.0f;
+	const float kFisherDiveSpeed = 400.0f;
+	const float kFisherYawRate = 90.0f * kPi / 180.0f;
+	const float kFisherPitchRate = 96.0f * kPi / 180.0f;
+	const float kFisherDiveTurn = 240.0f * kPi / 180.0f;
+	const float kFisherLead = 30.0f;
+
+	// Uniform Catmull-Rom. Endpoints are repeated by the caller so the tangents are chords.
+	glm::vec3 catmullRom(const glm::vec3& p0, const glm::vec3& p1, const glm::vec3& p2, const glm::vec3& p3, float t)
+	{
+		const float t2 = t * t;
+		const float t3 = t2 * t;
+		return 0.5f * ((2.0f * p1) +
+			(-p0 + p2) * t +
+			(2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 +
+			(-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+	}
+
+	float divePathLength(const glm::vec3 path[4], float chords[3])
+	{
+		float total = 0.0f;
+		for (int i = 0; i < 3; i++)
+		{
+			chords[i] = glm::length(path[i + 1] - path[i]);
+			total += chords[i];
+		}
+		return total;
+	}
+
+	// `dist` is arc distance along the chord lengths. False when the path is finished.
+	bool sampleDivePath(const glm::vec3 path[4], float dist, glm::vec3& out)
+	{
+		float chords[3];
+		const float total = divePathLength(path, chords);
+		if (total < 1e-3f || dist >= total)
+		{
+			out = path[3];
+			return false;
+		}
+		float acc = 0.0f;
+		for (int i = 0; i < 3; i++)
+		{
+			if (acc + chords[i] < dist && i < 2)
+			{
+				acc += chords[i];
+				continue;
+			}
+			const float chord = std::max(chords[i], 1e-4f);
+			const float t = std::clamp((dist - acc) / chord, 0.0f, 1.0f);
+			const glm::vec3& p0 = path[i == 0 ? 0 : i - 1];
+			const glm::vec3& p3 = path[std::min(i + 2, 3)];
+			out = catmullRom(p0, path[i], path[i + 1], p3, t);
+			return true;
+		}
+		out = path[3];
+		return false;
 	}
 
 	int fieldCount(const Ty1Instance& instance, int fallback)
@@ -357,6 +420,10 @@ void CritterField::spawn(int count)
 					point = m_center;
 			}
 		}
+		else if (move == CritterMove::Fisher)
+		{
+			fisherPoint(point);
+		}
 		else
 		{
 			generatePointInField(point, false);
@@ -383,6 +450,7 @@ void CritterField::spawn(int count)
 		{
 		case CritterMove::FlySit:
 		case CritterMove::Flock:
+		case CritterMove::Fisher:
 			critter.state = CritterState::Fly;
 			break;
 		case CritterMove::Hover:
@@ -404,6 +472,13 @@ void CritterField::spawn(int count)
 		if (move == CritterMove::Flock || move == CritterMove::FlySit || move == CritterMove::Swim
 			|| move == CritterMove::Turtle || move == CritterMove::Sprite)
 			generatePointInField(critter.target, false);
+		if (move == CritterMove::Fisher)
+		{
+			// Each bird rolls its own dive wait, so a group does not dive together.
+			critter.timer = randomTicks(30, 90);
+			critter.diveTime = randomRange(30.0f, 60.0f);
+			fisherPoint(critter.target);
+		}
 
 		if (m_assets != nullptr && m_assets->animated)
 		{
@@ -754,7 +829,131 @@ void CritterField::updateFlock(Critter& critter)
 		playAnim(critter, flap || m_assets->altAnims.empty() ? m_assets->moveAnims : m_assets->altAnims);
 }
 
-// KingFisher_Fly / KingFisher_Dive (used for the landing), Kookaburra and Lorikeet perching.
+bool CritterField::fisherPoint(glm::vec3& out)
+{
+	if (!generatePointInField(out, false))
+		return false;
+	glm::vec3 local = toLocal(out);
+	local.y *= 0.6f;
+	out = toWorld(local);
+
+	if (m_floor == nullptr || m_floor->empty())
+		return true;
+	const glm::vec3 delta = out - m_center;
+	const float dist = glm::length(delta);
+	if (dist < 1.0f)
+		return true;
+	const glm::vec3 dir = delta / dist;
+	float hitDist = 0.0f;
+	glm::vec3 normal(0.0f);
+	if (!m_floor->cast(m_center, dir, dist, hitDist, normal, nullptr, FloorKind::Support))
+		return true;
+	out = m_center + dir * std::max(0.0f, hitDist - 4.0f);
+	return true;
+}
+
+void CritterField::beginFisherDive(Critter& critter)
+{
+	const size_t index = std::min(m_waypoints.size() - 1,
+		static_cast<size_t>(random01() * static_cast<float>(m_waypoints.size())));
+	const glm::vec3 waypoint = m_waypoints[index];
+	const glm::vec3 heading = safeNormalize(critter.forward, -m_axes[2]);
+	critter.divePath[0] = critter.position;
+	critter.divePath[1] = critter.position + heading * kFisherLead;
+	critter.divePath[2] = (m_center + waypoint) * 0.5f;
+	critter.divePath[3] = waypoint;
+	critter.pathT = 0.0f;
+	critter.state = CritterState::Land;
+	if (m_assets)
+		playAnim(critter, m_assets->moveAnims.empty() ? m_assets->idleAnims : m_assets->moveAnims, true);
+}
+
+void CritterField::steerFisher(Critter& critter, const glm::vec3& direction, float yawRate, float pitchRate) const
+{
+	const glm::vec3 up = fieldUp();
+	const glm::vec3 desired = safeNormalize(direction, critter.forward);
+	const glm::vec3 flatBefore = safeNormalize(flatten(critter.forward, up), desired);
+	glm::vec3 flatDesired = flatten(desired, up);
+	if (glm::length(flatDesired) < 1e-4f)
+		flatDesired = flatBefore;
+	else
+		flatDesired = safeNormalize(flatDesired, flatBefore);
+
+	const glm::vec3 yawed = rotateToward(flatBefore, flatDesired, yawRate * kTickSeconds, up);
+	const float desiredPitch = std::atan2(glm::dot(desired, up), std::max(glm::length(flatten(desired, up)), 1e-4f));
+	const float currentPitch = std::atan2(glm::dot(critter.forward, up), std::max(glm::length(flatten(critter.forward, up)), 1e-4f));
+	const float maxPitch = pitchRate * kTickSeconds;
+	const float pitch = currentPitch + std::clamp(desiredPitch - currentPitch, -maxPitch, maxPitch);
+	critter.forward = safeNormalize(yawed * std::cos(pitch) + up * std::sin(pitch), yawed);
+
+	const float turn = glm::dot(glm::cross(flatBefore, yawed), up);
+	critter.bank += (std::clamp(-turn * 8.0f, -0.6f, 0.6f) - critter.bank) * 0.15f;
+}
+
+void CritterField::updateFisher(Critter& critter)
+{
+	if (critter.state != CritterState::Land)
+	{
+		// idle01 (frames 200-350) holds the wings still. The flap loop is fly.
+		const std::vector<int>& cruiseAnim = (m_assets && !m_assets->moveAnims.empty())
+			? m_assets->moveAnims : (m_assets ? m_assets->idleAnims : std::vector<int>{});
+		playAnim(critter, cruiseAnim);
+		if (--critter.timer <= 0)
+		{
+			fisherPoint(critter.target);
+			critter.timer = randomTicks(30, 90);
+		}
+
+		const bool aboveField = glm::dot(critter.position - m_center, fieldUp()) > 0.0f;
+		if (!m_waypoints.empty())
+		{
+			critter.diveTime -= kTickSeconds;
+			if (critter.diveTime <= 0.0f && aboveField)
+			{
+				beginFisherDive(critter);
+			}
+			else if (critter.diveTime < 0.0f)
+			{
+				critter.diveTime = 0.0f;
+			}
+		}
+
+		if (critter.state != CritterState::Land)
+		{
+			steerFisher(critter, critter.target - critter.position, kFisherYawRate, kFisherPitchRate);
+			critter.position += critter.forward * (kFisherCruiseSpeed * kTickSeconds);
+			return;
+		}
+	}
+
+	float length = 0.0f;
+	for (int i = 0; i < 3; i++)
+		length += glm::length(critter.divePath[i + 1] - critter.divePath[i]);
+	length = std::max(length, 1e-3f);
+	const float dist = critter.pathT * length + kFisherDiveSpeed * kTickSeconds;
+	glm::vec3 next(0.0f);
+	const bool flying = sampleDivePath(critter.divePath, dist, next);
+	const glm::vec3 motion = next - critter.position;
+	if (glm::length(motion) > 1e-4f)
+		steerFisher(critter, motion, kFisherDiveTurn, kFisherDiveTurn);
+	critter.position = next;
+	playAnim(critter, m_assets ? m_assets->moveAnims : std::vector<int>{});
+
+	if (!flying)
+	{
+		critter.position = critter.divePath[3];
+		critter.state = CritterState::Fly;
+		critter.pathT = 0.0f;
+		critter.diveTime = randomRange(30.0f, 60.0f);
+		critter.timer = randomTicks(30, 90);
+		fisherPoint(critter.target);
+		return;
+	}
+	critter.pathT = dist / length;
+}
+
+// Kookaburra and lorikeet: fly to a perch, land, idle.
+// Kingfishers are CritterMove::Fisher. KingFisher::Dive is the spline into a waypoint, not a landing.
 void CritterField::updatePerch(Critter& critter)
 {
 	if (critter.state == CritterState::Idle)
@@ -943,6 +1142,7 @@ void CritterField::update()
 		case CritterMove::Hover: updateHover(critter); break;
 		case CritterMove::Flock: updateFlock(critter); break;
 		case CritterMove::Perch: updatePerch(critter); break;
+		case CritterMove::Fisher: updateFisher(critter); break;
 		case CritterMove::Swim: updateSwim(critter); break;
 		case CritterMove::Turtle: updateTurtle(critter); break;
 		case CritterMove::Surface: updateSurface(critter); break;

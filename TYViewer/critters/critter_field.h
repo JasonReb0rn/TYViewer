@@ -20,7 +20,8 @@ struct Ty1Instance;
 
 // TY1 critters. The game code (CritterField2, Critter2, BlitterCritter, and the
 // per-species Desc / state classes) is only present as symbols in ty-decomp, so the
-// state names below are the game's and the movement constants are guesses.
+// state names below are the game's and most movement constants are guesses.
+// Kingfisher cruise and dive rates are measured from TY.exe.
 
 // Which movement code a species runs.
 enum class CritterMove
@@ -35,8 +36,10 @@ enum class CritterMove
 	Hover,
 	// Seagull, bird flock: always flying, flap while climbing, glide otherwise.
 	Flock,
-	// Kingfisher, kookaburra, lorikeet: Fly to a perch (a waypoint when the field has them), land, Idle.
+	// Kookaburra, lorikeet: Fly to a perch (a waypoint when the field has them), land, Idle.
 	Perch,
+	// Kingfisher: cruise inside the roam box, then spline-dive to a waypoint. Does not land.
+	Fisher,
 	// Fish, cuttlefish, seahorse: Wait / Swim / Cruise inside the volume.
 	Swim,
 	// Turtle: Swimming at the field height inside its range.
@@ -140,6 +143,10 @@ struct Critter
 	float prevBank = 0.0f;
 	int jumpTicks = 0;
 	int jumpLength = 1;
+	// Kingfisher: seconds left before a dive, and 0-1 along the dive spline.
+	float diveTime = 0.0f;
+	float pathT = 0.0f;
+	glm::vec3 divePath[4]{};
 	// Last CritterFloor triangle under this critter. -1 until a query hits.
 	int floorTriangle = -1;
 
@@ -204,6 +211,12 @@ private:
 	void updateHover(Critter& critter);
 	void updateFlock(Critter& critter);
 	void updatePerch(Critter& critter);
+	void updateFisher(Critter& critter);
+	// KingFisher::GenerateRandomPos. A point in the roam box with local height scaled
+	// by 0.6. A hit on the segment from the field center replaces it; open air is kept.
+	bool fisherPoint(glm::vec3& out);
+	void beginFisherDive(Critter& critter);
+	void steerFisher(Critter& critter, const glm::vec3& direction, float yawRate, float pitchRate) const;
 	void updateSwim(Critter& critter);
 	void updateTurtle(Critter& critter);
 	void updateSurface(Critter& critter);
