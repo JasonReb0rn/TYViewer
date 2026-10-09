@@ -390,13 +390,16 @@ const void* Mesh::materialDraw() const
 	return m_materialDraw;
 }
 
-void Mesh::bindCachedTexture() const
+void Mesh::bindCachedTexture(Texture* textureOverride) const
 {
 	ensureMaterial();
-	if (g_drawState.texture != m_texture)
+	Texture* texture = textureOverride != nullptr ? textureOverride : m_texture;
+	if (texture == nullptr)
+		return;
+	if (g_drawState.texture != texture)
 	{
-		m_texture->bind();
-		g_drawState.texture = m_texture;
+		texture->bind();
+		g_drawState.texture = texture;
 		g_drawState.activeUnit = 0;
 		g_drawState.wrapS = -1;
 		g_drawState.wrapT = -1;
@@ -582,7 +585,7 @@ void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& sty
 }
 
 void Mesh::drawSkinned(Shader& shader, const glm::mat4& world, const glm::mat4* bones, const int* boneParents,
-	int boneCount, const MeshDrawStyle& style) const
+	int boneCount, const MeshDrawStyle& style, Texture* textureOverride) const
 {
 	if (!m_enabled)
 		return;
@@ -594,6 +597,8 @@ void Mesh::drawSkinned(Shader& shader, const glm::mat4& world, const glm::mat4* 
 
 	Shader& program = programFor(shader, style);
 	prepareDraw(program, style);
+	if (textureOverride != nullptr)
+		bindCachedTexture(textureOverride);
 	program.setUniform1i("useInstancing", 0);
 	if (isIdentity())
 		uploadWorldModel(program, world, true, kIdentity);

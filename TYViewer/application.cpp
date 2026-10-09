@@ -663,13 +663,20 @@ namespace
 		critter.pose.calculateMatrices();
 		const std::vector<glm::mat4>& bones = critter.pose.matrices();
 		const int count = static_cast<int>(std::min(bones.size(), assets.boneParents.size()));
+		Texture* skin = nullptr;
+		if (!assets.skins.empty())
+		{
+			const int last = static_cast<int>(assets.skins.size()) - 1;
+			const int index = critter.skin < 0 ? 0 : (critter.skin > last ? last : critter.skin);
+			skin = assets.skins[static_cast<size_t>(index)];
+		}
 		for (Mesh* mesh : assets.model->getMeshes())
 		{
 			if (mesh == nullptr || !mesh->isEnabled())
 				continue;
 			if (pass != 2 && mesh->isTransparent() != (pass == 1))
 				continue;
-			mesh->drawSkinned(shader, world, bones.data(), assets.boneParents.data(), count, style);
+			mesh->drawSkinned(shader, world, bones.data(), assets.boneParents.data(), count, style, skin);
 		}
 	}
 
@@ -1354,7 +1361,16 @@ void Application::loadTy1Level(const std::string& levelName)
 	// Collision shells only. The drawn level mesh is far too dense to raycast every tick.
 	critters.load(levelObjects, models,
 		[this](const Mesh* mesh) { return isCollisionMesh(mesh, content); },
-		[this](const std::string& name, std::vector<char>& bytes) { return content.getActiveFileData(name, bytes); });
+		[this](const std::string& name, std::vector<char>& bytes) { return content.getActiveFileData(name, bytes); },
+		[this](const std::string& name) -> Texture*
+		{
+			if (!content.hasActiveFile(name))
+				return nullptr;
+			Texture* texture = content.load<Texture>(name);
+			if (texture == nullptr || texture == content.defaultTexture)
+				return nullptr;
+			return texture;
+		});
 	refreshCrittersToggle();
 	rebuildPropBatches();
 

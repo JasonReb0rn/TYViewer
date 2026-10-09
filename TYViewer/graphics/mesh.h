@@ -60,8 +60,9 @@ public:
 	// TY1 skinned draw. `bones` are model-space matrices (0 is the model root) and
 	// `boneParents[i]` is the parent matrix of bones[i]. Falls back to draw() past kMaxSkinBones.
 	static const int kMaxSkinBones = 64;
+	// `textureOverride` replaces the mesh texture for this draw. Blend and alpha test stay.
 	void drawSkinned(Shader& shader, const glm::mat4& world, const glm::mat4* bones, const int* boneParents,
-		int boneCount, const MeshDrawStyle& style = {}) const;
+		int boneCount, const MeshDrawStyle& style = {}, Texture* textureOverride = nullptr) const;
 
 	// Water surfaces bind this instead of the world program. Null keeps the caller's shader.
 	static void setWaterSurfaceShader(Shader* shader);
@@ -152,7 +153,7 @@ private:
 	// read those fields. Animated materials still look up the clocked matrix.
 	void ensureMaterial() const;
 	const void* materialDraw() const;
-	void bindCachedTexture() const;
+	void bindCachedTexture(Texture* textureOverride = nullptr) const;
 	// Identity when the material does not scroll. Animated materials build the clocked matrix.
 	glm::mat3 cachedUvMatrix() const;
 	// Water surfaces draw with the water program. Reflection draws keep the caller's shader.

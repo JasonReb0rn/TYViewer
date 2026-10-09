@@ -16,6 +16,7 @@
 #include "loader/assets/anm.h"
 
 class Model;
+class Texture;
 struct Ty1Instance;
 
 // TY1 critters. The game code (CritterField2, Critter2, BlitterCritter, and the
@@ -124,6 +125,8 @@ struct CritterAssets
 	std::vector<int> moveAnims;
 	std::vector<int> altAnims;
 	std::vector<int> landAnims;
+	// Alternate body textures. Empty when the species has one skin; the mesh texture is used.
+	std::vector<Texture*> skins;
 };
 
 struct Critter
@@ -152,6 +155,8 @@ struct Critter
 
 	AnimScriptPlayer anim;
 	AnmPose pose;
+	// Index into CritterAssets::skins. 0 when that list is empty.
+	int skin = 0;
 };
 
 class CritterField
@@ -248,11 +253,14 @@ class CritterSystem
 {
 public:
 	using FileReader = std::function<bool(const std::string& name, std::vector<char>& data)>;
+	// Null when the archive has no file under that name.
+	using TextureLoader = std::function<Texture*(const std::string& name)>;
 
 	void clear();
 	// Rooms are the level's room models; `solid` picks the meshes critters stand on.
 	void load(const std::vector<Ty1Instance>& instances, const std::vector<Model*>& rooms,
-		const std::function<bool(const class Mesh*)>& solid, const FileReader& readFile);
+		const std::function<bool(const class Mesh*)>& solid, const FileReader& readFile,
+		const TextureLoader& loadTexture);
 	// Real seconds. At most one 30 Hz tick; returns how many ran (0 or 1).
 	int update(float dt);
 
@@ -268,7 +276,8 @@ public:
 	const CritterField* fieldForInstance(int instanceIndex) const;
 
 private:
-	CritterAssets* assetsFor(Model* model, const CritterSpecies& species, const FileReader& readFile);
+	CritterAssets* assetsFor(Model* model, const CritterSpecies& species, const FileReader& readFile,
+		const TextureLoader& loadTexture);
 
 	CritterFloor m_floor;
 	std::unordered_map<std::string, std::unique_ptr<CritterAssets>> m_assets;

@@ -65,6 +65,37 @@ namespace
 		{ "FIREFLY",     CritterMove::Sprite,  nullptr,                   6,    3.0f, 3.0f, 0.15f, 0, 0,     "",                                          "",                           "",               "",     0.0f,  0.0f, false, "fx_072.dds", 20.0f, 8, false, true },
 	};
 
+	// TY.exe SetMaterial lists. Gecko is [0, 2). Wallaby is [0, 4), and index 0 is the
+	// unnumbered texture. The mesh itself only names Gecko00 and Wallaby01.
+	const char* const kGeckoSkins[] = { "Act_55_Gecko00.dds", "Act_55_Gecko01.dds" };
+	const char* const kWallabySkins[] = {
+		"Act_46_Wallaby.dds", "Act_46_Wallaby01.dds", "Act_46_Wallaby02.dds", "Act_46_Wallaby03.dds"
+	};
+
+	struct SkinList
+	{
+		const char* type;
+		const char* const* files;
+		int count;
+	};
+
+	const SkinList* findSkinList(const char* type)
+	{
+		static const SkinList kLists[] =
+		{
+			{ "GECKO", kGeckoSkins, 2 },
+			{ "WALLABY", kWallabySkins, 4 },
+		};
+		if (type == nullptr)
+			return nullptr;
+		for (const SkinList& list : kLists)
+		{
+			if (std::string(type) == list.type)
+				return &list;
+		}
+		return nullptr;
+	}
+
 	std::string upper(std::string value)
 	{
 		std::transform(value.begin(), value.end(), value.begin(),
@@ -395,6 +426,8 @@ bool CritterField::generatePointInField(glm::vec3& out, bool onFloor)
 
 void CritterField::spawn(int count)
 {
+	// Snapshot before placement rolls. Skin uses a side stream so those rolls stay put.
+	const uint32_t layoutSeed = m_seed;
 	const CritterMove move = m_species.move;
 	const bool grounded = move == CritterMove::Ground || move == CritterMove::Hopper
 		|| (move == CritterMove::Point && m_species.alignToFloor);
@@ -501,6 +534,15 @@ void CritterField::spawn(int count)
 		critter.prevPosition = critter.position;
 		critter.prevForward = critter.forward;
 		critter.prevUp = critter.up;
+
+		if (m_assets != nullptr && m_assets->skins.size() > 1)
+		{
+			uint32_t skinSeed = layoutSeed ^ (static_cast<uint32_t>(i) * 0x9E3779B9u + 0x85EBCA6Bu);
+			skinSeed ^= skinSeed << 13;
+			skinSeed ^= skinSeed >> 17;
+			skinSeed ^= skinSeed << 5;
+			critter.skin = static_cast<int>(skinSeed % static_cast<uint32_t>(m_assets->skins.size()));
+		}
 	}
 }
 
@@ -1214,7 +1256,8 @@ void CritterSystem::clear()
 	m_accumulator = 0.0f;
 }
 
-CritterAssets* CritterSystem::assetsFor(Model* model, const CritterSpecies& species, const FileReader& readFile)
+CritterAssets* CritterSystem::assetsFor(Model* model, const CritterSpecies& species, const FileReader& readFile,
+	const TextureLoader& loadTexture)
 {
 	const std::string key = std::string(species.type) + "|" + std::to_string(reinterpret_cast<uintptr_t>(model));
 	auto it = m_assets.find(key);
@@ -1223,6 +1266,15 @@ CritterAssets* CritterSystem::assetsFor(Model* model, const CritterSpecies& spec
 
 	auto assets = std::make_unique<CritterAssets>();
 	assets->model = model;
+
+	if (const SkinList* skins = findSkinList(species.type))
+	{
+		for (int i = 0; i < skins->count; i++)
+		{
+			if (Texture* texture = loadTexture(skins->files[i]))
+				assets->skins.push_back(texture);
+		}
+	}
 
 	std::vector<char> bytes;
 	if (species.script != nullptr && readFile(species.script, bytes) && !bytes.empty()
@@ -1281,7 +1333,7 @@ CritterAssets* CritterSystem::assetsFor(Model* model, const CritterSpecies& spec
 }
 
 void CritterSystem::load(const std::vector<Ty1Instance>& instances, const std::vector<Model*>& rooms,
-	const std::function<bool(const Mesh*)>& solid, const FileReader& readFile)
+	const std::function<bool(const Mesh*)>& solid, const FileReader& readFile, const TextureLoader& loadTexture)
 {
 	clear();
 	m_floor.build(rooms, solid);
@@ -1299,12 +1351,13 @@ void CritterSystem::load(const std::vector<Ty1Instance>& instances, const std::v
 		if (instance.model == nullptr && !meshless)
 			continue;
 
-		CritterAssets* assets = meshless ? nullptr : assetsFor(instance.model, *species, readFile);
+		CritterAssets* assets = meshless ? nullptr : assetsFor(instance.model, *species, readFile, loadTexture);
 		auto field = std::make_unique<CritterField>(instance, index, *species, assets, &m_floor);
 		critterTotal += static_cast<int>(field->critters().size());
 		Debug::log("Critter field " + instance.typeName + " #" + std::to_string(index)
 			+ ": " + std::to_string(field->critters().size()) + " critters"
-			+ (assets && assets->animated ? ", animated (" + std::to_string(assets->anm.nodes.size()) + " nodes)" : ", static"));
+			+ (assets && assets->animated ? ", animated (" + std::to_string(assets->anm.nodes.size()) + " nodes)" : ", static")
+			+ (assets && assets->skins.size() > 1 ? ", " + std::to_string(assets->skins.size()) + " skins" : ""));
 		m_fieldByInstance[index] = m_fields.size();
 		m_fields.push_back(std::move(field));
 	}
