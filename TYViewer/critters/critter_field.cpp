@@ -906,8 +906,9 @@ void CritterField::beginFisherDive(Critter& critter)
 	critter.divePath[3] = waypoint;
 	critter.pathT = 0.0f;
 	critter.state = CritterState::Land;
+	// glide is one held frame (wings open). fly is the cruise flap.
 	if (m_assets)
-		playAnim(critter, m_assets->moveAnims.empty() ? m_assets->idleAnims : m_assets->moveAnims, true);
+		playAnim(critter, m_assets->altAnims, true);
 }
 
 void CritterField::steerFisher(Critter& critter, const glm::vec3& direction, float yawRate, float pitchRate) const
@@ -936,7 +937,7 @@ void CritterField::updateFisher(Critter& critter)
 {
 	if (critter.state != CritterState::Land)
 	{
-		// idle01 (frames 200-350) holds the wings still. The flap loop is fly.
+		// fly flaps. idle01 is the perch pose; the dive holds glide instead.
 		const std::vector<int>& cruiseAnim = (m_assets && !m_assets->moveAnims.empty())
 			? m_assets->moveAnims : (m_assets ? m_assets->idleAnims : std::vector<int>{});
 		playAnim(critter, cruiseAnim);
@@ -979,7 +980,8 @@ void CritterField::updateFisher(Critter& critter)
 	if (glm::length(motion) > 1e-4f)
 		steerFisher(critter, motion, kFisherDiveTurn, kFisherDiveTurn);
 	critter.position = next;
-	playAnim(critter, m_assets ? m_assets->moveAnims : std::vector<int>{});
+	// Same tick as beginFisherDive. Leaving this on fly would flap through the dive.
+	playAnim(critter, m_assets ? m_assets->altAnims : std::vector<int>{});
 
 	if (!flying)
 	{
