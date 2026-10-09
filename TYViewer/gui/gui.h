@@ -82,6 +82,14 @@ public:
 		Error
 	};
 
+	// Viewport water reflections. High is 1024, medium is 512, off skips the pass.
+	enum class WaterView
+	{
+		High,
+		Med,
+		Off
+	};
+
 	// Shows a temporary banner to the right of the export buttons.
 	// Duration is in seconds. Call again to replace the current banner.
 	void showNotification(const std::string& message,
@@ -103,6 +111,10 @@ public:
 	void setOnCrittersToggle(std::function<void()> callback);
 	// available: the level has critter fields. playing: they are moving.
 	void setCrittersToggle(bool available, bool playing);
+	void setOnWaterToggle(std::function<void()> callback);
+	void setWaterQuality(WaterView quality);
+	// available: a TY 1 level is open. The button stays dim until then.
+	void setWaterAvailable(bool available);
 	
 	// Model debugging
 	void setCurrentModel(class Model* model, const std::string& modelName);
@@ -194,6 +206,7 @@ private:
 	void renderCollisionButton();
 	void renderBoundsButton();
 	void renderCrittersButton();
+	void renderWaterButton();
 	void renderNotificationBanner();
 	void renderScrollbar();
 	void renderModelInfo();
@@ -243,6 +256,7 @@ private:
 	GuiRect collisionButtonRect;
 	GuiRect boundsButtonRect;
 	GuiRect crittersButtonRect;
+	GuiRect waterButtonRect;
 	GuiRect notificationRect;
 	GuiRect dropdownRect;
 	GuiRect submenuRect;
@@ -364,6 +378,9 @@ private:
 	std::function<void()> onCrittersToggle;
 	bool crittersAvailable = false;
 	bool crittersPlaying = true;
+	std::function<void()> onWaterToggle;
+	bool waterAvailable = false;
+	WaterView waterQuality = WaterView::High;
 
 	// Notification state
 	bool notificationActive = false;

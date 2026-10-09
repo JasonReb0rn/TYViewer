@@ -261,6 +261,8 @@ void Gui::initialize(int width, int height)
 	collisionButtonRect = {recenterButtonRect.x + recenterButtonRect.width + 10.0f, 10.0f, 96.0f, 30.0f};
 	boundsButtonRect = {collisionButtonRect.x + collisionButtonRect.width + 10.0f, 10.0f, 144.0f, 30.0f};
 	crittersButtonRect = {boundsButtonRect.x + boundsButtonRect.width + 10.0f, 10.0f, 168.0f, 30.0f};
+	// "Water: High" is the longest label. 8 px per glyph plus 12 px padding each side.
+	waterButtonRect = {crittersButtonRect.x + crittersButtonRect.width + 10.0f, 10.0f, 24.0f + 8.0f * 11.0f, 30.0f};
 	
 	// Model info panel on the right
 	modelInfoRect = {(float)width - 310.0f, 10.0f, 300.0f, 150.0f};
@@ -650,6 +652,7 @@ void Gui::render()
 	renderCollisionButton();
 	renderBoundsButton();
 	renderCrittersButton();
+	renderWaterButton();
 	renderNotificationBanner();
 	
 	if (dropdownOpen)
@@ -967,6 +970,72 @@ void Gui::setCrittersToggle(bool available, bool playing)
 	crittersPlaying = playing;
 }
 
+void Gui::renderWaterButton()
+{
+	glUseProgram(shaderProgram);
+	glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
+	glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+
+	const char* label = "Water: Off";
+	if (waterQuality == WaterView::High)
+		label = "Water: High";
+	else if (waterQuality == WaterView::Med)
+		label = "Water: Med";
+
+	waterButtonRect.x = crittersButtonRect.x + crittersButtonRect.width + 10.0f;
+	waterButtonRect.y = crittersButtonRect.y;
+	waterButtonRect.height = crittersButtonRect.height;
+	waterButtonRect.width = 24.0f + 8.0f * static_cast<float>(std::strlen("Water: High"));
+
+	const bool hovered = waterAvailable && waterButtonRect.contains(mouseX, mouseY);
+	const bool reflecting = waterQuality != WaterView::Off;
+
+	glm::vec4 bgColor;
+	glm::vec4 textColor;
+	if (!waterAvailable)
+	{
+		bgColor = glm::vec4(0.14f, 0.14f, 0.14f, 0.8f);
+		textColor = glm::vec4(0.45f, 0.45f, 0.45f, 1.0f);
+	}
+	else if (reflecting)
+	{
+		bgColor = hovered ? glm::vec4(0.35f, 0.55f, 0.32f, 0.98f) : glm::vec4(0.22f, 0.42f, 0.22f, 0.95f);
+		textColor = glm::vec4(0.95f, 0.95f, 0.95f, 1.0f);
+	}
+	else
+	{
+		bgColor = hovered ? glm::vec4(0.32f, 0.32f, 0.32f, 0.95f) : glm::vec4(0.18f, 0.18f, 0.18f, 0.9f);
+		textColor = glm::vec4(0.75f, 0.75f, 0.75f, 1.0f);
+	}
+
+	const float x = waterButtonRect.x;
+	const float y = waterButtonRect.y;
+	const float w = waterButtonRect.width;
+	const float h = waterButtonRect.height;
+	drawRect(x, y, w, h, bgColor);
+	drawRect(x, y, w, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(x, y + h - 2.0f, w, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(x, y, 2.0f, h, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+	drawRect(x + w - 2.0f, y, 2.0f, h, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+
+	drawText(label, x + 12.0f, y + 11.0f, textColor);
+}
+
+void Gui::setOnWaterToggle(std::function<void()> callback)
+{
+	onWaterToggle = callback;
+}
+
+void Gui::setWaterQuality(WaterView quality)
+{
+	waterQuality = quality;
+}
+
+void Gui::setWaterAvailable(bool available)
+{
+	waterAvailable = available;
+}
+
 void Gui::setOnCollisionToggle(std::function<void()> callback)
 {
 	onCollisionToggle = callback;
@@ -982,7 +1051,7 @@ void Gui::renderNotificationBanner()
 {
 	// Banner sits to the right of the header buttons.
 	const float kPad = 10.0f;
-	const float x = crittersButtonRect.x + crittersButtonRect.width + kPad;
+	const float x = waterButtonRect.x + waterButtonRect.width + kPad;
 	const float y = exportRawButtonRect.y;
 	const float h = exportRawButtonRect.height;
 	const float maxW = (float)windowWidth - x - kPad;
@@ -1404,6 +1473,13 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				return;
 			}
 
+			if (waterButtonRect.contains(x, y))
+			{
+				if (waterAvailable && onWaterToggle)
+					onWaterToggle();
+				return;
+			}
+
 			if (buttonRect.contains(x, y))
 			{
 				dropdownOpen = !dropdownOpen;
@@ -1686,7 +1762,7 @@ void Gui::onMouseMove(float x, float y)
 	mouseX = x;
 	mouseY = y;
 	
-	hovering = buttonRect.contains(x, y) || exportButtonRect.contains(x, y) || exportRawButtonRect.contains(x, y) || recenterButtonRect.contains(x, y) || collisionButtonRect.contains(x, y) || boundsButtonRect.contains(x, y) || crittersButtonRect.contains(x, y) ||
+	hovering = buttonRect.contains(x, y) || exportButtonRect.contains(x, y) || exportRawButtonRect.contains(x, y) || recenterButtonRect.contains(x, y) || collisionButtonRect.contains(x, y) || boundsButtonRect.contains(x, y) || crittersButtonRect.contains(x, y) || waterButtonRect.contains(x, y) ||
 		(dropdownOpen && dropdownRect.contains(x, y)) || (submenuOpen && submenuRect.contains(x, y));
 	
 	// Track hovered submenu item

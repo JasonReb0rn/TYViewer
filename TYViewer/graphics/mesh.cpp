@@ -185,6 +185,7 @@ Mesh::Mesh() :
 	m_materialName(""),
 	m_materialNameLower(""),
 	m_partName(""),
+	m_envSky(false),
 	m_subobjectGroup(-1),
 	m_enabled(true),
 	m_defaultEnabled(true),
@@ -207,6 +208,7 @@ Mesh::Mesh(const std::vector<Vertex>& vertices,
 	m_materialName(materialName),
 	m_materialNameLower(toLowerAscii(materialName)),
 	m_partName(partName),
+	m_envSky(toLowerAscii(partName) == "env_sky"),
 	m_subobjectGroup(-1),
 	m_enabled(true),
 	m_defaultEnabled(true),
@@ -322,10 +324,22 @@ void Mesh::draw(Shader& shader) const
 }
 
 Shader* Mesh::s_waterSurfaceShader = nullptr;
+Shader* Mesh::s_simpleWaterShader = nullptr;
+bool Mesh::s_simpleWater = false;
 
 void Mesh::setWaterSurfaceShader(Shader* shader)
 {
 	s_waterSurfaceShader = shader;
+}
+
+void Mesh::setSimpleWaterShader(Shader* shader)
+{
+	s_simpleWaterShader = shader;
+}
+
+void Mesh::setSimpleWater(bool enabled)
+{
+	s_simpleWater = enabled;
 }
 
 void Mesh::invalidateDrawState()
@@ -416,9 +430,14 @@ glm::mat3 Mesh::cachedUvMatrix() const
 
 Shader& Mesh::programFor(Shader& passed, const MeshDrawStyle& style) const
 {
-	if (!style.reflection && s_waterSurfaceShader != nullptr && isWaterSurface()
+	if (!style.reflection && isWaterSurface()
 		&& m_content != nullptr && m_content->ty1WaterTypeFor(m_waterType) != nullptr)
-		return *s_waterSurfaceShader;
+	{
+		if (s_simpleWater && s_simpleWaterShader != nullptr)
+			return *s_simpleWaterShader;
+		if (s_waterSurfaceShader != nullptr)
+			return *s_waterSurfaceShader;
+	}
 	return passed;
 }
 
@@ -436,7 +455,9 @@ void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 	if (!m_waterType.empty() && m_content)
 		waterType = m_content->ty1WaterTypeFor(m_waterType);
 
-	const bool waterProgram = s_waterSurfaceShader != nullptr && &shader == s_waterSurfaceShader;
+	const bool pcWater = s_waterSurfaceShader != nullptr && &shader == s_waterSurfaceShader;
+	const bool simpleWater = s_simpleWaterShader != nullptr && &shader == s_simpleWaterShader;
+	const bool waterProgram = pcWater || simpleWater;
 	const glm::vec4 waveColour = waterType != nullptr ? waterType->color : glm::vec4(1.0f);
 	const glm::vec4 tint = style.solid ? style.tint : (waterProgram ? waveColour : glm::vec4(1.0f));
 	shader.setUniform4f("tintColour", tint);
@@ -444,7 +465,7 @@ void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 	if (!style.reflection || style.cutout)
 		shader.setUniform1f("alphaRef", m_alphaRef);
 
-	if (waterProgram && waterType != nullptr)
+	if (pcWater && waterType != nullptr)
 	{
 		// 0x5c0060. 1a is dir x, dir z, frequency, phase. 1b.x is the negated height.
 		shader.setUniform4f("waterWaveCoeffs1a", glm::vec4(waterType->wave0DirX, waterType->wave0DirZ, waterType->wave0Freq, waterType->wave0Phase));
@@ -453,8 +474,18 @@ void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 		shader.setUniform4f("waterWaveCoeffs2b", glm::vec4(-waterType->wave1Height, 0.0f, 0.0f, 0.0f));
 		shader.setUniform4f("waterWobbleCoeffs1", glm::vec4(waterType->distanceScale, 0.0f, 0.0f, waterType->time));
 		shader.setUniform4f("waterWobbleCoeffs2", glm::vec4(waterType->wobbleUVScale, waterType->wobbleUVScale, waterType->noiseScale, waterType->reflectWobble));
-		const float invSize = 1.0f / static_cast<float>(WaterReflection::kSize);
+		const float invSize = 1.0f / static_cast<float>(WaterReflection::resolution());
 		shader.setUniform4f("waterReflectCoeff", glm::vec4(invSize, invSize, waterType->reflectMix, waterType->reflectAdd));
+	}
+	else if (simpleWater && waterType != nullptr)
+	{
+		// Same displacement as the PC shader. The fragment is the GameCube ripple, not the reflection.
+		shader.setUniform4f("waterWaveCoeffs1a", glm::vec4(waterType->wave0DirX, waterType->wave0DirZ, waterType->wave0Freq, waterType->wave0Phase));
+		shader.setUniform4f("waterWaveCoeffs1b", glm::vec4(-waterType->wave0Height, 0.0f, 0.0f, 0.0f));
+		shader.setUniform4f("waterWaveCoeffs2a", glm::vec4(waterType->wave1DirX, waterType->wave1DirZ, waterType->wave1Freq, waterType->wave1Phase));
+		shader.setUniform4f("waterWaveCoeffs2b", glm::vec4(-waterType->wave1Height, 0.0f, 0.0f, 0.0f));
+		shader.setUniform2f("clipOffset", style.solid ? style.clipOffset : glm::vec2(0.0f));
+		shader.setUniform1i("solidColour", style.solid ? 1 : 0);
 	}
 	else if (!style.reflection)
 	{
@@ -479,7 +510,7 @@ void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 	// pipeline, so only do it when this texture's wrap actually changes.
 	bindCachedTexture();
 
-	if (waterProgram && waterType != nullptr && m_hasWaterSurface && m_content != nullptr)
+	if (pcWater && waterType != nullptr && m_hasWaterSurface && m_content != nullptr)
 	{
 		int reflectEnabled = 0;
 		Texture* noise = m_content->ty1WaterNoise();

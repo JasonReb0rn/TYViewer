@@ -65,6 +65,9 @@ public:
 
 	// Water surfaces bind this instead of the world program. Null keeps the caller's shader.
 	static void setWaterSurfaceShader(Shader* shader);
+	// GameCube ripple plus wave displacement, used when reflections are off.
+	static void setSimpleWaterShader(Shader* shader);
+	static void setSimpleWater(bool enabled);
 	// Drop the cached program, blend, texture, wrap, and matrices. Call after any draw
 	// that changes that GL state without going through Mesh.
 	static void invalidateDrawState();
@@ -90,6 +93,8 @@ public:
 	std::string getMaterialName() const { return m_materialName; }
 	// Human-facing "mesh part"/component/subobject name (when available).
 	std::string getPartName() const { return m_partName; }
+	// Part name Env_Sky, decided once. Reflections never distance-cull it.
+	bool isEnvSky() const { return m_envSky; }
 	// Meshes created from one TY1 subobject share a group. -1 means ungrouped.
 	void setSubobjectGroup(int group) { m_subobjectGroup = group; }
 	int getSubobjectGroup() const { return m_subobjectGroup; }
@@ -150,6 +155,8 @@ private:
 	Shader& programFor(Shader& passed, const MeshDrawStyle& style) const;
 
 	static Shader* s_waterSurfaceShader;
+	static Shader* s_simpleWaterShader;
+	static bool s_simpleWater;
 
 	unsigned int vao, vbo, ebo;
 
@@ -163,6 +170,7 @@ private:
 	// times per draw call (uv matrix, wrap, water), each re-lowercasing the name.
 	std::string m_materialNameLower;
 	std::string m_partName;
+	bool m_envSky = false;
 	std::string m_waterType;
 	bool m_hasWaterSurface = false;
 	float m_waterSurfaceY = 0.0f;

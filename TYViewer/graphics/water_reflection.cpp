@@ -2,7 +2,14 @@
 
 #include "debug.h"
 
-WaterReflection::~WaterReflection()
+int WaterReflection::s_resolution = WaterReflection::kHighSize;
+
+int WaterReflection::resolution()
+{
+	return s_resolution;
+}
+
+void WaterReflection::releaseTargets()
 {
 	for (Target& target : m_targets)
 	{
@@ -16,6 +23,23 @@ WaterReflection::~WaterReflection()
 		target.color = 0;
 		target.depth = 0;
 	}
+}
+
+WaterReflection::~WaterReflection()
+{
+	releaseTargets();
+}
+
+void WaterReflection::setSize(int size)
+{
+	if (size != kMedSize)
+		size = kHighSize;
+	s_resolution = size;
+	if (m_size == size)
+		return;
+	releaseTargets();
+	m_size = size;
+	m_failed = false;
 }
 
 bool WaterReflection::ensure()
@@ -34,7 +58,7 @@ bool WaterReflection::ensure()
 		glGenFramebuffers(1, &target.fbo);
 		glGenTextures(1, &target.color);
 		glBindTexture(GL_TEXTURE_2D, target.color);
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kSize, kSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_size, m_size, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -42,7 +66,7 @@ bool WaterReflection::ensure()
 
 		glGenRenderbuffers(1, &target.depth);
 		glBindRenderbuffer(GL_RENDERBUFFER, target.depth);
-		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, kSize, kSize);
+		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, m_size, m_size);
 
 		glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
 		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target.color, 0);
@@ -88,7 +112,7 @@ bool WaterReflection::begin(int plane, unsigned savedFbo, int viewportX, int vie
 	if (!ensure())
 		return false;
 	glBindFramebuffer(GL_FRAMEBUFFER, m_targets[plane].fbo);
-	glViewport(0, 0, kSize, kSize);
+	glViewport(0, 0, m_size, m_size);
 	glDisable(GL_SCISSOR_TEST);
 	glEnable(GL_DEPTH_TEST);
 	glDepthFunc(GL_GEQUAL);
@@ -116,10 +140,10 @@ void WaterReflection::setDrawRect(int x, int y, int width, int height)
 		height += y;
 		y = 0;
 	}
-	if (x + width > kSize)
-		width = kSize - x;
-	if (y + height > kSize)
-		height = kSize - y;
+	if (x + width > m_size)
+		width = m_size - x;
+	if (y + height > m_size)
+		height = m_size - y;
 	if (width < 0)
 		width = 0;
 	if (height < 0)

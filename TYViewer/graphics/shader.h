@@ -65,6 +65,8 @@ public:
 	static Shader* createDefault();
 	// PC water surfaces only. Wave displacement, noise wobble, reflection sample.
 	static Shader* createWater();
+	// Reflections off. Wave displacement plus the GameCube indirect ripple.
+	static Shader* createSimpleWater();
 	// Reflection pass. cutout discards low alpha (tree cards, blended sheets).
 	// clip writes a clip distance for meshes that cross the plane when the oblique
 	// near plane is not in use. Opaque reflections use neither, so early-Z stays on.

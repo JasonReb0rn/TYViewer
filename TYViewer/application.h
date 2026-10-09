@@ -72,8 +72,8 @@ private:
 	bool drawBones = true;
 	bool drawVertexIds = false;
 	bool drawGrass = true;
-	// Planar water reflections. R toggles this, matching ReflectionDetail = off.
-	bool waterReflections = true;
+	// Planar water reflections. R and the header button cycle high, medium, and off.
+	Gui::WaterView waterQuality = Gui::WaterView::High;
 	WaterReflection waterReflection;
 
 	bool wireframe = false;
@@ -93,6 +93,8 @@ private:
 	Shader* basic;
 	// Water surfaces only. The world program does not carry their varyings.
 	Shader* waterShader = nullptr;
+	// GameCube ripple and wave displacement, used when water reflections are off.
+	Shader* simpleWaterShader = nullptr;
 	// Reflection programs. Opaque has no discard and no clip distance, so early-Z stays on.
 	// Cutout is masked and blended cards. The clip pair is only for meshes that cross the
 	// plane when the oblique near plane cannot be built.
@@ -151,6 +153,8 @@ private:
 	void drawSelectedObjectOutline(Shader& shader, const Ty1Instance& instance);
 	void refreshCollisionToggle();
 	void refreshCrittersToggle();
+	void refreshWaterToggle();
+	void cycleWaterQuality();
 	const std::vector<std::unique_ptr<Mesh>>& critterSpriteFramesFor(const CritterSpecies& species);
 	// Each critter in `field` with its model and world matrix between the last two ticks.
 	void forEachCritterDraw(CritterField& field, const std::function<void(Model&, const glm::mat4&, Critter&)>& visit) const;

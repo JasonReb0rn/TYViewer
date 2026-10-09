@@ -330,11 +330,13 @@ void Application::initialize()
 	shader->setUniformMat3("uvMatrix", glm::mat3(1.0f));
 
 	waterShader = Shader::createWater();
+	simpleWaterShader = Shader::createSimpleWater();
 	reflectOpaqueShader = Shader::createReflection(false, false);
 	reflectCutoutShader = Shader::createReflection(true, false);
 	reflectClipShader = Shader::createReflection(false, true);
 	reflectCutoutClipShader = Shader::createReflection(true, true);
 	Mesh::setWaterSurfaceShader(waterShader);
+	Mesh::setSimpleWaterShader(simpleWaterShader);
 	if (waterShader != nullptr)
 	{
 		waterShader->bind();
@@ -343,6 +345,16 @@ void Application::initialize()
 		waterShader->setUniform1i("reflectTexture", 3);
 		waterShader->setUniform1i("useInstancing", 0);
 		waterShader->setUniform1i("reflectEnabled", 0);
+	}
+	if (simpleWaterShader != nullptr)
+	{
+		simpleWaterShader->bind();
+		simpleWaterShader->setUniform1i("diffuseTexture", 0);
+		simpleWaterShader->setUniform1i("waterRipple", 1);
+		simpleWaterShader->setUniform1i("water", 0);
+		simpleWaterShader->setUniform1i("useInstancing", 0);
+		simpleWaterShader->setUniform1i("solidColour", 0);
+		simpleWaterShader->setUniformMat3("uvMatrix", glm::mat3(1.0f));
 	}
 	Shader* reflectPrograms[] = { reflectOpaqueShader, reflectCutoutShader, reflectClipShader, reflectCutoutClipShader };
 	for (Shader* reflectProgram : reflectPrograms)
@@ -470,6 +482,10 @@ void Application::initialize()
 		critters.setPaused(!critters.paused());
 		refreshCrittersToggle();
 	});
+	gui->setOnWaterToggle([this]() {
+		cycleWaterQuality();
+	});
+	gui->setWaterQuality(waterQuality);
 	
 	// Load initial model if specified in config
 	if (!Config::model.empty() && (ty1Loaded || ty2Loaded))
@@ -489,6 +505,7 @@ void Application::loadModel(const std::string& modelName, int archiveIndex)
 	// Clear existing models
 	clearModels();
 	viewingLevel = false;
+	refreshWaterToggle();
 	drawGrid = true;
 	
 	// Set active archive
@@ -820,12 +837,20 @@ namespace
 		return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 	}
 
+	// 0 when the camera's XZ is inside the box. The reflection mirror does not change XZ.
+	float closestXzDistance(const glm::vec3& boxMin, const glm::vec3& boxMax, const glm::vec3& camera)
+	{
+		const float dx = camera.x < boxMin.x ? boxMin.x - camera.x : (camera.x > boxMax.x ? camera.x - boxMax.x : 0.0f);
+		const float dz = camera.z < boxMin.z ? boxMin.z - camera.z : (camera.z > boxMax.z ? camera.z - boxMax.z : 0.0f);
+		return std::sqrt(dx * dx + dz * dz);
+	}
+
 	// False when the reflected box misses the water rectangle. A corner behind the
 	// camera may still cover the rect, so that box is kept.
-	bool reflectAabbOverlapsRect(const glm::mat4& vp, const glm::vec3& boxMin, const glm::vec3& boxMax, const PixelRect& rect)
+	bool reflectAabbOverlapsRect(const glm::mat4& vp, const glm::vec3& boxMin, const glm::vec3& boxMax, const PixelRect& rect, int target)
 	{
 		PixelRect projected;
-		if (!tryProjectAabb(vp, boxMin, boxMax, WaterReflection::kSize, projected))
+		if (!tryProjectAabb(vp, boxMin, boxMax, target, projected))
 			return true;
 		if (projected.w <= 0 || projected.h <= 0)
 			return false;
@@ -1127,6 +1152,8 @@ void Application::refreshObjectInspector()
 void Application::loadTy1Level(const std::string& levelName)
 {
 	clearModels();
+	viewingLevel = false;
+	refreshWaterToggle();
 	drawGrid = false;
 	showLevelExtras = true;
 	content.setActiveArchive(0);
@@ -1344,6 +1371,7 @@ void Application::loadTy1Level(const std::string& levelName)
 	}
 
 	viewingLevel = true;
+	refreshWaterToggle();
 	setCollisionMeshesVisible(false);
 	capturePartDefaults();
 	frameCameraOnLoadedModels();
@@ -1384,6 +1412,7 @@ void Application::inspectTy2Level(const std::string& levelName)
 {
 	clearModels();
 	viewingLevel = false;
+	refreshWaterToggle();
 	drawGrid = false;
 	content.setActiveArchive(1);
 	currentModelArchiveIndex = 1;
@@ -2014,6 +2043,26 @@ void Application::refreshCrittersToggle()
 		gui->setCrittersToggle(!critters.empty(), !critters.paused());
 }
 
+void Application::refreshWaterToggle()
+{
+	if (gui)
+		gui->setWaterAvailable(viewingLevel);
+}
+
+void Application::cycleWaterQuality()
+{
+	if (!viewingLevel)
+		return;
+	if (waterQuality == Gui::WaterView::High)
+		waterQuality = Gui::WaterView::Med;
+	else if (waterQuality == Gui::WaterView::Med)
+		waterQuality = Gui::WaterView::Off;
+	else
+		waterQuality = Gui::WaterView::High;
+	if (gui != nullptr)
+		gui->setWaterQuality(waterQuality);
+}
+
 const std::vector<std::unique_ptr<Mesh>>& Application::critterSpriteFramesFor(const CritterSpecies& species)
 {
 	const std::string texture = species.sprite;
@@ -2106,12 +2155,16 @@ void Application::terminate()
 {
 	cleanupVertexIdOverlay();
 	Mesh::setWaterSurfaceShader(nullptr);
+	Mesh::setSimpleWaterShader(nullptr);
+	Mesh::setSimpleWater(false);
 	delete waterShader;
+	delete simpleWaterShader;
 	delete reflectOpaqueShader;
 	delete reflectCutoutShader;
 	delete reflectClipShader;
 	delete reflectCutoutClipShader;
 	waterShader = nullptr;
+	simpleWaterShader = nullptr;
 	reflectOpaqueShader = nullptr;
 	reflectCutoutShader = nullptr;
 	reflectClipShader = nullptr;
@@ -2259,13 +2312,8 @@ void Application::update(float dt)
 		drawGrass = !drawGrass;
 	}
 
-	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_R))
-	{
-		waterReflections = !waterReflections;
-		if (gui)
-			gui->showNotification(waterReflections ? "Water reflections on" : "Water reflections off",
-				Gui::NotificationKind::Info, 2.0f);
-	}
+	if (!guiTyping && viewingLevel && Keyboard::isKeyPressed(GLFW_KEY_R))
+		cycleWaterQuality();
 
 	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_P) && !critters.empty())
 	{
@@ -2453,36 +2501,40 @@ void Application::render(Shader& shader)
 	shader.setUniformMat4("VPMatrix", vpmatrix);
 	shader.setUniformMat3("uvMatrix", glm::mat3(1.0f));
 	shader.setUniform1i("useInstancing", 0);
+	Mesh::setSimpleWater(waterQuality == Gui::WaterView::Off);
 	if (waterShader != nullptr)
 	{
 		waterShader->bind();
 		waterShader->setUniformMat4("VPMatrix", vpmatrix);
-		shader.bind();
 	}
+	if (simpleWaterShader != nullptr)
+	{
+		simpleWaterShader->bind();
+		simpleWaterShader->setUniformMat4("VPMatrix", vpmatrix);
+	}
+	shader.bind();
 
 	RenderStats::beginFrame();
 	const auto sceneStart = std::chrono::high_resolution_clock::now();
 
 	// Matrices do not depend on the reflection mirror (that lives in the VP), so they
 	// are built once. Each pass only retests the frustum. A reflection pass also
-	// drops instances that sit fully under the plane or cover only a sliver of the
-	// view; the noise wobble and the half mix hide them.
+	// drops instances that sit fully under the plane, cover only a sliver of the
+	// view, or sit past the water's reflection distance. Env_Sky is not distance culled.
 	// A box whose top sits at least this far under the plane is fully clipped.
 	// The margin is subtracted, so a sheet lying on the water stays in the reflection.
 	constexpr float kReflectPlaneEpsilon = 0.001f;
 	constexpr float kReflectMinAngularSize = 0.01f;
-	// reflectWobble is 0.05 and the noise offset reaches about 1, so 64 pixels at 1024.
-	constexpr int kReflectWobbleMargin = 64;
-	// A plane this small on screen is not worth a second scene draw.
-	constexpr int kReflectMinPlanePixels = 48;
-	// Scissor only when the water covers less than this fraction of the target.
-	// A full-frame ocean would still shade the whole target, and testing every mesh
-	// against that rect costs more than it saves.
-	constexpr int kReflectScissorLimit = (WaterReflection::kSize * 85) / 100;
+	// One world-unit cutoff for every water body. High is 20000, medium is 10000.
+	// Rounded from 0.375 of the A3 ocean's larger axis (54350.84 on Z).
+	constexpr float kReflectDistance = 20000.0f;
 	const glm::vec3 eye = camera.getPosition();
 	const glm::vec3 propCamera(eye.x, eye.y, -eye.z);
 	bool inReflection = false;
 	float reflectionPlaneY = 0.0f;
+	// 0 keeps today's unlimited reflections (no water box, or reflections off).
+	float reflectionMaxDistance = 0.0f;
+	int reflectTargetSize = WaterReflection::kHighSize;
 	Shader* passShader = &shader;
 	MeshDrawStyle passStyle;
 	FrustumPlanes frustum = extractFrustumPlanes(vpmatrix);
@@ -2521,6 +2573,9 @@ void Application::render(Shader& shader)
 					continue;
 				if (reflectBoundsTooSmall(instance.worldAabbMin, instance.worldAabbMax, propCamera, kReflectMinAngularSize))
 					continue;
+				if (reflectionMaxDistance > 0.0f
+					&& closestXzDistance(instance.worldAabbMin, instance.worldAabbMax, propCamera) > reflectionMaxDistance)
+					continue;
 			}
 			if (instance.hasAabb && !aabbInFrustum(planes, instance.worldAabbMin, instance.worldAabbMax))
 			{
@@ -2557,7 +2612,7 @@ void Application::render(Shader& shader)
 							continue;
 						const Ty1Instance& instance = levelObjects[static_cast<size_t>(index)];
 						if (reflectCullRect && reflectProjectVp != nullptr && instance.hasAabb
-							&& !reflectAabbOverlapsRect(*reflectProjectVp, instance.worldAabbMin, instance.worldAabbMax, reflectRect))
+							&& !reflectAabbOverlapsRect(*reflectProjectVp, instance.worldAabbMin, instance.worldAabbMax, reflectRect, reflectTargetSize))
 							continue;
 						const bool clip = !reflectUseOblique && (!instance.hasAabb
 							|| reflectAabbStraddles(instance.worldAabbMin, instance.worldAabbMax, reflectionPlaneY, kReflectPlaneEpsilon));
@@ -2610,6 +2665,11 @@ void Application::render(Shader& shader)
 			if (inReflection && model->hasLocalAabb()
 				&& model->getLocalAabbMax().y <= reflectionPlaneY - kReflectPlaneEpsilon)
 				continue;
+			// Past the reflection distance. Env_Sky is exempt on the mesh below. The reflection
+			// pass restores the part counters, so this skip does not walk the model to count them.
+			if (inReflection && reflectionMaxDistance > 0.0f && model->hasLocalAabb()
+				&& closestXzDistance(model->getLocalAabbMin(), model->getLocalAabbMax(), propCamera) > reflectionMaxDistance)
+				continue;
 			if (model->hasLocalAabb() && !aabbInFrustum(frustum, model->getLocalAabbMin(), model->getLocalAabbMax()))
 			{
 				for (const Mesh* mesh : model->getMeshes())
@@ -2620,7 +2680,7 @@ void Application::render(Shader& shader)
 				continue;
 			}
 			if (reflectCullRect && reflectProjectVp != nullptr && model->hasLocalAabb()
-				&& !reflectAabbOverlapsRect(*reflectProjectVp, model->getLocalAabbMin(), model->getLocalAabbMax(), reflectRect))
+				&& !reflectAabbOverlapsRect(*reflectProjectVp, model->getLocalAabbMin(), model->getLocalAabbMax(), reflectRect, reflectTargetSize))
 				continue;
 
 			for (Mesh* mesh : model->getMeshes())
@@ -2637,10 +2697,17 @@ void Application::render(Shader& shader)
 					RenderStats::partsCulled++;
 					continue;
 				}
+				if (inReflection && reflectionMaxDistance > 0.0f && mesh->hasLocalAabb()
+					&& !mesh->isEnvSky()
+					&& closestXzDistance(mesh->getLocalAabbMin(), mesh->getLocalAabbMax(), propCamera) > reflectionMaxDistance)
+				{
+					RenderStats::partsCulled++;
+					continue;
+				}
 				if (collectReflection)
 				{
 					if (reflectCullRect && reflectProjectVp != nullptr && mesh->hasLocalAabb()
-						&& !reflectAabbOverlapsRect(*reflectProjectVp, mesh->getLocalAabbMin(), mesh->getLocalAabbMax(), reflectRect))
+						&& !reflectAabbOverlapsRect(*reflectProjectVp, mesh->getLocalAabbMin(), mesh->getLocalAabbMax(), reflectRect, reflectTargetSize))
 					{
 						RenderStats::partsCulled++;
 						continue;
@@ -2733,9 +2800,25 @@ void Application::render(Shader& shader)
 
 	Content::Ty1ReflectionPlane reflectionPlanes[WaterReflection::kMaxPlanes] = {};
 	int reflectionPlaneCount = 0;
-	if (waterReflections)
+	if (waterQuality != Gui::WaterView::Off)
 	{
+		reflectTargetSize = waterQuality == Gui::WaterView::Med
+			? WaterReflection::kMedSize
+			: WaterReflection::kHighSize;
+		waterReflection.setSize(reflectTargetSize);
+		// reflectWobble is 0.05 and the noise offset reaches about 1, so 64 pixels at 1024.
+		const int reflectWobbleMargin = reflectTargetSize * 64 / WaterReflection::kHighSize;
+		// A plane this small on screen is not worth a second scene draw. 48 pixels at 1024.
+		const int reflectMinPlanePixels = std::max(1, reflectTargetSize * 48 / WaterReflection::kHighSize);
+		// Scissor only when the water covers less than this fraction of the target.
+		// A full-frame ocean would still shade the whole target, and testing every mesh
+		// against that rect costs more than it saves.
+		const int reflectScissorLimit = (reflectTargetSize * 85) / 100;
+
 		const auto reflectionStart = std::chrono::high_resolution_clock::now();
+		reflectionMaxDistance = waterQuality == Gui::WaterView::Med
+			? 10000.0f
+			: kReflectDistance;
 		struct PlanePick
 		{
 			float height;
@@ -2820,7 +2903,7 @@ void Application::render(Shader& shader)
 					if (!aabbInFrustum(mainFrustum, mesh->getLocalAabbMin(), mesh->getLocalAabbMax()))
 						continue;
 					PixelRect projected;
-					if (!tryProjectAabb(vpmatrix, mesh->getLocalAabbMin(), mesh->getLocalAabbMax(), WaterReflection::kSize, projected))
+					if (!tryProjectAabb(vpmatrix, mesh->getLocalAabbMin(), mesh->getLocalAabbMax(), reflectTargetSize, projected))
 					{
 						crossesNear = true;
 						break;
@@ -2844,12 +2927,12 @@ void Application::render(Shader& shader)
 				}
 			}
 			if (crossesNear)
-				coverage = PixelRect{ 0, 0, WaterReflection::kSize, WaterReflection::kSize };
+				coverage = PixelRect{ 0, 0, reflectTargetSize, reflectTargetSize };
 			else if (!anyCoverage || coverage.w <= 0 || coverage.h <= 0
-				|| std::max(coverage.w, coverage.h) < kReflectMinPlanePixels)
+				|| std::max(coverage.w, coverage.h) < reflectMinPlanePixels)
 				continue;
 
-			const PixelRect scissor = inflatePixelRect(coverage, kReflectWobbleMargin, WaterReflection::kSize);
+			const PixelRect scissor = inflatePixelRect(coverage, reflectWobbleMargin, reflectTargetSize);
 			if (scissor.w <= 0 || scissor.h <= 0)
 				continue;
 			if (reflectOpaqueShader == nullptr || reflectCutoutShader == nullptr
@@ -2865,7 +2948,7 @@ void Application::render(Shader& shader)
 			glm::mat4 obliqueProjection;
 			reflectUseOblique = obliqueReflectionProjection(projection, viewMirror, height, kReflectPlaneEpsilon, obliqueProjection);
 			const glm::mat4 mirroredVp = (reflectUseOblique ? obliqueProjection : projection) * viewMirror;
-			const bool partialTarget = scissor.w < kReflectScissorLimit || scissor.h < kReflectScissorLimit;
+			const bool partialTarget = scissor.w < reflectScissorLimit || scissor.h < reflectScissorLimit;
 
 			if (!gpuQueryOpen)
 				gpuQueryOpen = beginReflectionGpu();
@@ -3079,7 +3162,7 @@ void Application::render(Shader& shader)
 			RenderStats::simTicks, RenderStats::lastSimMs,
 			RenderStats::reflectionPlanes, RenderStats::reflectionDrawCalls,
 			RenderStats::lastReflectionMs,
-			(waterReflections && reflectionPlaneCount > 0) ? reflectionGpuMs : 0.0f);
+			(waterQuality != Gui::WaterView::Off && reflectionPlaneCount > 0) ? reflectionGpuMs : 0.0f);
 	}
 
 	if (selectedLevelObject >= 0 && selectedLevelObject < static_cast<int>(levelObjects.size()))
