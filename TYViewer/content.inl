@@ -1008,6 +1008,17 @@ inline Model* Content::load(const std::string& name)
 					meshPart->setContent(this);
 					meshPart->setBlend(materialDraw.blend);
 					meshPart->setAlphaRef(materialDraw.alphaRef);
+					// C3 X/Z and the same cards on other env cubes store the fade in
+					// vertex alpha. global.mad leaves them opaque, so the reflection
+					// would draw them before the sky and fill the target with black.
+					for (const Vertex& vert : vertices)
+					{
+						if (vert.colour[3] < 0.99f)
+						{
+							meshPart->setFadedVertexAlpha(true);
+							break;
+						}
+					}
 					// TY_B3_001 is opaque dirt. Room_b3_08 cliff sheets (Object02-Object05)
 					// store the fade in vertex alpha (0 or 128). Drawn with the dirt they
 					// write depth and hide the rock in a later room. The same room's

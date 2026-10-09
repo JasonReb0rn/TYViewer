@@ -72,7 +72,8 @@ public:
 	// that changes that GL state without going through Mesh.
 	static void invalidateDrawState();
 	Texture* getTexture() const { return m_texture; }
-	// Masked and blended materials keep an alpha test in the reflection. Opaque ones do not.
+	// Masked, blended, and faded-vertex meshes keep an alpha test in the reflection.
+	// Opaque ones do not.
 	bool reflectionCutsOut() const;
 
 	// Raw vertex access (debug/overlay). Order matches parsed file order.
@@ -108,6 +109,9 @@ public:
 	// Fragments below this alpha are discarded. Masked cards use the material aref.
 	void setAlphaRef(float alphaRef) { m_alphaRef = alphaRef; }
 	float getAlphaRef() const { return m_alphaRef; }
+	// A vertex alpha below 1. The main pass is unchanged. Reflections alpha-test these
+	// so a transparent sky card does not fill the reflection before the sky is drawn.
+	void setFadedVertexAlpha(bool faded) { m_fadedVertexAlpha = faded; }
 	// TY1 materials look up their UV animation from this. Null stays untransformed.
 	void setContent(Content* content) { m_content = content; m_materialReady = false; }
 	// water_types.ini section for this mesh. Empty meshes are not displaced.
@@ -182,6 +186,7 @@ private:
 	bool m_defaultEnabled = true;
 	MeshBlend m_blend = MeshBlend::Opaque;
 	float m_alphaRef = 0.01f;
+	bool m_fadedVertexAlpha = false;
 	Content* m_content = nullptr;
 
 	mutable bool m_materialReady = false;

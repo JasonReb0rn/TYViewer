@@ -350,7 +350,7 @@ void Mesh::invalidateDrawState()
 
 bool Mesh::reflectionCutsOut() const
 {
-	if (m_blend != MeshBlend::Opaque || m_alphaRef > 0.02f)
+	if (m_blend != MeshBlend::Opaque || m_alphaRef > 0.02f || m_fadedVertexAlpha)
 		return true;
 	ensureMaterial();
 	return m_materialCutout;
