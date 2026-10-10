@@ -84,6 +84,54 @@ namespace
 		rects.showDefault = { right - defaultWidth, y, defaultWidth, height };
 		return rects;
 	}
+
+	constexpr float kScrollbarWidth = 8.0f;
+	constexpr float kScrollbarRight = 5.0f;
+
+	GuiRect listScrollbarTrack(const GuiRect& panel, float headerHeight)
+	{
+		const float top = panel.y + headerHeight;
+		const float bottom = panel.y + panel.height - 3.0f;
+		const float height = std::max(0.0f, bottom - top);
+		return { panel.x + panel.width - kScrollbarRight - kScrollbarWidth, top, kScrollbarWidth, height };
+	}
+
+	float listScrollbarThumbHeight(const GuiRect& track, float maxScroll)
+	{
+		if (track.height <= 0.0f || maxScroll <= 0.0f)
+			return 0.0f;
+		const float view = track.height;
+		const float content = view + maxScroll;
+		float thumb = track.height * (view / content);
+		const float minThumb = 18.0f;
+		if (thumb < minThumb)
+			thumb = std::min(track.height, minThumb);
+		return thumb;
+	}
+
+	GuiRect listScrollbarThumb(const GuiRect& track, float scroll, float maxScroll)
+	{
+		const float thumbH = listScrollbarThumbHeight(track, maxScroll);
+		if (thumbH <= 0.0f)
+			return { 0.0f, 0.0f, 0.0f, 0.0f };
+		const float travel = std::max(0.0f, track.height - thumbH);
+		const float t = std::clamp(scroll / maxScroll, 0.0f, 1.0f);
+		return { track.x, track.y + travel * t, track.width, thumbH };
+	}
+
+	float listScrollFromThumbTop(const GuiRect& track, float thumbH, float thumbTop, float maxScroll)
+	{
+		const float travel = std::max(1.0f, track.height - thumbH);
+		const float t = std::clamp((thumbTop - track.y) / travel, 0.0f, 1.0f);
+		return t * maxScroll;
+	}
+
+	float listRowGutter(float maxScroll)
+	{
+		if (maxScroll <= 0.0f)
+			return 0.0f;
+		return kScrollbarRight + kScrollbarWidth + 4.0f;
+	}
 }
 
 glm::vec4 objectKindColour(const std::string& kindLabel)
@@ -268,7 +316,7 @@ void Gui::initialize(int width, int height)
 	modelInfoRect = {(float)width - 310.0f, 10.0f, 300.0f, 150.0f};
 	
 	// Material list panel below model info (default size, will resize when model is loaded)
-	materialListRect = {(float)width - 310.0f, 170.0f, 300.0f, 200.0f};
+	materialListRect = {(float)width - kObjectColumnWidth - 10.0f, 170.0f, kObjectColumnWidth, 200.0f};
 	objectListRect = { 10.0f, kObjectColumnTop, kObjectColumnWidth, 200.0f };
 	objectInfoRect = { 10.0f, 388.0f, kObjectColumnWidth, 220.0f };
 	
@@ -1414,6 +1462,12 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 {
 	if (button == GLFW_MOUSE_BUTTON_LEFT)
 	{
+		if (action == GLFW_RELEASE)
+		{
+			listScrollDrag = ScrollDrag::None;
+			listScrollDragging = false;
+			return;
+		}
 		if (action == GLFW_PRESS)
 		{
 			// Click notification banner to dismiss (unobtrusive).
@@ -1623,16 +1677,52 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 					return;
 				}
 
+				if (pressListScrollbar(materialListRect, kMeshPartHeaderHeight, materialListScroll, maxMaterialListScroll, ScrollDrag::Parts, x, y))
+					return;
+
 				float relativeY = y - (materialListRect.y + kMeshPartHeaderHeight) + materialListScroll;
 				int itemIndex = (int)(relativeY / kMeshPartItemHeight);
 				
 				if (itemIndex >= 0 && itemIndex < (int)materialFiltered.size())
 				{
-					Mesh* mesh = materialMeshAt(materialFiltered[itemIndex]);
+					const int flatIndex = materialFiltered[itemIndex];
+					const float rowTop = materialListRect.y + kMeshPartHeaderHeight - materialListScroll
+						+ static_cast<float>(itemIndex) * kMeshPartItemHeight;
+					const float bodyTop = materialListRect.y + kMeshPartHeaderHeight;
+					const float bodyBottom = materialListRect.y + materialListRect.height - 3.0f;
+					if (!rowFits(rowTop, bodyTop, bodyBottom, 30.0f))
+						return;
+					Mesh* mesh = materialMeshAt(flatIndex);
 					if (mesh == nullptr)
 						return;
-					mesh->setEnabled(!mesh->isEnabled());
-					Debug::log("Toggled mesh part " + std::to_string(itemIndex) + ": " + mesh->getPartName() + " / " + mesh->getMaterialName() + " -> " + (mesh->isEnabled() ? "VISIBLE" : "HIDDEN"));
+					const GuiRect checkbox = { materialListRect.x + 10.0f, rowTop + 9.0f, 12.0f, 12.0f };
+					if (checkbox.contains(x, y))
+					{
+						mesh->setEnabled(!mesh->isEnabled());
+						Debug::log("Toggled mesh part " + std::to_string(itemIndex) + ": " + mesh->getPartName() + " / " + mesh->getMaterialName() + " -> " + (mesh->isEnabled() ? "VISIBLE" : "HIDDEN"));
+						if (onPartVisibilityChanged)
+							onPartVisibilityChanged();
+						return;
+					}
+
+					const double now = glfwGetTime();
+					const bool doubleClick = flatIndex == lastMaterialClickIndex && (now - lastMaterialClickTime) <= 0.4;
+					lastMaterialClickIndex = flatIndex;
+					lastMaterialClickTime = now;
+					if (doubleClick)
+					{
+						selectLevelPart(flatIndex);
+						if (onLevelPartFocused)
+							onLevelPartFocused(mesh);
+					}
+					else if (flatIndex == selectedMaterialIndex)
+					{
+						clearLevelPartSelection();
+					}
+					else
+					{
+						selectLevelPart(flatIndex);
+					}
 				}
 			}
 			else if (!levelObjectItems.empty() && objectListRect.contains(x, y))
@@ -1697,6 +1787,9 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 					return;
 				}
 
+				if (pressListScrollbar(objectListRect, kObjectListHeaderHeight, objectListScroll, maxObjectListScroll, ScrollDrag::Objects, x, y))
+					return;
+
 				float relativeY = y - (objectListRect.y + kObjectListHeaderHeight) + objectListScroll;
 				int row = (int)(relativeY / kMeshPartItemHeight);
 				if (row >= 0 && row < (int)objectFiltered.size())
@@ -1720,9 +1813,22 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 					const bool doubleClick = index == lastObjectClickIndex && (now - lastObjectClickTime) <= 0.4;
 					lastObjectClickIndex = index;
 					lastObjectClickTime = now;
-					selectLevelObject(index);
-					if (doubleClick && onLevelObjectFocused)
-						onLevelObjectFocused(index);
+					if (doubleClick)
+					{
+						selectLevelObject(index);
+						if (onLevelObjectFocused)
+							onLevelObjectFocused(index);
+					}
+					else if (index == selectedObjectIndex)
+					{
+						selectedObjectIndex = -1;
+						if (onLevelObjectSelected)
+							onLevelObjectSelected(-1);
+					}
+					else
+					{
+						selectLevelObject(index);
+					}
 				}
 			}
 			else if (!levelObjectItems.empty() && objectInfoRect.contains(x, y))
@@ -1761,6 +1867,8 @@ void Gui::onMouseMove(float x, float y)
 {
 	mouseX = x;
 	mouseY = y;
+	if (listScrollDragging)
+		dragListScrollbar(y);
 	
 	hovering = buttonRect.contains(x, y) || exportButtonRect.contains(x, y) || exportRawButtonRect.contains(x, y) || recenterButtonRect.contains(x, y) || collisionButtonRect.contains(x, y) || boundsButtonRect.contains(x, y) || crittersButtonRect.contains(x, y) || waterButtonRect.contains(x, y) ||
 		(dropdownOpen && dropdownRect.contains(x, y)) || (submenuOpen && submenuRect.contains(x, y));
@@ -1780,7 +1888,13 @@ void Gui::onMouseMove(float x, float y)
 
 		rebuildFilteredIndicesIfNeeded(hoveredCategory);
 		if (!hasCategory(hoveredCategory))
+		{
+			hoveredObjectItem = -1;
+			hoveredMaterialItem = -1;
+			reportHoveredObject(-1);
+			reportHoveredPart(nullptr);
 			return;
+		}
 		const std::vector<int>& filtered = categories[hoveredCategory].filteredIndices;
 
 		const float listTop = submenuRect.y + kTopPad + kSearchHeight + kSearchGap;
@@ -1795,6 +1909,10 @@ void Gui::onMouseMove(float x, float y)
 				hoveredSubmenuItem = itemPos;
 		}
 		// Don't process dropdown hover detection when in submenu
+		hoveredObjectItem = -1;
+		hoveredMaterialItem = -1;
+		reportHoveredObject(-1);
+		reportHoveredPart(nullptr);
 		return;
 	}
 	
@@ -1811,7 +1929,7 @@ void Gui::onMouseMove(float x, float y)
 				hoveredInfoRow = row;
 		}
 	}
-	if (!levelObjectItems.empty() && objectListRect.contains(x, y))
+	if (!listScrollDragging && !levelObjectItems.empty() && objectListRect.contains(x, y))
 	{
 		rebuildObjectFilter();
 		const float yLocal = y - objectListRect.y;
@@ -1823,10 +1941,16 @@ void Gui::onMouseMove(float x, float y)
 				hoveredObjectItem = row;
 		}
 	}
+	{
+		int objectIndex = -1;
+		if (hoveredObjectItem >= 0 && hoveredObjectItem < static_cast<int>(objectFiltered.size()))
+			objectIndex = objectFiltered[static_cast<size_t>(hoveredObjectItem)];
+		reportHoveredObject(objectIndex);
+	}
 
 	// Track hovered material item
 	hoveredMaterialItem = -1;
-	if (hasMaterialPanel() && materialListRect.contains(x, y))
+	if (!listScrollDragging && hasMaterialPanel() && materialListRect.contains(x, y))
 	{
 		rebuildMaterialFilter();
 		const float yLocal = y - materialListRect.y;
@@ -1844,6 +1968,12 @@ void Gui::onMouseMove(float x, float y)
 				hoveredMaterialItem = itemIndex;
 			}
 		}
+	}
+	{
+		Mesh* hoveredPart = nullptr;
+		if (hoveredMaterialItem >= 0 && hoveredMaterialItem < static_cast<int>(materialFiltered.size()))
+			hoveredPart = materialMeshAt(materialFiltered[static_cast<size_t>(hoveredMaterialItem)]);
+		reportHoveredPart(hoveredPart);
 	}
 	
 	if (dropdownOpen && dropdownRect.contains(x, y))
@@ -2080,6 +2210,7 @@ void Gui::onChar(unsigned int codepoint)
 
 void Gui::setCurrentModel(Model* model, const std::string& modelName)
 {
+	resetMaterialSelection();
 	currentModel = model;
 	levelModels.clear();
 	clearObjectList();
@@ -2095,6 +2226,7 @@ void Gui::setCurrentModel(Model* model, const std::string& modelName)
 
 void Gui::setLevelModels(const std::vector<Model*>& models, const std::string& name)
 {
+	resetMaterialSelection();
 	currentModel = nullptr;
 	levelModels = models;
 	clearObjectList();
@@ -2110,6 +2242,7 @@ void Gui::setLevelModels(const std::vector<Model*>& models, const std::string& n
 
 void Gui::setSceneLabel(const std::string& name, bool canRecenter)
 {
+	resetMaterialSelection();
 	currentModel = nullptr;
 	levelModels.clear();
 	clearObjectList();
@@ -2125,6 +2258,7 @@ void Gui::setSceneLabel(const std::string& name, bool canRecenter)
 
 void Gui::clearCurrentModel()
 {
+	resetMaterialSelection();
 	currentModel = nullptr;
 	levelModels.clear();
 	clearObjectList();
@@ -2207,14 +2341,14 @@ void Gui::layoutMaterialList()
 {
 	if (!hasMaterialPanel())
 	{
-		materialListRect = {(float)windowWidth - 310.0f, 170.0f, 300.0f, 200.0f};
+		materialListRect = {(float)windowWidth - kObjectColumnWidth - 10.0f, 170.0f, kObjectColumnWidth, 200.0f};
 		maxMaterialListScroll = 0.0f;
 		return;
 	}
 
 	if (materialListCollapsed)
 	{
-		materialListRect = { (float)windowWidth - 310.0f, 170.0f, 300.0f, kCollapsedListHeight };
+		materialListRect = { (float)windowWidth - kObjectColumnWidth - 10.0f, 170.0f, kObjectColumnWidth, kCollapsedListHeight };
 		return;
 	}
 
@@ -2225,7 +2359,7 @@ void Gui::layoutMaterialList()
 		+ kBottomPad;
 	const float maxHeight = windowHeight * 0.7f;
 	const float panelHeight = (contentHeight < maxHeight) ? contentHeight : maxHeight;
-	materialListRect = {(float)windowWidth - 310.0f, 170.0f, 300.0f, panelHeight};
+	materialListRect = {(float)windowWidth - kObjectColumnWidth - 10.0f, 170.0f, kObjectColumnWidth, panelHeight};
 	maxMaterialListScroll = (contentHeight > panelHeight) ? (contentHeight - panelHeight) : 0.0f;
 	if (materialListScroll < 0.0f)
 		materialListScroll = 0.0f;
@@ -2249,6 +2383,7 @@ void Gui::clearObjectList()
 	objectListScroll = 0.0f;
 	maxObjectListScroll = 0.0f;
 	hoveredObjectItem = -1;
+	const int previousSelection = selectedObjectIndex;
 	selectedObjectIndex = -1;
 	lastObjectClickIndex = -1;
 	lastObjectClickTime = 0.0;
@@ -2258,7 +2393,10 @@ void Gui::clearObjectList()
 	maxObjectInfoScroll = 0.0f;
 	hoveredInfoRow = -1;
 	showLevelExtras = true;
+	reportHoveredObject(-1);
 	layoutObjectList();
+	if (previousSelection >= 0 && onLevelObjectSelected)
+		onLevelObjectSelected(-1);
 }
 
 void Gui::setLevelObjects(const std::vector<LevelObjectItem>& objects)
@@ -2270,6 +2408,7 @@ void Gui::setLevelObjects(const std::vector<LevelObjectItem>& objects)
 	objectFilterDirty = true;
 	objectListScroll = 0.0f;
 	hoveredObjectItem = -1;
+	const int previousSelection = selectedObjectIndex;
 	selectedObjectIndex = -1;
 	lastObjectClickIndex = -1;
 	lastObjectClickTime = 0.0;
@@ -2279,9 +2418,12 @@ void Gui::setLevelObjects(const std::vector<LevelObjectItem>& objects)
 	maxObjectInfoScroll = 0.0f;
 	hoveredInfoRow = -1;
 	showLevelExtras = true;
+	reportHoveredObject(-1);
 	if (!objects.empty())
 		sceneLoaded = true;
 	layoutObjectList();
+	if (previousSelection >= 0 && onLevelObjectSelected)
+		onLevelObjectSelected(-1);
 }
 
 void Gui::setObjectInfo(std::vector<ObjectInfoLine> lines)
@@ -2315,6 +2457,26 @@ void Gui::setOnLevelObjectSelected(std::function<void(int)> callback)
 void Gui::setOnLevelObjectFocused(std::function<void(int)> callback)
 {
 	onLevelObjectFocused = std::move(callback);
+}
+
+void Gui::setOnLevelObjectHovered(std::function<void(int)> callback)
+{
+	onLevelObjectHovered = std::move(callback);
+}
+
+void Gui::setOnLevelPartSelected(std::function<void(Mesh*)> callback)
+{
+	onLevelPartSelected = std::move(callback);
+}
+
+void Gui::setOnLevelPartHovered(std::function<void(Mesh*)> callback)
+{
+	onLevelPartHovered = std::move(callback);
+}
+
+void Gui::setOnLevelPartFocused(std::function<void(Mesh*)> callback)
+{
+	onLevelPartFocused = std::move(callback);
 }
 
 void Gui::setObjectVisible(int index, bool visible)
@@ -2702,6 +2864,7 @@ void Gui::renderObjectList()
 
 	const float bodyTop = objectListRect.y + kObjectListHeaderHeight;
 	const float bodyBottom = objectListRect.y + objectListRect.height - 3.0f;
+	const float rowGutter = listRowGutter(maxObjectListScroll);
 	float yOffset = bodyTop - objectListScroll;
 	for (size_t row = 0; row < objectFiltered.size(); row++)
 	{
@@ -2719,7 +2882,7 @@ void Gui::renderObjectList()
 				bgColor = glm::vec4(0.25f, 0.25f, 0.28f, 1.0f);
 
 			bindRectShader();
-			drawRect(objectListRect.x + 5.0f, yOffset, objectListRect.width - 10.0f, kItemBoxHeight, bgColor);
+			drawRect(objectListRect.x + 5.0f, yOffset, objectListRect.width - 10.0f - rowGutter, kItemBoxHeight, bgColor);
 
 			const glm::vec4 checkboxColor = isEnabled ? glm::vec4(0.3f, 0.7f, 0.3f, 1.0f) : glm::vec4(0.7f, 0.3f, 0.3f, 1.0f);
 			drawRect(objectListRect.x + 10.0f, yOffset + 9.0f, 12.0f, 12.0f, checkboxColor);
@@ -2727,7 +2890,7 @@ void Gui::renderObjectList()
 				drawText("X", objectListRect.x + 11.0f, yOffset + 11.0f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
 			bindRectShader();
 
-			const int maxChars = std::max(8, (int)((objectListRect.width - 40.0f) / 8.0f));
+			const int maxChars = std::max(8, (int)((objectListRect.width - 40.0f - rowGutter) / 8.0f));
 			std::string displayType = item.typeName.empty() ? "object" : item.typeName;
 			if ((int)displayType.length() > maxChars)
 				displayType = displayType.substr(0, maxChars - 3) + "...";
@@ -2780,6 +2943,7 @@ void Gui::renderObjectList()
 		}
 		yOffset += kMeshPartItemHeight;
 	}
+	renderListScrollbar(objectListRect, kObjectListHeaderHeight, objectListScroll, maxObjectListScroll, listScrollDrag == ScrollDrag::Objects);
 }
 
 void Gui::selectLevelObject(int index)
@@ -2837,6 +3001,147 @@ void Gui::revealLevelObject(int index)
 		objectListScroll = 0.0f;
 	if (objectListScroll > maxObjectListScroll)
 		objectListScroll = maxObjectListScroll;
+}
+
+void Gui::selectLevelPart(int flatIndex)
+{
+	Mesh* mesh = materialMeshAt(flatIndex);
+	if (mesh == nullptr)
+		return;
+	selectedMaterialIndex = flatIndex;
+	revealLevelPart(flatIndex);
+	if (onLevelPartSelected)
+		onLevelPartSelected(mesh);
+}
+
+void Gui::revealLevelPart(int flatIndex)
+{
+	rebuildMaterialFilter();
+	int row = -1;
+	for (int i = 0; i < static_cast<int>(materialFiltered.size()); i++)
+	{
+		if (materialFiltered[static_cast<size_t>(i)] == flatIndex)
+		{
+			row = i;
+			break;
+		}
+	}
+	if (row < 0 || materialListCollapsed)
+		return;
+	const float rowTop = static_cast<float>(row) * kMeshPartItemHeight;
+	const float view = materialListRect.height - kMeshPartHeaderHeight;
+	if (view <= 0.0f)
+		return;
+	if (rowTop < materialListScroll)
+		materialListScroll = rowTop;
+	else if (rowTop + kMeshPartItemHeight > materialListScroll + view)
+		materialListScroll = rowTop + kMeshPartItemHeight - view;
+	if (materialListScroll < 0.0f)
+		materialListScroll = 0.0f;
+	if (materialListScroll > maxMaterialListScroll)
+		materialListScroll = maxMaterialListScroll;
+}
+
+void Gui::clearLevelPartSelection()
+{
+	selectedMaterialIndex = -1;
+	if (onLevelPartSelected)
+		onLevelPartSelected(nullptr);
+}
+
+void Gui::resetMaterialSelection()
+{
+	selectedMaterialIndex = -1;
+	lastMaterialClickIndex = -1;
+	lastMaterialClickTime = 0.0;
+	hoveredMaterialItem = -1;
+	reportHoveredPart(nullptr);
+	if (onLevelPartSelected)
+		onLevelPartSelected(nullptr);
+}
+
+void Gui::reportHoveredObject(int index)
+{
+	if (index == reportedHoveredObject)
+		return;
+	reportedHoveredObject = index;
+	if (onLevelObjectHovered)
+		onLevelObjectHovered(index);
+}
+
+void Gui::reportHoveredPart(Mesh* mesh)
+{
+	if (mesh == reportedHoveredPart)
+		return;
+	reportedHoveredPart = mesh;
+	if (onLevelPartHovered)
+		onLevelPartHovered(mesh);
+}
+
+void Gui::renderListScrollbar(const GuiRect& panel, float headerHeight, float scroll, float maxScroll, bool dragging)
+{
+	if (maxScroll <= 0.0f)
+		return;
+	const GuiRect track = listScrollbarTrack(panel, headerHeight);
+	if (track.height < 4.0f)
+		return;
+
+	glUseProgram(shaderProgram);
+	drawRect(track.x, track.y, track.width, track.height, glm::vec4(0.06f, 0.06f, 0.07f, 1.0f));
+	const GuiRect thumb = listScrollbarThumb(track, scroll, maxScroll);
+	const bool hot = dragging || thumb.contains(mouseX, mouseY);
+	const glm::vec4 thumbColor = hot ? glm::vec4(0.78f, 0.78f, 0.84f, 1.0f) : glm::vec4(0.48f, 0.48f, 0.54f, 1.0f);
+	drawRect(thumb.x, thumb.y, thumb.width, thumb.height, thumbColor);
+}
+
+bool Gui::pressListScrollbar(const GuiRect& panel, float headerHeight, float& scroll, float maxScroll, ScrollDrag target, float x, float y)
+{
+	if (maxScroll <= 0.0f)
+		return false;
+	const GuiRect track = listScrollbarTrack(panel, headerHeight);
+	if (!track.contains(x, y))
+		return false;
+	const float thumbH = listScrollbarThumbHeight(track, maxScroll);
+	const GuiRect thumb = listScrollbarThumb(track, scroll, maxScroll);
+	listScrollDrag = target;
+	listScrollDragging = true;
+	if (thumb.contains(x, y))
+		listScrollDragOffset = y - thumb.y;
+	else
+	{
+		listScrollDragOffset = thumbH * 0.5f;
+		scroll = listScrollFromThumbTop(track, thumbH, y - listScrollDragOffset, maxScroll);
+	}
+	return true;
+}
+
+void Gui::dragListScrollbar(float y)
+{
+	if (!listScrollDragging)
+		return;
+	GuiRect panel;
+	float header = 0.0f;
+	float* scroll = nullptr;
+	float maxScroll = 0.0f;
+	if (listScrollDrag == ScrollDrag::Objects)
+	{
+		panel = objectListRect;
+		header = kObjectListHeaderHeight;
+		scroll = &objectListScroll;
+		maxScroll = maxObjectListScroll;
+	}
+	else if (listScrollDrag == ScrollDrag::Parts)
+	{
+		panel = materialListRect;
+		header = kMeshPartHeaderHeight;
+		scroll = &materialListScroll;
+		maxScroll = maxMaterialListScroll;
+	}
+	else
+		return;
+	const GuiRect track = listScrollbarTrack(panel, header);
+	const float thumbH = listScrollbarThumbHeight(track, maxScroll);
+	*scroll = listScrollFromThumbTop(track, thumbH, y - listScrollDragOffset, maxScroll);
 }
 
 void Gui::rebuildInfoDrawLines()
@@ -3126,6 +3431,7 @@ void Gui::renderMaterialList()
 
 	const float bodyTop = materialListRect.y + kMeshPartHeaderHeight;
 	const float bodyBottom = materialListRect.y + materialListRect.height - 3.0f;
+	const float rowGutter = listRowGutter(maxMaterialListScroll);
 	float yOffset = bodyTop - materialListScroll;
 	
 	for (size_t row = 0; row < materialFiltered.size(); row++)
@@ -3140,16 +3446,17 @@ void Gui::renderMaterialList()
 			}
 			bool isEnabled = mesh->isEnabled();
 			bool isHovered = (hoveredMaterialItem == (int)row);
+			const bool isSelected = materialFiltered[row] == selectedMaterialIndex;
 			
-			// Background color
-			glm::vec4 bgColor;
-			if (isHovered)
+			// Background color. Cyan, so a selected part is distinct from an orange object row.
+			glm::vec4 bgColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
+			if (isSelected)
+				bgColor = isHovered ? glm::vec4(0.16f, 0.42f, 0.55f, 1.0f) : glm::vec4(0.10f, 0.32f, 0.44f, 1.0f);
+			else if (isHovered)
 				bgColor = glm::vec4(0.25f, 0.25f, 0.25f, 1.0f);
-			else
-				bgColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
 			
 			bindRectShader();
-			drawRect(materialListRect.x + 5.0f, yOffset, materialListRect.width - 10.0f, kItemBoxHeight, bgColor);
+			drawRect(materialListRect.x + 5.0f, yOffset, materialListRect.width - 10.0f - rowGutter, kItemBoxHeight, bgColor);
 			
 			// Checkbox
 			glm::vec4 checkboxColor = isEnabled ? glm::vec4(0.3f, 0.7f, 0.3f, 1.0f) : glm::vec4(0.7f, 0.3f, 0.3f, 1.0f);
@@ -3192,8 +3499,9 @@ void Gui::renderMaterialList()
 			}
 
 			std::string displayPart = partName;
-			if (displayPart.length() > 26)
-				displayPart = displayPart.substr(0, 23) + "...";
+			const int nameMax = std::max(8, (int)((materialListRect.width - 36.0f - rowGutter - 72.0f) / 8.0f));
+			if ((int)displayPart.length() > nameMax)
+				displayPart = displayPart.substr(0, std::max(1, nameMax - 3)) + "...";
 			
 			glm::vec4 textColor = isEnabled ? glm::vec4(0.9f, 0.9f, 0.9f, 1.0f) : glm::vec4(0.6f, 0.6f, 0.6f, 1.0f);
 			drawText(displayPart, materialListRect.x + 28.0f, yOffset + kNameLineY, textColor);
@@ -3202,14 +3510,15 @@ void Gui::renderMaterialList()
 			std::string secondary = matName;
 			if (!tagText.empty())
 				secondary += "  " + tagText;
-			if (secondary.length() > 30)
-				secondary = secondary.substr(0, 27) + "...";
+			const int secondaryMax = std::max(8, (int)((materialListRect.width - 36.0f - rowGutter) / 8.0f));
+			if ((int)secondary.length() > secondaryMax)
+				secondary = secondary.substr(0, std::max(1, secondaryMax - 3)) + "...";
 			glm::vec4 secondaryColor = isEnabled ? glm::vec4(0.65f, 0.75f, 1.0f, 1.0f) : glm::vec4(0.45f, 0.5f, 0.6f, 1.0f);
 			drawText(secondary, materialListRect.x + 28.0f, yOffset + kTagsLineY, secondaryColor);
 
 			// Counts on the right
 			std::string counts = std::to_string(mesh->getVertexCount()) + "v " + std::to_string(mesh->getTriangleCount()) + "t";
-			const float countsX = materialListRect.x + materialListRect.width - 10.0f - ((float)counts.size() * 8.0f);
+			const float countsX = materialListRect.x + materialListRect.width - 8.0f - rowGutter - ((float)counts.size() * 8.0f);
 			drawText(counts, countsX, yOffset + kNameLineY, glm::vec4(0.7f, 0.7f, 0.7f, 1.0f));
 			
 			// Restore rectangle shader after text rendering (items draw rectangles each iteration).
@@ -3217,6 +3526,7 @@ void Gui::renderMaterialList()
 		}
 		yOffset += kMeshPartItemHeight;
 	}
+	renderListScrollbar(materialListRect, kMeshPartHeaderHeight, materialListScroll, maxMaterialListScroll, listScrollDrag == ScrollDrag::Parts);
 }
 
 void Gui::drawText(const std::string& text, float x, float y, const glm::vec4& color)

@@ -31,6 +31,8 @@ struct MeshDrawStyle
 	glm::vec2 clipOffset{ 0.0f, 0.0f };
 	bool solid = false;
 	bool reflection = false;
+	// Outline a part the list has hidden. The main pass still skips disabled meshes.
+	bool drawHidden = false;
 	// Reflection cutout program. Opaque reflections have no alpha test.
 	bool cutout = false;
 };

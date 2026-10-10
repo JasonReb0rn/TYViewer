@@ -471,6 +471,18 @@ void Application::initialize()
 	gui->setOnLevelObjectFocused([this](int index) {
 		frameCameraOnInstance(index);
 	});
+	gui->setOnLevelObjectHovered([this](int index) {
+		hoveredLevelObject = index;
+	});
+	gui->setOnLevelPartSelected([this](Mesh* mesh) {
+		selectedLevelPart = mesh;
+	});
+	gui->setOnLevelPartHovered([this](Mesh* mesh) {
+		hoveredLevelPart = mesh;
+	});
+	gui->setOnLevelPartFocused([this](Mesh* mesh) {
+		frameCameraOnMesh(mesh);
+	});
 	gui->setOnCollisionToggle([this]() {
 		setCollisionMeshesVisible(!collisionMeshesVisible);
 	});
@@ -1961,6 +1973,72 @@ void Application::frameCameraOnInstance(int index)
 	camera.setClipPlaneFar(std::max(camera.getClipPlaneFar(), needed));
 }
 
+void Application::frameCameraOnMesh(const Mesh* mesh)
+{
+	if (mesh == nullptr || !mesh->hasLocalAabb())
+		return;
+
+	const glm::vec3 minCorner = mesh->getLocalAabbMin();
+	const glm::vec3 maxCorner = mesh->getLocalAabbMax();
+	const glm::vec3 center = (minCorner + maxCorner) * 0.5f;
+	float radius = glm::length(maxCorner - center);
+	if (radius < 0.05f)
+		radius = 0.05f;
+
+	const float kDefaultFar = 30000.0f;
+	float aspect = camera.getAspectRatio();
+	if (aspect < 0.01f)
+		aspect = 16.0f / 9.0f;
+
+	const float vFov = glm::radians(camera.getFieldOfView());
+	const float hFov = 2.0f * std::atan(std::tan(vFov * 0.5f) * aspect);
+	float sinHalf = std::sin(std::min(vFov, hFov) * 0.5f);
+	if (sinHalf < 0.001f)
+		sinHalf = 0.001f;
+
+	const float dist = (radius / sinHalf) * 1.2f;
+	const float lift = dist * 0.12f;
+	const glm::vec3 worldCam = center + glm::vec3(0.0f, lift, dist);
+	const glm::vec3 eye(worldCam.x, worldCam.y, -worldCam.z);
+	const glm::vec3 look(center.x, center.y, -center.z);
+
+	glm::vec3 dir = look - eye;
+	const float dirLen = glm::length(dir);
+	if (dirLen < 0.0001f)
+		dir = glm::vec3(0.0f, 0.0f, 1.0f);
+	else
+		dir /= dirLen;
+
+	float pitch = glm::degrees(std::asin(glm::clamp(dir.y, -1.0f, 1.0f)));
+	const float yaw = glm::degrees(std::atan2(dir.z, dir.x));
+	if (pitch > 89.0f)
+		pitch = 89.0f;
+	if (pitch < -89.0f)
+		pitch = -89.0f;
+
+	camera.setPosition(eye);
+	camera.setRotation(glm::vec3(yaw, pitch, 0.0f));
+
+	float reach = 0.0f;
+	for (const Model* model : models)
+	{
+		if (model == nullptr)
+			continue;
+		const glm::vec3 corner = model->bounds_crn;
+		const glm::vec3 size = model->bounds_size;
+		for (int cornerIndex = 0; cornerIndex < 8; cornerIndex++)
+		{
+			const glm::vec3 point(
+				corner.x + ((cornerIndex & 1) ? size.x : 0.0f),
+				corner.y + ((cornerIndex & 2) ? size.y : 0.0f),
+				corner.z + ((cornerIndex & 4) ? size.z : 0.0f));
+			reach = std::max(reach, glm::length(point - worldCam));
+		}
+	}
+	const float needed = std::max(kDefaultFar, std::max(reach + 50.0f, dist + radius * 3.0f + 50.0f));
+	camera.setClipPlaneFar(std::max(camera.getClipPlaneFar(), needed));
+}
+
 void Application::setCollisionMeshesVisible(bool visible)
 {
 	bool any = false;
@@ -2134,6 +2212,9 @@ void Application::clearModels()
 	critterSpriteFrames.clear();
 	refreshCrittersToggle();
 	selectedLevelObject = -1;
+	hoveredLevelObject = -1;
+	selectedLevelPart = nullptr;
+	hoveredLevelPart = nullptr;
 	// Note: Models are managed by the Content system, so we don't delete them here
 	
 	// Clear GUI model info
@@ -2373,19 +2454,15 @@ void Application::update(float dt)
 	}
 }
 
-void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& instance)
+void Application::drawStencilOutline(Shader& shader, const glm::vec4& tint, float outlinePixels,
+	const std::function<void(const MeshDrawStyle&)>& drawParts)
 {
-	const int instanceIndex = static_cast<int>(&instance - levelObjects.data());
-	CritterField* field = critters.fieldForInstance(instanceIndex);
-	if (field != nullptr && (field->assets() == nullptr || field->critters().empty()))
-		return;
-	if (field == nullptr && instance.model == nullptr && instance.extraModel == nullptr)
-		return;
-
 	const int width = static_cast<int>(Config::windowResolutionX);
 	const int height = static_cast<int>(Config::windowResolutionY);
-	if (width <= 0 || height <= 0)
+	if (width <= 0 || height <= 0 || outlinePixels <= 0.0f)
 		return;
+
+	Mesh::invalidateDrawState();
 
 	GLint polygonMode[2] = { GL_FILL, GL_FILL };
 	glGetIntegerv(GL_POLYGON_MODE, polygonMode);
@@ -2412,32 +2489,6 @@ void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& i
 	glStencilFunc(GL_ALWAYS, 1, 0xFF);
 	glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
 
-	const glm::mat4 cameraView = camera.getViewMatrix();
-	const glm::mat4 world = ty1InstanceMatrix(instance, &cameraView);
-	auto drawParts = [&](const MeshDrawStyle& style)
-	{
-		if (field != nullptr)
-		{
-			const CritterAssets& assets = *field->assets();
-			forEachCritterDraw(*field, [&](Model& model, const glm::mat4& critterWorld, Critter& critter)
-			{
-				if (assets.animated)
-					drawSkinnedCritter(shader, assets, critter, critterWorld, 2, style);
-				else
-				{
-					model.drawMeshes(shader, false, critterWorld, style);
-					model.drawMeshes(shader, true, critterWorld, style);
-				}
-			});
-			return;
-		}
-		eachPlacedModel(instance, [&](Model& placed)
-		{
-			placed.drawMeshes(shader, false, world, style);
-			placed.drawMeshes(shader, true, world, style);
-		});
-	};
-
 	MeshDrawStyle mark;
 	mark.solid = true;
 	drawParts(mark);
@@ -2448,8 +2499,8 @@ void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& i
 	glDisable(GL_DEPTH_TEST);
 
 	// Two pixels is 4/size in NDC. Eight shifts fill the ring, including the diagonals.
-	const float ax = 4.0f / static_cast<float>(width);
-	const float ay = 4.0f / static_cast<float>(height);
+	const float ax = (outlinePixels * 2.0f) / static_cast<float>(width);
+	const float ay = (outlinePixels * 2.0f) / static_cast<float>(height);
 	const float dx = ax * 0.70710678f;
 	const float dy = ay * 0.70710678f;
 	const glm::vec2 ring[8] =
@@ -2460,7 +2511,7 @@ void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& i
 
 	MeshDrawStyle rim;
 	rim.solid = true;
-	rim.tint = glm::vec4(1.0f, 0.5f, 0.05f, 1.0f);
+	rim.tint = tint;
 	for (const glm::vec2& offset : ring)
 	{
 		rim.clipOffset = offset;
@@ -2487,6 +2538,53 @@ void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& i
 	shader.setUniform1i("solidColour", 0);
 	shader.setUniform1i("water", 0);
 	shader.setUniform4f("tintColour", glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+	Mesh::invalidateDrawState();
+}
+
+void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& instance, const glm::vec4& tint, float outlinePixels)
+{
+	const int instanceIndex = static_cast<int>(&instance - levelObjects.data());
+	CritterField* field = critters.fieldForInstance(instanceIndex);
+	if (field != nullptr && (field->assets() == nullptr || field->critters().empty()))
+		return;
+	if (field == nullptr && instance.model == nullptr && instance.extraModel == nullptr)
+		return;
+
+	const glm::mat4 cameraView = camera.getViewMatrix();
+	const glm::mat4 world = ty1InstanceMatrix(instance, &cameraView);
+	drawStencilOutline(shader, tint, outlinePixels, [&](const MeshDrawStyle& style)
+	{
+		if (field != nullptr)
+		{
+			const CritterAssets& assets = *field->assets();
+			forEachCritterDraw(*field, [&](Model& model, const glm::mat4& critterWorld, Critter& critter)
+			{
+				if (assets.animated)
+					drawSkinnedCritter(shader, assets, critter, critterWorld, 2, style);
+				else
+				{
+					model.drawMeshes(shader, false, critterWorld, style);
+					model.drawMeshes(shader, true, critterWorld, style);
+				}
+			});
+			return;
+		}
+		eachPlacedModel(instance, [&](Model& placed)
+		{
+			placed.drawMeshes(shader, false, world, style);
+			placed.drawMeshes(shader, true, world, style);
+		});
+	});
+}
+
+void Application::drawMeshOutline(Shader& shader, const Mesh& mesh, const glm::vec4& tint, float outlinePixels)
+{
+	drawStencilOutline(shader, tint, outlinePixels, [&](const MeshDrawStyle& style)
+	{
+		MeshDrawStyle forced = style;
+		forced.drawHidden = true;
+		mesh.draw(shader, glm::mat4(1.0f), forced);
+	});
 }
 
 void Application::render(Shader& shader)
@@ -3181,8 +3279,31 @@ void Application::render(Shader& shader)
 			(waterQuality != Gui::WaterView::Off && reflectionPlaneCount > 0) ? reflectionGpuMs : 0.0f);
 	}
 
+	const glm::vec4 objectSelectColour(1.0f, 0.5f, 0.05f, 1.0f);
+	const glm::vec4 objectHoverColour(1.0f, 0.62f, 0.28f, 0.45f);
+	const glm::vec4 partSelectColour(0.15f, 0.90f, 1.0f, 1.0f);
+	const glm::vec4 partHoverColour(0.45f, 0.78f, 0.88f, 0.42f);
+	auto objectHasMesh = [&](int index) -> bool
+	{
+		if (index < 0 || index >= static_cast<int>(levelObjects.size()))
+			return false;
+		const Ty1Instance& instance = levelObjects[static_cast<size_t>(index)];
+		CritterField* field = critters.fieldForInstance(index);
+		if (field != nullptr)
+		{
+			const CritterAssets* assets = field->assets();
+			return assets != nullptr && assets->model != nullptr && !field->critters().empty();
+		}
+		return instance.model != nullptr || instance.extraModel != nullptr;
+	};
+	if (hoveredLevelObject != selectedLevelObject && objectHasMesh(hoveredLevelObject))
+		drawSelectedObjectOutline(shader, levelObjects[static_cast<size_t>(hoveredLevelObject)], objectHoverColour, 1.5f);
+	if (hoveredLevelPart != nullptr && hoveredLevelPart != selectedLevelPart)
+		drawMeshOutline(shader, *hoveredLevelPart, partHoverColour, 1.5f);
 	if (selectedLevelObject >= 0 && selectedLevelObject < static_cast<int>(levelObjects.size()))
-		drawSelectedObjectOutline(shader, levelObjects[static_cast<size_t>(selectedLevelObject)]);
+		drawSelectedObjectOutline(shader, levelObjects[static_cast<size_t>(selectedLevelObject)], objectSelectColour, 2.0f);
+	if (selectedLevelPart != nullptr)
+		drawMeshOutline(shader, *selectedLevelPart, partSelectColour, 2.0f);
 
 	glBlendEquation(GL_FUNC_ADD);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

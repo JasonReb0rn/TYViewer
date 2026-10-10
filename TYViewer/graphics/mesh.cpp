@@ -433,6 +433,9 @@ glm::mat3 Mesh::cachedUvMatrix() const
 
 Shader& Mesh::programFor(Shader& passed, const MeshDrawStyle& style) const
 {
+	// Outlines need clipOffset and solidColour, which the water programs do not have.
+	if (style.solid)
+		return passed;
 	if (!style.reflection && isWaterSurface()
 		&& m_content != nullptr && m_content->ty1WaterTypeFor(m_waterType) != nullptr)
 	{
@@ -564,7 +567,7 @@ void Mesh::prepareDraw(Shader& shader, const MeshDrawStyle& style) const
 void Mesh::draw(Shader& shader, const glm::mat4& world, const MeshDrawStyle& style) const
 {
 	// Disabled mesh parts should be fully hidden (skip draw call).
-	if (!m_enabled)
+	if (!m_enabled && !style.drawHidden)
 	{
 		return;
 	}

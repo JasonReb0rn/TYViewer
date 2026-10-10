@@ -127,6 +127,10 @@ private:
 	// doesn't reallocate a vector per mesh part per frame.
 	std::vector<glm::mat4> scratchInstanceMatrices;
 	int selectedLevelObject = -1;
+	int hoveredLevelObject = -1;
+	// Level-part list. Null when nothing is selected or the pointer is over the header.
+	Mesh* selectedLevelPart = nullptr;
+	Mesh* hoveredLevelPart = nullptr;
 	// Animation clock. Half of real time: TY1 presents at 30 Hz (lockTo30).
 	float ty1AnimTime = 0.0f;
 	// Critter fields for the open TY1 level. Their placeholder instances are not batched.
@@ -147,10 +151,14 @@ private:
 private:
 	void frameCameraOnModels(const std::vector<const Model*>& list, bool levelFraming);
 	void frameCameraOnInstance(int index);
+	void frameCameraOnMesh(const Mesh* mesh);
 	void refreshObjectInspector();
 	// Drawn when the instance is visible, and not a companion object while extras are hidden.
 	bool levelInstanceShown(const Ty1Instance& instance) const;
-	void drawSelectedObjectOutline(Shader& shader, const Ty1Instance& instance);
+	void drawStencilOutline(Shader& shader, const glm::vec4& tint, float outlinePixels,
+		const std::function<void(const MeshDrawStyle&)>& drawParts);
+	void drawSelectedObjectOutline(Shader& shader, const Ty1Instance& instance, const glm::vec4& tint, float outlinePixels);
+	void drawMeshOutline(Shader& shader, const Mesh& mesh, const glm::vec4& tint, float outlinePixels);
 	void refreshCollisionToggle();
 	void refreshCrittersToggle();
 	void refreshWaterToggle();

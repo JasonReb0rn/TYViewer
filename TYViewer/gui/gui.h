@@ -131,6 +131,12 @@ public:
 	void setOnPartVisibilityChanged(std::function<void()> callback);
 	void setOnLevelObjectSelected(std::function<void(int index)> callback);
 	void setOnLevelObjectFocused(std::function<void(int index)> callback);
+	// -1 when the pointer leaves the list. Objects with no mesh stay unhighlighted.
+	void setOnLevelObjectHovered(std::function<void(int index)> callback);
+	// Level-part row. Null clears the selection or the hover.
+	void setOnLevelPartSelected(std::function<void(class Mesh* mesh)> callback);
+	void setOnLevelPartHovered(std::function<void(class Mesh* mesh)> callback);
+	void setOnLevelPartFocused(std::function<void(class Mesh* mesh)> callback);
 	// Level (or other multi-mesh) view: names the button without enabling model export.
 	// canRecenter turns the recenter button on when room meshes are in the scene.
 	void setSceneLabel(const std::string& name, bool canRecenter);
@@ -155,7 +161,8 @@ public:
 			|| objectSearchActive
 			|| materialListRect.contains(mouseX, mouseY)
 			|| (!levelObjectItems.empty() && (objectListRect.contains(mouseX, mouseY)
-				|| objectInfoRect.contains(mouseX, mouseY)));
+				|| objectInfoRect.contains(mouseX, mouseY)))
+			|| listScrollDragging;
 	}
 	// True when the GUI expects typed characters (e.g., search box focused)
 	bool isTextInputActive() const { return activeSearchCategory >= 0 || materialSearchActive || objectSearchActive; }
@@ -228,6 +235,21 @@ private:
 	GuiRect extrasButtonRect() const;
 	void selectLevelObject(int index);
 	void revealLevelObject(int index);
+	void selectLevelPart(int flatIndex);
+	void revealLevelPart(int flatIndex);
+	void clearLevelPartSelection();
+	void resetMaterialSelection();
+	void reportHoveredObject(int index);
+	void reportHoveredPart(class Mesh* mesh);
+	enum class ScrollDrag
+	{
+		None,
+		Objects,
+		Parts
+	};
+	void renderListScrollbar(const GuiRect& panel, float headerHeight, float scroll, float maxScroll, bool dragging);
+	bool pressListScrollbar(const GuiRect& panel, float headerHeight, float& scroll, float maxScroll, ScrollDrag target, float x, float y);
+	void dragListScrollbar(float y);
 	void rebuildInfoDrawLines();
 	void drawCollapseButton(const GuiRect& rect, bool collapsed);
 	void drawTextButton(const GuiRect& rect, const char* label, const glm::vec4& fill, const glm::vec4& hoverFill);
@@ -295,6 +317,10 @@ private:
 	float materialListScroll;
 	float maxMaterialListScroll;
 	int hoveredMaterialItem;
+	int selectedMaterialIndex = -1;
+	int lastMaterialClickIndex = -1;
+	double lastMaterialClickTime = 0.0;
+	class Mesh* reportedHoveredPart = nullptr;
 
 	std::vector<LevelObjectItem> levelObjectItems;
 	std::string objectSearch;
@@ -310,6 +336,7 @@ private:
 	float objectListScroll = 0.0f;
 	float maxObjectListScroll = 0.0f;
 	int hoveredObjectItem = -1;
+	int reportedHoveredObject = -1;
 	int selectedObjectIndex = -1;
 	int lastObjectClickIndex = -1;
 	double lastObjectClickTime = 0.0;
@@ -318,6 +345,13 @@ private:
 	std::function<void()> onPartVisibilityChanged;
 	std::function<void(int index)> onLevelObjectSelected;
 	std::function<void(int index)> onLevelObjectFocused;
+	std::function<void(int index)> onLevelObjectHovered;
+	std::function<void(class Mesh* mesh)> onLevelPartSelected;
+	std::function<void(class Mesh* mesh)> onLevelPartHovered;
+	std::function<void(class Mesh* mesh)> onLevelPartFocused;
+	ScrollDrag listScrollDrag = ScrollDrag::None;
+	bool listScrollDragging = false;
+	float listScrollDragOffset = 0.0f;
 
 	std::vector<ObjectInfoLine> objectInfoLines;
 	struct InfoDrawLine
