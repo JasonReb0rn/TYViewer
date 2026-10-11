@@ -121,6 +121,30 @@ namespace
 		return readBool(field->value, fallback);
 	}
 
+	bool readVec3(const std::string& text, glm::vec3& out)
+	{
+		float value[3] = {};
+		size_t cursor = 0;
+		for (int axis = 0; axis < 3; axis++)
+		{
+			const size_t comma = text.find(',', cursor);
+			const std::string part = comma == std::string::npos
+				? text.substr(cursor)
+				: text.substr(cursor, comma - cursor);
+			if (!readFloat(part, value[axis]))
+				return false;
+			if (axis == 2)
+			{
+				out = glm::vec3(value[0], value[1], value[2]);
+				return true;
+			}
+			if (comma == std::string::npos)
+				return false;
+			cursor = comma + 1;
+		}
+		return false;
+	}
+
 	float wrapPi(float angle)
 	{
 		const float pi = glm::pi<float>();
@@ -397,17 +421,73 @@ void MobilePlatformSystem::rewind(Platform& platform, bool active)
 	platform.finished = false;
 	platform.elapsedTicks = platform.startElapsed;
 	platform.active = active;
-	platform.previewEnabled = active;
 	platform.yaw = platform.initialYaw;
+	if (platform.drop)
+	{
+		platform.hanging = true;
+		platform.falling = false;
+		platform.fallTicks = 0.0f;
+		platform.previewEnabled = false;
+		platform.position = platform.hangPos;
+		platform.prevPosition = platform.hangPos;
+		platform.prevYaw = platform.yaw;
+		return;
+	}
+	platform.previewEnabled = active;
 	place(platform, platform.elapsedTicks, false);
 	platform.prevPosition = platform.position;
 	platform.prevYaw = platform.yaw;
+}
+
+void MobilePlatformSystem::beginFall(Platform& platform)
+{
+	if (!platform.drop || !platform.hanging)
+		return;
+	platform.hanging = false;
+	platform.falling = true;
+	platform.fallTicks = 0.0f;
+	platform.finished = false;
+	platform.active = true;
+	platform.elapsedTicks = platform.startElapsed;
+	platform.yaw = platform.initialYaw;
+	platform.prevYaw = platform.yaw;
+	glm::vec3 derivative(0.0f);
+	platform.path.sample(0.0f, platform.fallTarget, derivative);
+	const float distance = glm::length(platform.fallTarget - platform.hangPos);
+	if (platform.speed > 1.0e-4f && distance > 1.0e-4f)
+		platform.fallDuration = (distance / platform.speed) * 30.0f;
+	else
+		platform.fallDuration = 0.0f;
+	platform.position = platform.hangPos;
+	platform.prevPosition = platform.hangPos;
+	platform.previewEnabled = true;
 }
 
 void MobilePlatformSystem::step(Platform& platform)
 {
 	platform.prevPosition = platform.position;
 	platform.prevYaw = platform.yaw;
+	if (platform.hanging)
+	{
+		platform.position = platform.hangPos;
+		platform.yaw = platform.initialYaw;
+		return;
+	}
+	if (platform.falling)
+	{
+		platform.fallTicks += 1.0f;
+		const float span = platform.fallDuration;
+		const float u = span <= 1.0e-4f ? 1.0f : glm::clamp(platform.fallTicks / span, 0.0f, 1.0f);
+		platform.position = glm::mix(platform.hangPos, platform.fallTarget, u);
+		platform.yaw = platform.initialYaw;
+		if (u >= 1.0f)
+		{
+			platform.falling = false;
+			platform.elapsedTicks = platform.startElapsed;
+			place(platform, platform.elapsedTicks, false);
+		}
+		return;
+	}
 	if (platform.active && platform.durationTicks > 1.0e-4f)
 		platform.elapsedTicks += 1.0f;
 	place(platform, platform.elapsedTicks, true);
@@ -423,12 +503,15 @@ void MobilePlatformSystem::load(std::vector<Ty1Instance>& instances)
 	for (int index = 0; index < static_cast<int>(instances.size()); index++)
 	{
 		Ty1Instance& instance = instances[static_cast<size_t>(index)];
-		if (lowerCopy(instance.typeName) != "airplatform")
+		const std::string type = lowerCopy(instance.typeName);
+		const bool drop = type == "droppontoon";
+		if (type != "airplatform" && type != "pontoon" && !drop)
 			continue;
 
 		Platform platform;
 		platform.instance = index;
 		platform.objectId = instance.objectId;
+		platform.drop = drop;
 		platform.pitch = instance.rotation.x;
 		platform.roll = instance.rotation.z;
 		platform.yaw = instance.rotation.y;
@@ -437,7 +520,7 @@ void MobilePlatformSystem::load(std::vector<Ty1Instance>& instances)
 		platform.turnSpeed = fieldFloat(instance, "turnSpeed", 0.0f);
 		platform.active = fieldBool(instance, "bActive", true);
 		platform.authoredActive = platform.active;
-		platform.previewEnabled = platform.active;
+		platform.previewEnabled = drop ? false : platform.active;
 		platform.moveOne = fieldBool(instance, "bMoveOne", false);
 		const bool nonCircular = fieldBool(instance, "bNonCircular", false);
 		float startTime = fieldFloat(instance, "startTime", 0.0f);
@@ -457,7 +540,7 @@ void MobilePlatformSystem::load(std::vector<Ty1Instance>& instances)
 		platform.elapsedTicks = startTime * platform.durationTicks;
 		platform.startElapsed = platform.elapsedTicks;
 
-		if (platform.turnSpeed > 0.0f && points.size() >= 2)
+		if (!drop && platform.turnSpeed > 0.0f && points.size() >= 2)
 		{
 			const glm::vec3 chord = points[1] - points[0];
 			const float horizontal = std::sqrt(chord.x * chord.x + chord.z * chord.z);
@@ -465,9 +548,23 @@ void MobilePlatformSystem::load(std::vector<Ty1Instance>& instances)
 				platform.yaw = std::atan2(chord.z, chord.x) + glm::half_pi<float>();
 		}
 		platform.initialYaw = platform.yaw;
-		place(platform, platform.elapsedTicks, false);
+		if (drop)
+		{
+			platform.hangPos = instance.position;
+			const Ty1Field* hang = fieldNamed(instance, "hangPos");
+			if (hang != nullptr)
+				readVec3(hang->value, platform.hangPos);
+			platform.hanging = true;
+			platform.position = platform.hangPos;
+			platform.yaw = platform.initialYaw;
+		}
+		else
+			place(platform, platform.elapsedTicks, false);
 		platform.prevPosition = platform.position;
 		platform.prevYaw = platform.yaw;
+
+		if (instance.hasAabb && drop)
+			expandAround(instance, platform.hangPos, boundsRadius(instance));
 
 		if (instance.hasAabb && platform.path.nodes.size() >= 2)
 		{
@@ -608,6 +705,8 @@ void MobilePlatformSystem::message(int objectId, const std::string& name)
 	{
 		platform.active = false;
 	}
+	else if (key == "fall")
+		beginFall(platform);
 }
 
 bool MobilePlatformSystem::platformPreview(int instanceIndex) const
@@ -627,8 +726,15 @@ void MobilePlatformSystem::setPlatformPreview(int instanceIndex, bool enabled)
 	const int slot = m_platformOf[static_cast<size_t>(instanceIndex)];
 	if (slot < 0)
 		return;
-	rewind(m_platforms[static_cast<size_t>(slot)], enabled);
-	m_platforms[static_cast<size_t>(slot)].previewEnabled = enabled;
+	Platform& platform = m_platforms[static_cast<size_t>(slot)];
+	if (enabled && platform.drop)
+	{
+		rewind(platform, true);
+		beginFall(platform);
+		return;
+	}
+	rewind(platform, enabled);
+	platform.previewEnabled = enabled;
 }
 
 bool MobilePlatformSystem::triggerPreview(int instanceIndex) const
@@ -678,6 +784,8 @@ void MobilePlatformSystem::setTriggerPreview(int instanceIndex, bool enabled, co
 				message(targetId, text);
 			platform.previewEnabled = platform.active || platform.finished;
 		}
+		else if (platform.drop)
+			platform.previewEnabled = false;
 		else
 			platform.previewEnabled = platform.authoredActive;
 	}

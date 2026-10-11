@@ -35,7 +35,7 @@ struct Ty1InfoLine
 	bool dim = false;
 	bool heading = false;
 	int indent = 0;
-	// 1: this air platform's playback. 2: this instance's event targets.
+	// 1: this air platform or pontoon's playback. 2: this instance's event targets.
 	int preview = 0;
 };
 

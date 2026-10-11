@@ -8,15 +8,16 @@
 
 struct Ty1Instance;
 
-// Playback for AIRPLATFORM. Travel matches the PC game's MobilePlatform
-// (cubic Hermite in arc length, Activate / Deactivate, bMoveOne). The authored
+// Playback for AIRPLATFORM and PONTOON. Both inherit the PC game's MobilePlatform
+// (cubic Hermite in arc length, Activate / Deactivate, bMoveOne). DROPPONTOON hangs
+// at hangPos until Fall, drops to the path, then uses that same travel. The authored
 // Ty1Instance is left unchanged so a level save still writes the placed pose.
 class MobilePlatformSystem
 {
 public:
 	void clear();
-	// One sim per AIRPLATFORM. Widens world AABBs so a traveling deck, and
-	// anything standing on it, stays inside the frustum.
+	// One sim per air platform, pontoon, or drop pontoon. Widens world AABBs so a
+	// traveling deck, and anything standing on it, stays inside the frustum.
 	void load(std::vector<Ty1Instance>& instances);
 
 	// One 30 Hz step when the accumulator crosses a tick. 0 when paused or idle.
@@ -27,7 +28,8 @@ public:
 	// Fraction of the way from the previous tick to the current one.
 	float alpha() const;
 
-	// Checkbox state for an air platform. On restarts the trip; off returns to the placed pose.
+	// Checkbox state for a mobile platform. On restarts the trip; off returns to the placed pose.
+	// A drop pontoon starts at hangPos. On releases the hang; off returns there.
 	bool platformPreview(int instanceIndex) const;
 	void setPlatformPreview(int instanceIndex, bool enabled);
 	// Checkbox state for a button or script. On delivers its events; off restores each target.
@@ -78,6 +80,14 @@ private:
 		float prevYaw = 0.0f;
 		float yaw = 0.0f;
 		float initialYaw = 0.0f;
+		// DROPPONTOON. Hangs at hangPos until Fall, then drops onto the path.
+		bool drop = false;
+		bool hanging = false;
+		bool falling = false;
+		float fallTicks = 0.0f;
+		float fallDuration = 0.0f;
+		glm::vec3 hangPos{ 0.0f };
+		glm::vec3 fallTarget{ 0.0f };
 	};
 
 	struct Rider
@@ -94,6 +104,7 @@ private:
 	void step(Platform& platform);
 	void place(Platform& platform, float elapsedTicks, bool applyTurn);
 	void rewind(Platform& platform, bool active);
+	void beginFall(Platform& platform);
 	void message(int objectId, const std::string& name);
 	glm::mat4 deckMatrix(const Platform& platform, const glm::vec3& position, float yaw) const;
 	int platformIndexForId(int objectId) const;

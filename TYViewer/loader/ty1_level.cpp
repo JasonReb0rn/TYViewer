@@ -203,6 +203,8 @@ namespace
 			{ "THUNDEGGCOLLECTOR", "Prop_0403_ThundEggGun" },
 			{ "THUNDEREGGCOLLECTOR", "Prop_0403_ThundEggGun" },
 			{ "AIRPLATFORM", "Prop_0099_Platform" },
+			// DropPontoon::Init uses the pontoon mesh. The type name does not suffix-match it.
+			{ "DROPPONTOON", "Prop_0035_Pontoon" },
 			{ "FROG", "Act_34_Frog" },
 			{ "WHIRLYWIND", "prop_0340_Whirlwind" },
 			{ "REED1", "prop_0006_Reed_01" },
@@ -928,7 +930,8 @@ std::vector<Ty1InfoLine> describeTy1Instance(
 		push(std::move(idText), -1, false, false, 0);
 	}
 
-	if (lowerCopy(instance.typeName) == "airplatform")
+	const std::string type = lowerCopy(instance.typeName);
+	if (type == "airplatform" || type == "pontoon" || type == "droppontoon")
 	{
 		push("Preview active", -1, false, false, 0);
 		lines.back().preview = 1;
