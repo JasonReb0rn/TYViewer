@@ -60,6 +60,9 @@ struct ObjectInfoLine
 	bool dim = false;
 	bool heading = false;
 	int indent = 0;
+	// 1: platform playback. 2: event targets. 0 is ordinary text.
+	int preview = 0;
+	bool checked = false;
 };
 
 class Gui
@@ -130,6 +133,9 @@ public:
 	// Level-part show/hide changed mesh visibility. The app refreshes the collision toggle.
 	void setOnPartVisibilityChanged(std::function<void()> callback);
 	void setOnLevelObjectSelected(std::function<void(int index)> callback);
+	void selectLevelObject(int index);
+	// Inspector preview checkbox. `preview` is 1 for the platform, 2 for its targets.
+	void setOnLevelObjectPreview(std::function<void(int index, int preview)> callback);
 	void setOnLevelObjectFocused(std::function<void(int index)> callback);
 	// -1 when the pointer leaves the list. Objects with no mesh stay unhighlighted.
 	void setOnLevelObjectHovered(std::function<void(int index)> callback);
@@ -233,7 +239,6 @@ private:
 	void setObjectVisible(int index, bool visible);
 	int levelExtraCount() const;
 	GuiRect extrasButtonRect() const;
-	void selectLevelObject(int index);
 	void revealLevelObject(int index);
 	void selectLevelPart(int flatIndex);
 	void revealLevelPart(int flatIndex);
@@ -344,6 +349,7 @@ private:
 	std::function<void(bool shown)> onLevelExtrasToggled;
 	std::function<void()> onPartVisibilityChanged;
 	std::function<void(int index)> onLevelObjectSelected;
+	std::function<void(int index, int preview)> onLevelObjectPreview;
 	std::function<void(int index)> onLevelObjectFocused;
 	std::function<void(int index)> onLevelObjectHovered;
 	std::function<void(class Mesh* mesh)> onLevelPartSelected;
@@ -360,6 +366,8 @@ private:
 		int link = -1;
 		bool dim = false;
 		bool heading = false;
+		int preview = 0;
+		bool checked = false;
 		float indent = 0.0f;
 	};
 	std::vector<InfoDrawLine> infoDrawLines;

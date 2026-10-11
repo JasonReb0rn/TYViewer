@@ -468,6 +468,13 @@ void Application::initialize()
 		selectedLevelObject = index;
 		refreshObjectInspector();
 	});
+	gui->setOnLevelObjectPreview([this](int index, int preview) {
+		if (preview == 1)
+			platforms.setPlatformPreview(index, !platforms.platformPreview(index));
+		else if (preview == 2)
+			platforms.setTriggerPreview(index, !platforms.triggerPreview(index), levelObjects);
+		refreshObjectInspector();
+	});
 	gui->setOnLevelObjectFocused([this](int index) {
 		frameCameraOnInstance(index);
 	});
@@ -491,8 +498,7 @@ void Application::initialize()
 		gui->setBoundsVisible(drawBounds);
 	});
 	gui->setOnCrittersToggle([this]() {
-		critters.setPaused(!critters.paused());
-		refreshCrittersToggle();
+		setSimulationPaused(!critters.paused());
 	});
 	gui->setOnWaterToggle([this]() {
 		cycleWaterQuality();
@@ -1163,6 +1169,11 @@ void Application::refreshObjectInspector()
 		line.dim = src.dim;
 		line.heading = src.heading;
 		line.indent = src.indent;
+		line.preview = src.preview;
+		if (src.preview == 1)
+			line.checked = platforms.platformPreview(selectedLevelObject);
+		else if (src.preview == 2)
+			line.checked = platforms.triggerPreview(selectedLevelObject);
 		lines.push_back(std::move(line));
 	}
 	gui->setObjectInfo(std::move(lines));
@@ -1370,6 +1381,7 @@ void Application::loadTy1Level(const std::string& levelName)
 		+ ", with mesh: " + std::to_string(propsWithMesh));
 
 	computeInstanceWorldBounds();
+	platforms.load(levelObjects);
 	// Collision shells only. The drawn level mesh is far too dense to raycast every tick.
 	critters.load(levelObjects, models,
 		[this](const Mesh* mesh) { return isCollisionMesh(mesh, content); },
@@ -1727,11 +1739,12 @@ void Application::frameCameraOnModels(const std::vector<const Model*>& list, boo
 		}
 		if (!levelFraming)
 			return;
-		for (const Ty1Instance& instance : levelObjects)
+		for (int index = 0; index < static_cast<int>(levelObjects.size()); index++)
 		{
+			const Ty1Instance& instance = levelObjects[static_cast<size_t>(index)];
 			if (!levelInstanceShown(instance) || (instance.model == nullptr && instance.extraModel == nullptr))
 				continue;
-			const glm::mat4 world = ty1InstanceMatrix(instance);
+			const glm::mat4 world = levelObjectMatrix(index, nullptr);
 			eachPlacedModel(instance, [&](const Model& placed)
 			{
 				for (const Mesh* mesh : placed.getMeshes())
@@ -1796,11 +1809,12 @@ void Application::frameCameraOnModels(const std::vector<const Model*>& list, boo
 	}
 	if (levelFraming)
 	{
-		for (const Ty1Instance& instance : levelObjects)
+		for (int index = 0; index < static_cast<int>(levelObjects.size()); index++)
 		{
+			const Ty1Instance& instance = levelObjects[static_cast<size_t>(index)];
 			if (!levelInstanceShown(instance) || (instance.model == nullptr && instance.extraModel == nullptr))
 				continue;
-			const glm::mat4 world = ty1InstanceMatrix(instance);
+			const glm::mat4 world = levelObjectMatrix(index, nullptr);
 			eachPlacedModel(instance, [&](const Model& placed)
 			{
 				for (const Mesh* mesh : placed.getMeshes())
@@ -1878,7 +1892,7 @@ void Application::frameCameraOnInstance(int index)
 	const Ty1Instance& instance = levelObjects[static_cast<size_t>(index)];
 	glm::dvec3 sum(0.0);
 	size_t count = 0;
-	const glm::mat4 world = ty1InstanceMatrix(instance);
+	const glm::mat4 world = levelObjectMatrix(index, nullptr);
 	eachPlacedModel(instance, [&](const Model& placed)
 	{
 		for (const Mesh* mesh : placed.getMeshes())
@@ -2137,6 +2151,149 @@ void Application::refreshCrittersToggle()
 		gui->setCrittersToggle(!critters.empty(), !critters.paused());
 }
 
+bool Application::simulationPaused() const
+{
+	if (!critters.empty() && critters.paused())
+		return true;
+	if (!platforms.empty() && platforms.paused())
+		return true;
+	return false;
+}
+
+void Application::setSimulationPaused(bool paused)
+{
+	critters.setPaused(paused);
+	platforms.setPaused(paused);
+	refreshCrittersToggle();
+}
+
+glm::mat4 Application::levelObjectMatrix(int index, const glm::mat4* cameraView) const
+{
+	const Ty1Instance& instance = levelObjects[static_cast<size_t>(index)];
+	glm::vec3 position;
+	glm::vec3 rotation;
+	if (platforms.drawPose(index, platforms.alpha(), position, rotation))
+		return ty1InstanceMatrix(instance, cameraView, &position, &rotation);
+	return ty1InstanceMatrix(instance, cameraView);
+}
+
+glm::mat4 Application::meshInstanceMatrix(const Mesh* mesh, const glm::mat4& instanceWorld) const
+{
+	if (mesh == nullptr)
+		return instanceWorld;
+	const std::string& part = mesh->getPartName();
+	bool propeller = false;
+	const char* needle = "propeller";
+	for (size_t i = 0; i < part.size(); i++)
+	{
+		size_t n = 0;
+		while (needle[n] != '\0'
+			&& i + n < part.size()
+			&& std::tolower(static_cast<unsigned char>(part[i + n])) == needle[n])
+			n++;
+		if (needle[n] == '\0')
+		{
+			propeller = true;
+			break;
+		}
+	}
+	if (!propeller)
+		return instanceWorld;
+	const glm::mat4 spin = glm::rotate(glm::mat4(1.0f), platforms.propellerAngle(), glm::vec3(0.0f, 1.0f, 0.0f));
+	return instanceWorld * spin;
+}
+
+namespace
+{
+	bool rayHitsAabb(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& boxMin, const glm::vec3& boxMax, float& tHit)
+	{
+		float tMin = 0.0f;
+		float tMax = 1.0e8f;
+		for (int axis = 0; axis < 3; axis++)
+		{
+			if (std::abs(direction[axis]) < 1.0e-8f)
+			{
+				if (origin[axis] < boxMin[axis] || origin[axis] > boxMax[axis])
+					return false;
+				continue;
+			}
+			float t1 = (boxMin[axis] - origin[axis]) / direction[axis];
+			float t2 = (boxMax[axis] - origin[axis]) / direction[axis];
+			if (t1 > t2)
+				std::swap(t1, t2);
+			tMin = std::max(tMin, t1);
+			tMax = std::min(tMax, t2);
+			if (tMin > tMax)
+				return false;
+		}
+		if (tMax < 0.0f)
+			return false;
+		tHit = tMin >= 0.0f ? tMin : tMax;
+		return true;
+	}
+}
+
+void Application::pickLevelButton(float x, float y)
+{
+	const float width = static_cast<float>(Config::windowResolutionX);
+	const float height = static_cast<float>(Config::windowResolutionY);
+	if (width < 1.0f || height < 1.0f)
+		return;
+
+	const glm::vec3 rotation = camera.getRotation();
+	const float yaw = glm::radians(rotation.x);
+	const float pitch = glm::radians(rotation.y);
+	glm::vec3 forward(
+		std::cos(pitch) * std::cos(yaw),
+		std::sin(pitch),
+		std::sin(yaw) * std::cos(pitch));
+	forward = glm::normalize(forward);
+	const glm::vec3 worldUp(0.0f, 1.0f, 0.0f);
+	glm::vec3 right = glm::cross(forward, worldUp);
+	if (glm::dot(right, right) < 1.0e-8f)
+		right = glm::vec3(1.0f, 0.0f, 0.0f);
+	right = glm::normalize(right);
+	const glm::vec3 up = glm::normalize(glm::cross(right, forward));
+
+	const float ndcX = (2.0f * x / width) - 1.0f;
+	const float ndcY = 1.0f - (2.0f * y / height);
+	const float tanHalf = std::tan(glm::radians(camera.getFieldOfView()) * 0.5f);
+	glm::vec3 dirCam = forward
+		+ right * (ndcX * camera.getAspectRatio() * tanHalf)
+		+ up * (ndcY * tanHalf);
+	dirCam = glm::normalize(dirCam);
+
+	const glm::vec3 eye = camera.getPosition();
+	const glm::vec3 origin(eye.x, eye.y, -eye.z);
+	const glm::vec3 direction(dirCam.x, dirCam.y, -dirCam.z);
+
+	int best = -1;
+	float bestDistance = std::numeric_limits<float>::max();
+	for (int index = 0; index < static_cast<int>(levelObjects.size()); index++)
+	{
+		const Ty1Instance& instance = levelObjects[static_cast<size_t>(index)];
+		if (!levelInstanceShown(instance) || !instance.hasAabb)
+			continue;
+		std::string type = instance.typeName;
+		for (char& c : type)
+			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		if (type != "bigredbutton" && type != "bigbluebutton")
+			continue;
+		float distance = 0.0f;
+		if (!rayHitsAabb(origin, direction, instance.worldAabbMin, instance.worldAabbMax, distance))
+			continue;
+		if (distance < bestDistance)
+		{
+			bestDistance = distance;
+			best = index;
+		}
+	}
+	if (best < 0)
+		return;
+	platforms.setTriggerPreview(best, !platforms.triggerPreview(best), levelObjects);
+	gui->selectLevelObject(best);
+}
+
 void Application::refreshWaterToggle()
 {
 	if (gui)
@@ -2208,6 +2365,7 @@ void Application::clearModels()
 	propMeshInstances.clear();
 	grassCards.clear();
 	critters.clear();
+	platforms.clear();
 	critterBatches.clear();
 	critterSpriteFrames.clear();
 	refreshCrittersToggle();
@@ -2280,6 +2438,9 @@ void Application::onMouseButton(int button, int action, double x, double y)
 	{
 		gui->onMouseButton(button, action, (float)x, (float)y);
 	}
+	if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_LEFT
+		&& viewingLevel && gui && !gui->isInteracting())
+		pickLevelButton(static_cast<float>(x), static_cast<float>(y));
 }
 
 void Application::onMouseMove(double x, double y)
@@ -2326,11 +2487,11 @@ void Application::update(float dt)
 		glm::radians(camera.getRotation().x),
 		glm::radians(camera.getRotation().y));
 	content.updateTy1WaterRipple();
-	// Wave phase is radians per real second. P freezes it with the critters.
-	if (!critters.paused())
+	// Wave phase is radians per real second. P freezes it with the critters and decks.
+	if (!simulationPaused())
 		content.updateTy1WaterWaves(dt);
 	const auto simStart = std::chrono::high_resolution_clock::now();
-	RenderStats::simTicks = critters.update(dt);
+	RenderStats::simTicks = critters.update(dt) + platforms.update(dt);
 	RenderStats::lastSimMs = std::chrono::duration<float, std::milli>(
 		std::chrono::high_resolution_clock::now() - simStart).count();
 
@@ -2412,11 +2573,8 @@ void Application::update(float dt)
 	if (!guiTyping && viewingLevel && Keyboard::isKeyPressed(GLFW_KEY_R))
 		cycleWaterQuality();
 
-	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_P) && !critters.empty())
-	{
-		critters.setPaused(!critters.paused());
-		refreshCrittersToggle();
-	}
+	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_P) && (!critters.empty() || !platforms.empty()))
+		setSimulationPaused(!simulationPaused());
 
 	if (!guiTyping && Keyboard::isKeyPressed(GLFW_KEY_T))
 	{
@@ -2551,7 +2709,7 @@ void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& i
 		return;
 
 	const glm::mat4 cameraView = camera.getViewMatrix();
-	const glm::mat4 world = ty1InstanceMatrix(instance, &cameraView);
+	const glm::mat4 world = levelObjectMatrix(instanceIndex, &cameraView);
 	drawStencilOutline(shader, tint, outlinePixels, [&](const MeshDrawStyle& style)
 	{
 		if (field != nullptr)
@@ -2571,8 +2729,15 @@ void Application::drawSelectedObjectOutline(Shader& shader, const Ty1Instance& i
 		}
 		eachPlacedModel(instance, [&](Model& placed)
 		{
-			placed.drawMeshes(shader, false, world, style);
-			placed.drawMeshes(shader, true, world, style);
+			for (bool transparent : { false, true })
+			{
+				for (Mesh* part : placed.getMeshes())
+				{
+					if (part == nullptr || part->isTransparent() != transparent)
+						continue;
+					part->draw(shader, meshInstanceMatrix(part, world), style);
+				}
+			}
 		});
 	});
 }
@@ -2661,7 +2826,7 @@ void Application::render(Shader& shader)
 		if (!levelInstanceShown(levelObjects[index]))
 			continue;
 		instanceShown[index] = 1;
-		instanceWorld[index] = ty1InstanceMatrix(levelObjects[index], &cameraView);
+		instanceWorld[index] = levelObjectMatrix(static_cast<int>(index), &cameraView);
 	}
 	bool skipWaterSurfaces = false;
 	// Reflection collection. The pass sorts what these flags gather instead of drawing in file order.
@@ -2756,7 +2921,7 @@ void Application::render(Shader& shader)
 			for (int index : entry.second)
 			{
 				if (instanceDrawable[static_cast<size_t>(index)])
-					scratchInstanceMatrices.push_back(instanceWorld[static_cast<size_t>(index)]);
+					scratchInstanceMatrices.push_back(meshInstanceMatrix(mesh, instanceWorld[static_cast<size_t>(index)]));
 			}
 			mesh->drawInstanced(*passShader, scratchInstanceMatrices, passStyle);
 		}
@@ -3133,7 +3298,7 @@ void Application::render(Shader& shader)
 					for (int n = 0; n < item.instanceCount; n++)
 					{
 						const int index = reflectInstanceIds[static_cast<size_t>(item.instanceBegin + n)];
-						scratchInstanceMatrices.push_back(instanceWorld[static_cast<size_t>(index)]);
+						scratchInstanceMatrices.push_back(meshInstanceMatrix(item.mesh, instanceWorld[static_cast<size_t>(index)]));
 					}
 					item.mesh->drawReflectionInstanced(*reflectProgram, scratchInstanceMatrices, item.cutout);
 				}
@@ -3404,11 +3569,12 @@ void Application::render(Shader& shader)
 
 	if (drawBounds)
 	{
-		for (const Ty1Instance& instance : levelObjects)
+		for (int index = 0; index < static_cast<int>(levelObjects.size()); index++)
 		{
+			const Ty1Instance& instance = levelObjects[static_cast<size_t>(index)];
 			if (!levelInstanceShown(instance))
 				continue;
-			const glm::mat4 world = ty1InstanceMatrix(instance, &cameraView);
+			const glm::mat4 world = levelObjectMatrix(index, &cameraView);
 			eachPlacedModel(instance, [&](const Model& placed)
 			{
 				const glm::vec3 corner = placed.bounds_crn;

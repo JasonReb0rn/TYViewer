@@ -27,6 +27,7 @@
 #include "config.h"
 #include "critters/critter_field.h"
 #include "gui/gui.h"
+#include "props/mobile_platform.h"
 #include "loader/ty1_level.h"
 
 class Application
@@ -135,6 +136,8 @@ private:
 	float ty1AnimTime = 0.0f;
 	// Critter fields for the open TY1 level. Their placeholder instances are not batched.
 	CritterSystem critters;
+	// Air platforms. The placed pose stays on the instance; this is the playback pose.
+	MobilePlatformSystem platforms;
 	// Unskinned critter meshes to this frame's world matrices. Cleared per pass.
 	std::unordered_map<Mesh*, std::vector<glm::mat4>> critterBatches;
 	// One unit quad per frame of a critter sprite sheet, keyed by texture name.
@@ -161,6 +164,11 @@ private:
 	void drawMeshOutline(Shader& shader, const Mesh& mesh, const glm::vec4& tint, float outlinePixels);
 	void refreshCollisionToggle();
 	void refreshCrittersToggle();
+	bool simulationPaused() const;
+	void setSimulationPaused(bool paused);
+	glm::mat4 levelObjectMatrix(int index, const glm::mat4* cameraView) const;
+	glm::mat4 meshInstanceMatrix(const Mesh* mesh, const glm::mat4& instanceWorld) const;
+	void pickLevelButton(float x, float y);
 	void refreshWaterToggle();
 	void cycleWaterQuality();
 	const std::vector<std::unique_ptr<Mesh>>& critterSpriteFramesFor(const CritterSpecies& species);

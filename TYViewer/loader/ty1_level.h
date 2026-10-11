@@ -35,6 +35,8 @@ struct Ty1InfoLine
 	bool dim = false;
 	bool heading = false;
 	int indent = 0;
+	// 1: this air platform's playback. 2: this instance's event targets.
+	int preview = 0;
 };
 
 // One placed object from a TY1 .lv2 `name` block. `model` is filled by the caller.
@@ -66,9 +68,10 @@ struct Ty1Instance
 	Ty1Kind kind = Ty1Kind::Prop;
 
 	// World-space box across `model` and `extraModel`, computed once after a level's
-	// props finish loading (Application::computeInstanceWorldBounds). Used to
-	// frustum-cull this instance out of the per-frame draw batches. false when this
-	// instance has no mesh (a pure trigger/patrol/sound has nothing to cull).
+	// props finish loading (Application::computeInstanceWorldBounds). Air platforms
+	// then widen it across the whole path. Used to frustum-cull this instance out
+	// of the per-frame draw batches. false when this instance has no mesh (a pure
+	// trigger/patrol/sound has nothing to cull).
 	bool hasAabb = false;
 	glm::vec3 worldAabbMin{ 0.0f, 0.0f, 0.0f };
 	glm::vec3 worldAabbMax{ 0.0f, 0.0f, 0.0f };
@@ -127,7 +130,9 @@ std::vector<Ty1InfoLine> describeTy1Instance(
 // in the last row). The returned matrix is that transform for a column-vector shader.
 // A billboard ignores level rot. `cameraView` is Camera::getViewMatrix (eye Z negated,
 // before render flips Z). Null keeps the stored rotation.
-glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance, const glm::mat4* cameraView = nullptr);
+// `position` and `rotation` stand in for the placed pose when playback supplies them.
+glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance, const glm::mat4* cameraView = nullptr,
+	const glm::vec3* position = nullptr, const glm::vec3* rotation = nullptr);
 
 // `a1.lv2` and `a1ex.lv2` both name base `a1.lv2` and companion `a1ex.lv2`.
 // A name that is not a zone level (`a1`..`e4`, `z1`..`z4`) leaves both empty.

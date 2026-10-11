@@ -197,6 +197,7 @@
     <ClCompile Include="loader\assets\wfn.cpp" />
     <ClCompile Include="critters\critter_field.cpp" />
     <ClCompile Include="critters\critter_floor.cpp" />
+    <ClCompile Include="props\mobile_platform.cpp" />
     <ClCompile Include="content.cpp" />
     <ClCompile Include="debug.cpp" />
     <ClCompile Include="graphics\camera.cpp" />
@@ -232,6 +233,7 @@
     <ClInclude Include="loader\assets\wfn.h" />
     <ClInclude Include="critters\critter_field.h" />
     <ClInclude Include="critters\critter_floor.h" />
+    <ClInclude Include="props\mobile_platform.h" />
     <ClInclude Include="config.h" />
     <ClInclude Include="content.h" />
     <ClInclude Include="debug.h" />

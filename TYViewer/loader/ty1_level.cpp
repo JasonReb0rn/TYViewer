@@ -455,11 +455,13 @@ Ty1LevelFiles ty1LevelFiles(const std::string& levelFile)
 	return files;
 }
 
-glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance, const glm::mat4* cameraView)
+glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance, const glm::mat4* cameraView,
+	const glm::vec3* position, const glm::vec3* rotation)
 {
 	// Transpose of (scale * Rx * Ry * Rz) with translation in the last row.
 	glm::mat4 matrix(1.0f);
-	glm::vec3 place = instance.position;
+	glm::vec3 place = position != nullptr ? *position : instance.position;
+	const glm::vec3 pyr = rotation != nullptr ? *rotation : instance.rotation;
 	place.y += instance.drawLiftY;
 	matrix = glm::translate(matrix, place);
 	if (instance.billboard && cameraView != nullptr)
@@ -467,17 +469,17 @@ glm::mat4 ty1InstanceMatrix(const Ty1Instance& instance, const glm::mat4* camera
 		// Inverse of the view rotation is camera right, up, and back in the
 		// Z-negated space Camera stores. Flip each axis Z into prop world space.
 		const glm::mat3 facing = glm::transpose(glm::mat3(*cameraView));
-		glm::mat4 rotation(1.0f);
-		rotation[0] = glm::vec4(facing[0].x, facing[0].y, -facing[0].z, 0.0f);
-		rotation[1] = glm::vec4(facing[1].x, facing[1].y, -facing[1].z, 0.0f);
-		rotation[2] = glm::vec4(facing[2].x, facing[2].y, -facing[2].z, 0.0f);
-		matrix *= rotation;
+		glm::mat4 facingMatrix(1.0f);
+		facingMatrix[0] = glm::vec4(facing[0].x, facing[0].y, -facing[0].z, 0.0f);
+		facingMatrix[1] = glm::vec4(facing[1].x, facing[1].y, -facing[1].z, 0.0f);
+		facingMatrix[2] = glm::vec4(facing[2].x, facing[2].y, -facing[2].z, 0.0f);
+		matrix *= facingMatrix;
 	}
 	else
 	{
-		matrix = glm::rotate(matrix, -instance.rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
-		matrix = glm::rotate(matrix, -instance.rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
-		matrix = glm::rotate(matrix, -instance.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
+		matrix = glm::rotate(matrix, -pyr.z, glm::vec3(0.0f, 0.0f, 1.0f));
+		matrix = glm::rotate(matrix, -pyr.y, glm::vec3(0.0f, 1.0f, 0.0f));
+		matrix = glm::rotate(matrix, -pyr.x, glm::vec3(1.0f, 0.0f, 0.0f));
 	}
 	matrix = glm::scale(matrix, instance.scale);
 	return matrix;
@@ -924,6 +926,27 @@ std::vector<Ty1InfoLine> describeTy1Instance(
 		if (!instance.objectLabel.empty())
 			idText += " " + instance.objectLabel;
 		push(std::move(idText), -1, false, false, 0);
+	}
+
+	if (lowerCopy(instance.typeName) == "airplatform")
+	{
+		push("Preview active", -1, false, false, 0);
+		lines.back().preview = 1;
+	}
+	bool canSend = false;
+	for (const Ty1Field& field : instance.fields)
+	{
+		if (lowerCopy(field.value) != "event")
+			continue;
+		const Ty1Field* target = childNamed(field, "targetid");
+		const ParsedId targetId = target ? parseIdValue(target->value) : ParsedId{};
+		if (targetId.ok && targetId.number != 0)
+			canSend = true;
+	}
+	if (canSend)
+	{
+		push("Preview trigger", -1, false, false, 0);
+		lines.back().preview = 2;
 	}
 
 	for (const Ty1Field& field : instance.fields)

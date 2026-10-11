@@ -1843,9 +1843,11 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 				const int row = (int)(relativeY / kInfoLineHeight);
 				if (row >= 0 && row < (int)infoDrawLines.size())
 				{
-					const int link = infoDrawLines[static_cast<size_t>(row)].link;
-					if (link >= 0)
-						selectLevelObject(link);
+					const InfoDrawLine& line = infoDrawLines[static_cast<size_t>(row)];
+					if (line.preview != 0 && onLevelObjectPreview)
+						onLevelObjectPreview(selectedObjectIndex, line.preview);
+					else if (line.link >= 0)
+						selectLevelObject(line.link);
 				}
 			}
 			else
@@ -1925,8 +1927,12 @@ void Gui::onMouseMove(float x, float y)
 		{
 			const float relativeY = y - (objectInfoRect.y + kInfoHeaderHeight) + objectInfoScroll;
 			const int row = (int)(relativeY / kInfoLineHeight);
-			if (row >= 0 && row < (int)infoDrawLines.size() && infoDrawLines[static_cast<size_t>(row)].link >= 0)
-				hoveredInfoRow = row;
+			if (row >= 0 && row < (int)infoDrawLines.size())
+			{
+				const InfoDrawLine& line = infoDrawLines[static_cast<size_t>(row)];
+				if (line.link >= 0 || line.preview != 0)
+					hoveredInfoRow = row;
+			}
 		}
 	}
 	if (!listScrollDragging && !levelObjectItems.empty() && objectListRect.contains(x, y))
@@ -2452,6 +2458,11 @@ void Gui::setOnPartVisibilityChanged(std::function<void()> callback)
 void Gui::setOnLevelObjectSelected(std::function<void(int)> callback)
 {
 	onLevelObjectSelected = std::move(callback);
+}
+
+void Gui::setOnLevelObjectPreview(std::function<void(int, int)> callback)
+{
+	onLevelObjectPreview = std::move(callback);
 }
 
 void Gui::setOnLevelObjectFocused(std::function<void(int)> callback)
@@ -3204,6 +3215,8 @@ void Gui::rebuildInfoDrawLines()
 				row.link = line.link;
 				row.dim = line.dim;
 				row.heading = line.heading;
+				row.preview = line.preview;
+				row.checked = line.checked;
 				row.indent = indent;
 				infoDrawLines.push_back(std::move(row));
 			}
@@ -3257,22 +3270,34 @@ void Gui::renderObjectInfo()
 		if (y >= listTop - 1.0f && y + kInfoLineHeight <= listBottom + 1.0f)
 		{
 			const bool hovered = hoveredInfoRow == static_cast<int>(row);
-			if (line.link >= 0)
+			if (line.link >= 0 || line.preview != 0)
 			{
 				bindRectShader();
-				const glm::vec4 rowColor = hovered
-					? glm::vec4(0.22f, 0.32f, 0.42f, 1.0f)
-					: glm::vec4(0.16f, 0.2f, 0.26f, 1.0f);
+				const glm::vec4 rowColor = line.preview != 0
+					? (hovered ? glm::vec4(0.42f, 0.34f, 0.16f, 1.0f) : glm::vec4(0.28f, 0.24f, 0.12f, 1.0f))
+					: (hovered ? glm::vec4(0.22f, 0.32f, 0.42f, 1.0f) : glm::vec4(0.16f, 0.2f, 0.26f, 1.0f));
 				drawRect(objectInfoRect.x + 4.0f, y - 1.0f, objectInfoRect.width - 8.0f, kInfoLineHeight, rowColor);
+			}
+			float textX = objectInfoRect.x + 10.0f + line.indent;
+			if (line.preview != 0)
+			{
+				bindRectShader();
+				const glm::vec4 box = line.checked
+					? glm::vec4(0.3f, 0.7f, 0.3f, 1.0f)
+					: glm::vec4(0.7f, 0.3f, 0.3f, 1.0f);
+				drawRect(textX, y, 8.0f, 8.0f, box);
+				textX += 12.0f;
 			}
 			glm::vec4 color(0.88f, 0.88f, 0.88f, 1.0f);
 			if (line.heading)
 				color = glm::vec4(0.75f, 0.9f, 1.0f, 1.0f);
+			else if (line.preview != 0)
+				color = hovered ? glm::vec4(1.0f, 0.95f, 0.7f, 1.0f) : glm::vec4(1.0f, 0.86f, 0.45f, 1.0f);
 			else if (line.link >= 0)
 				color = hovered ? glm::vec4(0.75f, 0.95f, 1.0f, 1.0f) : glm::vec4(0.55f, 0.82f, 1.0f, 1.0f);
 			else if (line.dim)
 				color = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
-			drawText(line.text, objectInfoRect.x + 10.0f + line.indent, y, color);
+			drawText(line.text, textX, y, color);
 			bindRectShader();
 		}
 		y += kInfoLineHeight;

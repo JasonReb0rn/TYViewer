@@ -105,6 +105,9 @@
     <ClCompile Include="critters\critter_floor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="props\mobile_platform.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="glad\src\glad.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -222,6 +225,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="critters\critter_floor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="props\mobile_platform.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="loader\archive.h">
