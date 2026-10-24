@@ -25,6 +25,20 @@ struct Bone
 	glm::vec3 defaultPosition;
 };
 
+// One MDL subobject. The sector numbers live in the name ("002 000 004 Geom_Ground"):
+// X page, vertical page, Z page. Names without that prefix are unsectioned.
+struct SubobjectPart
+{
+	std::string name;
+	std::string objectName;
+	bool hasSector = false;
+	int sectorX = 0;
+	int sectorLayer = 0;
+	int sectorZ = 0;
+};
+
+void parseSubobjectName(const std::string& name, SubobjectPart& part);
+
 class Model : public Drawable
 {
 public:
@@ -60,6 +74,8 @@ public:
 
 	std::vector<Collider> colliders;
 	std::vector<Bounds> bounds;
+	// Parallel to bounds: one entry per MDL subobject, in file order.
+	std::vector<SubobjectPart> subobjects;
 	std::vector<Bone> bones;
 
 private:

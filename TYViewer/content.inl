@@ -217,6 +217,7 @@ inline Model* Content::load(const std::string& name)
 
 			std::vector<Collider> colliders;
 			std::vector<Bounds> bounds;
+			std::vector<SubobjectPart> subobjects;
 			std::vector<Bone> bones;
 
 			if (isTY2)
@@ -863,9 +864,34 @@ inline Model* Content::load(const std::string& name)
 			else
 			{
 				Debug::log("Detected TY 1 format (no MDG file found), using embedded vertex data");
-				// TY 1 format: Use embedded vertex data from .mdl file
-				for (auto& subobj : mdl.subobjects)
+				auto ty1MaterialNote = [](const Ty1MaterialDraw& draw) -> std::string
 				{
+					std::string note;
+					if (draw.invisible)
+						note += "invisible ";
+					if (draw.grassEffect)
+					{
+						note += "grass";
+						if (draw.grassIndex >= 0)
+							note += " " + std::to_string(draw.grassIndex);
+						note += " ";
+					}
+					if (draw.masked)
+						note += "masked ";
+					if (draw.clampU && draw.clampV)
+						note += "clamp UV ";
+					else if (draw.clampU)
+						note += "clamp U ";
+					else if (draw.clampV)
+						note += "clamp V ";
+					if (!note.empty() && note.back() == ' ')
+						note.pop_back();
+					return note;
+				};
+				// TY 1 format: Use embedded vertex data from .mdl file
+				for (size_t subobjectIndex = 0; subobjectIndex < mdl.subobjects.size(); ++subobjectIndex)
+				{
+					auto& subobj = mdl.subobjects[subobjectIndex];
 					for (auto& mesh : subobj.meshes)
 					{
 						std::vector<Vertex> vertices;
@@ -1005,6 +1031,8 @@ inline Model* Content::load(const std::string& name)
 							<< "-!- This should not appear after fully implementing materials! -!-" << std::endl;
 					}
 					Mesh* meshPart = new Mesh(vertices, indices, texture, mesh.material, subobj.name);
+					meshPart->setSubobjectGroup(static_cast<int>(subobjectIndex));
+					meshPart->setMaterialNote(ty1MaterialNote(materialDraw));
 					meshPart->setContent(this);
 					meshPart->setBlend(materialDraw.blend);
 					meshPart->setAlphaRef(materialDraw.alphaRef);
@@ -1253,13 +1281,16 @@ inline Model* Content::load(const std::string& name)
 				}
 			}
 
-			// Parse subobject bounds
+			// Parse subobject bounds. The part record shares this index with Mesh::subobjectGroup.
 			for (auto& subobj : mdl.subobjects)
 			{
 				bounds.push_back({
 					glm::vec3(subobj.bounds.x, subobj.bounds.y, subobj.bounds.z),
 					glm::vec3(subobj.bounds.sx, subobj.bounds.sy, subobj.bounds.sz)
 				});
+				SubobjectPart part;
+				parseSubobjectName(subobj.name, part);
+				subobjects.push_back(std::move(part));
 			}
 
 			if (meshes.empty())
@@ -1277,6 +1308,7 @@ inline Model* Content::load(const std::string& name)
 
 			models[name]->colliders = colliders;
 			models[name]->bounds = bounds;
+			models[name]->subobjects = std::move(subobjects);
 			models[name]->bones = bones;
 
 			return models[name];

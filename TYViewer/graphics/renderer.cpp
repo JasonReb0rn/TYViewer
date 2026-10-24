@@ -23,8 +23,22 @@ void Renderer::initialize()
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
+void Renderer::destroyOcclusionMask()
+{
+	if (m_maskFbo != 0)
+		glDeleteFramebuffers(1, &m_maskFbo);
+	if (m_maskColor != 0)
+		glDeleteTextures(1, &m_maskColor);
+	m_maskFbo = 0;
+	m_maskColor = 0;
+	m_maskDepth = 0;
+	m_maskWidth = 0;
+	m_maskHeight = 0;
+}
+
 void Renderer::destroyWorldTarget()
 {
+	destroyOcclusionMask();
 	if (m_worldFbo != 0)
 		glDeleteFramebuffers(1, &m_worldFbo);
 	if (m_worldColor != 0)
@@ -102,6 +116,57 @@ void Renderer::beginWorldTarget(int width, int height, const glm::vec4& colour)
 	glClearColor(colour.x, colour.y, colour.z, 1.0f);
 	glClearDepth(0.0);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+}
+
+bool Renderer::beginOcclusionMask()
+{
+	if (m_worldFbo == 0 || m_worldDepth == 0 || m_worldWidth < 1 || m_worldHeight < 1)
+		return false;
+
+	if (m_maskFbo == 0 || m_maskWidth != m_worldWidth || m_maskHeight != m_worldHeight || m_maskDepth != m_worldDepth)
+	{
+		destroyOcclusionMask();
+		glGenFramebuffers(1, &m_maskFbo);
+		glGenTextures(1, &m_maskColor);
+		glBindTexture(GL_TEXTURE_2D, m_maskColor);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, m_worldWidth, m_worldHeight, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+		glBindFramebuffer(GL_FRAMEBUFFER, m_maskFbo);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_maskColor, 0);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, m_worldDepth);
+		const GLenum drawBuffer = GL_COLOR_ATTACHMENT0;
+		glDrawBuffers(1, &drawBuffer);
+		if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+		{
+			destroyOcclusionMask();
+			glBindFramebuffer(GL_FRAMEBUFFER, m_worldFbo);
+			glBindTexture(GL_TEXTURE_2D, 0);
+			return false;
+		}
+		m_maskWidth = m_worldWidth;
+		m_maskHeight = m_worldHeight;
+		m_maskDepth = m_worldDepth;
+		glBindTexture(GL_TEXTURE_2D, 0);
+	}
+
+	glBindFramebuffer(GL_FRAMEBUFFER, m_maskFbo);
+	glViewport(0, 0, m_maskWidth, m_maskHeight);
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	return true;
+}
+
+void Renderer::endOcclusionMask()
+{
+	glBindFramebuffer(GL_FRAMEBUFFER, m_worldFbo);
+	glViewport(0, 0, m_worldWidth > 0 ? m_worldWidth : 1, m_worldHeight > 0 ? m_worldHeight : 1);
+	const GLenum drawBuffer = GL_COLOR_ATTACHMENT0;
+	glDrawBuffers(1, &drawBuffer);
 }
 
 void Renderer::presentWorldTarget()

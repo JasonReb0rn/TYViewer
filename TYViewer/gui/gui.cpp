@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <glm/common.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include "../debug.h"
 #include "../model.h"
@@ -1682,16 +1683,25 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 
 				float relativeY = y - (materialListRect.y + kMeshPartHeaderHeight) + materialListScroll;
 				int itemIndex = (int)(relativeY / kMeshPartItemHeight);
-				
-				if (itemIndex >= 0 && itemIndex < (int)materialFiltered.size())
+				const int rowCount = useLevelPartTree()
+					? static_cast<int>(partRows.size())
+					: static_cast<int>(materialFiltered.size());
+
+				if (itemIndex >= 0 && itemIndex < rowCount)
 				{
-					const int flatIndex = materialFiltered[itemIndex];
 					const float rowTop = materialListRect.y + kMeshPartHeaderHeight - materialListScroll
 						+ static_cast<float>(itemIndex) * kMeshPartItemHeight;
 					const float bodyTop = materialListRect.y + kMeshPartHeaderHeight;
 					const float bodyBottom = materialListRect.y + materialListRect.height - 3.0f;
 					if (!rowFits(rowTop, bodyTop, bodyBottom, 30.0f))
 						return;
+					if (useLevelPartTree())
+					{
+						clickLevelPartRow(itemIndex, x, y, rowTop);
+						return;
+					}
+
+					const int flatIndex = materialFiltered[itemIndex];
 					Mesh* mesh = materialMeshAt(flatIndex);
 					if (mesh == nullptr)
 						return;
@@ -1712,8 +1722,8 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 					if (doubleClick)
 					{
 						selectLevelPart(flatIndex);
-						if (onLevelPartFocused)
-							onLevelPartFocused(mesh);
+						if (onLevelPartFocused && mesh != nullptr)
+							onLevelPartFocused({ mesh });
 					}
 					else if (flatIndex == selectedMaterialIndex)
 					{
@@ -1969,17 +1979,45 @@ void Gui::onMouseMove(float x, float y)
 			float relativeY = y - (materialListRect.y + kMeshPartHeaderHeight) + materialListScroll;
 			int itemIndex = (int)(relativeY / kMeshPartItemHeight);
 
-			if (itemIndex >= 0 && itemIndex < (int)materialFiltered.size())
+			const int rowCount = useLevelPartTree()
+				? static_cast<int>(partRows.size())
+				: static_cast<int>(materialFiltered.size());
+			if (itemIndex >= 0 && itemIndex < rowCount)
 			{
 				hoveredMaterialItem = itemIndex;
 			}
 		}
 	}
 	{
-		Mesh* hoveredPart = nullptr;
-		if (hoveredMaterialItem >= 0 && hoveredMaterialItem < static_cast<int>(materialFiltered.size()))
-			hoveredPart = materialMeshAt(materialFiltered[static_cast<size_t>(hoveredMaterialItem)]);
-		reportHoveredPart(hoveredPart);
+		if (useLevelPartTree())
+		{
+			std::vector<Mesh*> hovered;
+			if (hoveredMaterialItem >= 0 && hoveredMaterialItem < static_cast<int>(partRows.size()))
+			{
+				const PartRow& row = partRows[static_cast<size_t>(hoveredMaterialItem)];
+				if (row.kind == PartRowKind::Part)
+				{
+					for (int flat : row.childFlats)
+					{
+						if (Mesh* mesh = materialMeshAt(flat))
+							hovered.push_back(mesh);
+					}
+				}
+				else if (row.kind == PartRowKind::Material || row.kind == PartRowKind::Loose)
+				{
+					if (Mesh* mesh = materialMeshAt(row.flatMesh))
+						hovered.push_back(mesh);
+				}
+			}
+			reportHoveredParts(hovered);
+		}
+		else
+		{
+			Mesh* hoveredPart = nullptr;
+			if (hoveredMaterialItem >= 0 && hoveredMaterialItem < static_cast<int>(materialFiltered.size()))
+				hoveredPart = materialMeshAt(materialFiltered[static_cast<size_t>(hoveredMaterialItem)]);
+			reportHoveredPart(hoveredPart);
+		}
 	}
 	
 	if (dropdownOpen && dropdownRect.contains(x, y))
@@ -2219,6 +2257,9 @@ void Gui::setCurrentModel(Model* model, const std::string& modelName)
 	resetMaterialSelection();
 	currentModel = model;
 	levelModels.clear();
+	levelRooms.clear();
+	partRows.clear();
+	expandedParts.clear();
 	clearObjectList();
 	currentModelName = modelName;
 	sceneLoaded = false;
@@ -2230,14 +2271,20 @@ void Gui::setCurrentModel(Model* model, const std::string& modelName)
 	layoutMaterialList();
 }
 
-void Gui::setLevelModels(const std::vector<Model*>& models, const std::string& name)
+void Gui::setLevelModels(const std::vector<LevelRoom>& rooms, const std::string& name)
 {
 	resetMaterialSelection();
 	currentModel = nullptr;
-	levelModels = models;
+	levelRooms = rooms;
+	levelModels.clear();
+	levelModels.reserve(rooms.size());
+	for (const LevelRoom& room : rooms)
+		levelModels.push_back(room.model);
+	partRows.clear();
+	expandedParts.clear();
 	clearObjectList();
 	currentModelName = name;
-	sceneLoaded = !models.empty();
+	sceneLoaded = !rooms.empty();
 	materialSearch.clear();
 	materialSearchActive = false;
 	materialFilterDirty = true;
@@ -2251,6 +2298,9 @@ void Gui::setSceneLabel(const std::string& name, bool canRecenter)
 	resetMaterialSelection();
 	currentModel = nullptr;
 	levelModels.clear();
+	levelRooms.clear();
+	partRows.clear();
+	expandedParts.clear();
 	clearObjectList();
 	currentModelName = name;
 	sceneLoaded = canRecenter;
@@ -2267,6 +2317,9 @@ void Gui::clearCurrentModel()
 	resetMaterialSelection();
 	currentModel = nullptr;
 	levelModels.clear();
+	levelRooms.clear();
+	partRows.clear();
+	expandedParts.clear();
 	clearObjectList();
 	sceneLoaded = false;
 	materialSearch.clear();
@@ -2280,6 +2333,11 @@ void Gui::clearCurrentModel()
 bool Gui::hasMaterialPanel() const
 {
 	return currentModel != nullptr || !levelModels.empty();
+}
+
+bool Gui::useLevelPartTree() const
+{
+	return !levelRooms.empty();
 }
 
 int Gui::materialMeshCount() const
@@ -2330,16 +2388,152 @@ void Gui::rebuildMaterialFilter()
 
 	materialFilterDirty = false;
 	materialFiltered.clear();
-	const int count = materialMeshCount();
-	for (int i = 0; i < count; i++)
+	partRows.clear();
+	if (!useLevelPartTree())
 	{
-		Mesh* mesh = materialMeshAt(i);
-		if (mesh == nullptr)
+		const int count = materialMeshCount();
+		for (int i = 0; i < count; i++)
+		{
+			Mesh* mesh = materialMeshAt(i);
+			if (mesh == nullptr)
+				continue;
+			if (materialSearch.empty()
+				|| containsCaseInsensitive(mesh->getPartName(), materialSearch)
+				|| containsCaseInsensitive(mesh->getMaterialName(), materialSearch))
+				materialFiltered.push_back(i);
+		}
+		return;
+	}
+
+	int flatBase = 0;
+	std::string lastLayer;
+	for (int roomIndex = 0; roomIndex < static_cast<int>(levelRooms.size()); ++roomIndex)
+	{
+		Model* model = levelRooms[static_cast<size_t>(roomIndex)].model;
+		if (model == nullptr)
 			continue;
-		if (materialSearch.empty()
-			|| containsCaseInsensitive(mesh->getPartName(), materialSearch)
-			|| containsCaseInsensitive(mesh->getMaterialName(), materialSearch))
-			materialFiltered.push_back(i);
+		const std::vector<Mesh*>& meshes = model->getMeshes();
+		std::vector<int> groupOrder;
+		std::vector<std::vector<int>> grouped;
+		std::vector<int> loose;
+		for (int local = 0; local < static_cast<int>(meshes.size()); ++local)
+		{
+			Mesh* mesh = meshes[static_cast<size_t>(local)];
+			if (mesh == nullptr)
+				continue;
+			const int group = mesh->getSubobjectGroup();
+			if (group < 0 || group >= static_cast<int>(model->subobjects.size()))
+			{
+				loose.push_back(local);
+				continue;
+			}
+			if (group >= static_cast<int>(grouped.size()))
+				grouped.resize(static_cast<size_t>(group) + 1);
+			if (grouped[static_cast<size_t>(group)].empty())
+				groupOrder.push_back(group);
+			grouped[static_cast<size_t>(group)].push_back(local);
+		}
+
+		std::vector<PartRow> roomRows;
+		auto addPart = [&](int group, const std::vector<int>& locals)
+		{
+			const SubobjectPart* sub = (group >= 0 && group < static_cast<int>(model->subobjects.size()))
+				? &model->subobjects[static_cast<size_t>(group)] : nullptr;
+			std::string partName;
+			if (!locals.empty() && meshes[static_cast<size_t>(locals[0])] != nullptr)
+				partName = meshes[static_cast<size_t>(locals[0])]->getPartName();
+
+			bool partMatch = materialSearch.empty();
+			bool materialMatch = false;
+			std::vector<int> matching;
+			if (!materialSearch.empty())
+			{
+				partMatch = containsCaseInsensitive(partName, materialSearch);
+				if (sub != nullptr)
+				{
+					if (containsCaseInsensitive(sub->objectName, materialSearch))
+						partMatch = true;
+					if (sub->hasSector)
+					{
+						char sector[16];
+						std::snprintf(sector, sizeof(sector), "%03d %03d %03d", sub->sectorX, sub->sectorLayer, sub->sectorZ);
+						if (containsCaseInsensitive(sector, materialSearch))
+							partMatch = true;
+					}
+				}
+				for (int local : locals)
+				{
+					Mesh* mesh = meshes[static_cast<size_t>(local)];
+					if (mesh != nullptr && containsCaseInsensitive(mesh->getMaterialName(), materialSearch))
+					{
+						materialMatch = true;
+						matching.push_back(local);
+					}
+				}
+				if (!partMatch && !materialMatch)
+					return;
+			}
+
+			PartRow row;
+			row.kind = PartRowKind::Part;
+			row.roomIndex = roomIndex;
+			row.group = group;
+			row.childFlats.reserve(locals.size());
+			for (int local : locals)
+				row.childFlats.push_back(flatBase + local);
+			const bool userOpen = expandedParts.find(std::make_pair(roomIndex, group)) != expandedParts.end();
+			const bool forceOpen = materialMatch && !materialSearch.empty();
+			row.open = userOpen || forceOpen;
+			roomRows.push_back(row);
+			for (int flat : row.childFlats)
+				materialFiltered.push_back(flat);
+			if (!row.open)
+				return;
+
+			const std::vector<int>& shown = (partMatch || materialSearch.empty()) ? locals : matching;
+			for (int local : shown)
+			{
+				PartRow child;
+				child.kind = PartRowKind::Material;
+				child.roomIndex = roomIndex;
+				child.group = group;
+				child.flatMesh = flatBase + local;
+				roomRows.push_back(child);
+			}
+		};
+
+		for (int group : groupOrder)
+			addPart(group, grouped[static_cast<size_t>(group)]);
+
+		for (int local : loose)
+		{
+			Mesh* mesh = meshes[static_cast<size_t>(local)];
+			if (!materialSearch.empty() && mesh != nullptr
+				&& !containsCaseInsensitive(mesh->getPartName(), materialSearch)
+				&& !containsCaseInsensitive(mesh->getMaterialName(), materialSearch))
+				continue;
+			PartRow row;
+			row.kind = PartRowKind::Loose;
+			row.roomIndex = roomIndex;
+			row.flatMesh = flatBase + local;
+			roomRows.push_back(row);
+			materialFiltered.push_back(row.flatMesh);
+		}
+
+		if (!roomRows.empty())
+		{
+			const std::string& label = levelRooms[static_cast<size_t>(roomIndex)].layerLabel;
+			if (label != lastLayer)
+			{
+				PartRow header;
+				header.kind = PartRowKind::Layer;
+				header.roomIndex = roomIndex;
+				partRows.push_back(header);
+				lastLayer = label;
+			}
+			partRows.insert(partRows.end(), roomRows.begin(), roomRows.end());
+		}
+		flatBase += static_cast<int>(meshes.size());
 	}
 }
 
@@ -2360,8 +2554,11 @@ void Gui::layoutMaterialList()
 
 	rebuildMaterialFilter();
 	const float kBottomPad = 5.0f;
+	const int rowCount = useLevelPartTree()
+		? static_cast<int>(partRows.size())
+		: static_cast<int>(materialFiltered.size());
 	const float contentHeight = kMeshPartHeaderHeight
-		+ (static_cast<float>(materialFiltered.size()) * kMeshPartItemHeight)
+		+ (static_cast<float>(rowCount) * kMeshPartItemHeight)
 		+ kBottomPad;
 	const float maxHeight = windowHeight * 0.7f;
 	const float panelHeight = (contentHeight < maxHeight) ? contentHeight : maxHeight;
@@ -2475,17 +2672,17 @@ void Gui::setOnLevelObjectHovered(std::function<void(int)> callback)
 	onLevelObjectHovered = std::move(callback);
 }
 
-void Gui::setOnLevelPartSelected(std::function<void(Mesh*)> callback)
+void Gui::setOnLevelPartSelected(std::function<void(const LevelPartPick&)> callback)
 {
 	onLevelPartSelected = std::move(callback);
 }
 
-void Gui::setOnLevelPartHovered(std::function<void(Mesh*)> callback)
+void Gui::setOnLevelPartHovered(std::function<void(const std::vector<Mesh*>&)> callback)
 {
 	onLevelPartHovered = std::move(callback);
 }
 
-void Gui::setOnLevelPartFocused(std::function<void(Mesh*)> callback)
+void Gui::setOnLevelPartFocused(std::function<void(const std::vector<Mesh*>&)> callback)
 {
 	onLevelPartFocused = std::move(callback);
 }
@@ -2577,10 +2774,18 @@ void Gui::layoutObjectList()
 	if (levelObjectItems.empty())
 	{
 		objectListRect = { 0.0f, 0.0f, 0.0f, 0.0f };
-		objectInfoRect = { 0.0f, 0.0f, 0.0f, 0.0f };
 		maxObjectListScroll = 0.0f;
-		maxObjectInfoScroll = 0.0f;
-		infoDrawLines.clear();
+		if (!partPickActive)
+		{
+			objectInfoRect = { 0.0f, 0.0f, 0.0f, 0.0f };
+			maxObjectInfoScroll = 0.0f;
+			infoDrawLines.clear();
+			return;
+		}
+		const float bottom = (float)windowHeight - 12.0f - kSceneStatsBarHeight;
+		const float available = std::max(120.0f, bottom - kObjectColumnTop);
+		objectInfoRect = { 10.0f, kObjectColumnTop, kObjectColumnWidth, std::min(320.0f, available) };
+		rebuildInfoDrawLines();
 		return;
 	}
 
@@ -2595,7 +2800,7 @@ void Gui::layoutObjectList()
 	// INFO only has something to show once an object has been clicked. Hiding it
 	// otherwise (zero-size rect; renderObjectInfo already skips anything under 8px)
 	// also frees that space back to the list instead of leaving a blank gap.
-	const bool showInfo = selectedObjectIndex >= 0;
+	const bool showInfo = selectedObjectIndex >= 0 || partPickActive;
 
 	if (objectListCollapsed)
 	{
@@ -2961,6 +3166,8 @@ void Gui::selectLevelObject(int index)
 {
 	if (index < 0 || index >= static_cast<int>(levelObjectItems.size()))
 		return;
+	if (partPickActive)
+		clearLevelPartSelection();
 	selectedObjectIndex = index;
 	rebuildObjectFilter();
 	bool listed = false;
@@ -3020,9 +3227,25 @@ void Gui::selectLevelPart(int flatIndex)
 	if (mesh == nullptr)
 		return;
 	selectedMaterialIndex = flatIndex;
+	partPickActive = true;
+	partPickSector = false;
+	partPickRoom = -1;
+	partPickGroup = mesh->getSubobjectGroup();
+	partPickFlat = flatIndex;
 	revealLevelPart(flatIndex);
 	if (onLevelPartSelected)
-		onLevelPartSelected(mesh);
+	{
+		LevelPartPick pick;
+		pick.meshes.push_back(mesh);
+		pick.title = mesh->getPartName();
+		if (mesh->hasLocalAabb())
+		{
+			pick.hasBounds = true;
+			pick.boundsMin = mesh->getLocalAabbMin();
+			pick.boundsMax = mesh->getLocalAabbMax();
+		}
+		onLevelPartSelected(pick);
+	}
 }
 
 void Gui::revealLevelPart(int flatIndex)
@@ -3056,8 +3279,13 @@ void Gui::revealLevelPart(int flatIndex)
 void Gui::clearLevelPartSelection()
 {
 	selectedMaterialIndex = -1;
+	partPickActive = false;
+	partPickSector = false;
+	partPickRoom = -1;
+	partPickGroup = -1;
+	partPickFlat = -1;
 	if (onLevelPartSelected)
-		onLevelPartSelected(nullptr);
+		onLevelPartSelected(LevelPartPick{});
 }
 
 void Gui::resetMaterialSelection()
@@ -3065,10 +3293,16 @@ void Gui::resetMaterialSelection()
 	selectedMaterialIndex = -1;
 	lastMaterialClickIndex = -1;
 	lastMaterialClickTime = 0.0;
+	lastPartClickKey = 0;
 	hoveredMaterialItem = -1;
-	reportHoveredPart(nullptr);
+	partPickActive = false;
+	partPickSector = false;
+	partPickRoom = -1;
+	partPickGroup = -1;
+	partPickFlat = -1;
+	reportHoveredParts({});
 	if (onLevelPartSelected)
-		onLevelPartSelected(nullptr);
+		onLevelPartSelected(LevelPartPick{});
 }
 
 void Gui::reportHoveredObject(int index)
@@ -3080,13 +3314,33 @@ void Gui::reportHoveredObject(int index)
 		onLevelObjectHovered(index);
 }
 
+void Gui::reportHoveredParts(const std::vector<Mesh*>& meshes)
+{
+	if (meshes.size() == reportedHoveredParts.size())
+	{
+		bool same = true;
+		for (size_t i = 0; i < meshes.size(); ++i)
+		{
+			if (meshes[i] != reportedHoveredParts[i])
+			{
+				same = false;
+				break;
+			}
+		}
+		if (same)
+			return;
+	}
+	reportedHoveredParts = meshes;
+	if (onLevelPartHovered)
+		onLevelPartHovered(reportedHoveredParts);
+}
+
 void Gui::reportHoveredPart(Mesh* mesh)
 {
-	if (mesh == reportedHoveredPart)
-		return;
-	reportedHoveredPart = mesh;
-	if (onLevelPartHovered)
-		onLevelPartHovered(mesh);
+	if (mesh == nullptr)
+		reportHoveredParts({});
+	else
+		reportHoveredParts({ mesh });
 }
 
 void Gui::renderListScrollbar(const GuiRect& panel, float headerHeight, float scroll, float maxScroll, bool dragging)
@@ -3193,7 +3447,7 @@ void Gui::rebuildInfoDrawLines()
 	};
 
 	const float inner = objectInfoRect.width - 20.0f;
-	if (selectedObjectIndex < 0 || objectInfoLines.empty())
+	if ((!partPickActive && selectedObjectIndex < 0) || objectInfoLines.empty())
 	{
 		InfoDrawLine row;
 		row.text = "Select an object";
@@ -3235,7 +3489,7 @@ void Gui::rebuildInfoDrawLines()
 
 void Gui::renderObjectInfo()
 {
-	if (levelObjectItems.empty() || objectInfoRect.height < 8.0f)
+	if (objectInfoRect.height < 8.0f || (levelObjectItems.empty() && !partPickActive))
 		return;
 
 	glUseProgram(shaderProgram);
@@ -3253,7 +3507,8 @@ void Gui::renderObjectInfo()
 	drawRect(objectInfoRect.x, objectInfoRect.y + objectInfoRect.height - 2.0f, objectInfoRect.width, 2.0f, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
 	drawRect(objectInfoRect.x, objectInfoRect.y, 2.0f, objectInfoRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
 	drawRect(objectInfoRect.x + objectInfoRect.width - 2.0f, objectInfoRect.y, 2.0f, objectInfoRect.height, glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
-	drawText("INFO", objectInfoRect.x + 10.0f, objectInfoRect.y + 8.0f, glm::vec4(1.0f, 1.0f, 0.55f, 1.0f));
+	drawText(partPickActive && selectedObjectIndex < 0 ? "PART" : "INFO",
+		objectInfoRect.x + 10.0f, objectInfoRect.y + 8.0f, glm::vec4(1.0f, 1.0f, 0.55f, 1.0f));
 	bindRectShader();
 
 	if (objectInfoScroll < 0.0f)
@@ -3367,6 +3622,417 @@ void Gui::renderModelInfo()
 	drawText("Colliders: " + std::to_string(currentModel->colliders.size()), modelInfoRect.x + 10.0f, yOffset, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
 }
 
+GuiRect Gui::sectorButtonRect(float rowTop) const
+{
+	const float width = 56.0f;
+	const float gutter = listRowGutter(maxMaterialListScroll);
+	return { materialListRect.x + materialListRect.width - 8.0f - gutter - width, rowTop + 15.0f, width, 14.0f };
+}
+
+LevelPartPick Gui::makeLevelPartPick(const PartRow& row, bool sector)
+{
+	LevelPartPick pick;
+	if (row.roomIndex < 0 || row.roomIndex >= static_cast<int>(levelRooms.size()))
+		return pick;
+
+	Model* model = levelRooms[static_cast<size_t>(row.roomIndex)].model;
+	pick.layerLabel = levelRooms[static_cast<size_t>(row.roomIndex)].layerLabel;
+	const SubobjectPart* sub = nullptr;
+	if (model != nullptr && row.group >= 0 && row.group < static_cast<int>(model->subobjects.size()))
+		sub = &model->subobjects[static_cast<size_t>(row.group)];
+
+	auto includeBox = [&](const glm::vec3& corner, const glm::vec3& size)
+	{
+		const glm::vec3 maxCorner = corner + size;
+		if (!pick.hasBounds)
+		{
+			pick.boundsMin = corner;
+			pick.boundsMax = maxCorner;
+			pick.hasBounds = true;
+			return;
+		}
+		pick.boundsMin = glm::min(pick.boundsMin, corner);
+		pick.boundsMax = glm::max(pick.boundsMax, maxCorner);
+	};
+
+	if (sector && sub != nullptr && sub->hasSector)
+	{
+		pick.sectorGroup = true;
+		pick.hasSector = true;
+		pick.sectorX = sub->sectorX;
+		pick.sectorLayer = sub->sectorLayer;
+		pick.sectorZ = sub->sectorZ;
+		char title[32];
+		std::snprintf(title, sizeof(title), "%03d %03d %03d", sub->sectorX, sub->sectorLayer, sub->sectorZ);
+		pick.title = title;
+		for (int roomIndex = 0; roomIndex < static_cast<int>(levelRooms.size()); ++roomIndex)
+		{
+			Model* roomModel = levelRooms[static_cast<size_t>(roomIndex)].model;
+			if (roomModel == nullptr)
+				continue;
+			for (int group = 0; group < static_cast<int>(roomModel->subobjects.size()); ++group)
+			{
+				const SubobjectPart& other = roomModel->subobjects[static_cast<size_t>(group)];
+				if (!other.hasSector || other.sectorX != sub->sectorX || other.sectorLayer != sub->sectorLayer || other.sectorZ != sub->sectorZ)
+					continue;
+				int triangles = 0;
+				bool anyMesh = false;
+				for (Mesh* mesh : roomModel->getMeshes())
+				{
+					if (mesh == nullptr || mesh->getSubobjectGroup() != group)
+						continue;
+					pick.meshes.push_back(mesh);
+					triangles += mesh->getTriangleCount();
+					anyMesh = true;
+				}
+				if (!anyMesh)
+					continue;
+				if (group < static_cast<int>(roomModel->bounds.size()))
+				{
+					const Bounds& box = roomModel->bounds[static_cast<size_t>(group)];
+					includeBox(box.corner, box.size);
+				}
+				const std::string objectName = other.objectName.empty() ? other.name : other.objectName;
+				pick.partLines.push_back(levelRooms[static_cast<size_t>(roomIndex)].layerLabel + "  " + objectName
+					+ "  " + std::to_string(triangles) + " tris");
+			}
+		}
+		return pick;
+	}
+
+	if (row.kind == PartRowKind::Part)
+	{
+		for (int flat : row.childFlats)
+		{
+			if (Mesh* mesh = materialMeshAt(flat))
+				pick.meshes.push_back(mesh);
+		}
+		if (sub != nullptr)
+		{
+			pick.hasSector = sub->hasSector;
+			pick.sectorX = sub->sectorX;
+			pick.sectorLayer = sub->sectorLayer;
+			pick.sectorZ = sub->sectorZ;
+			pick.title = (!sub->objectName.empty()) ? sub->objectName : sub->name;
+			if (model != nullptr && row.group >= 0 && row.group < static_cast<int>(model->bounds.size()))
+			{
+				const Bounds& box = model->bounds[static_cast<size_t>(row.group)];
+				includeBox(box.corner, box.size);
+			}
+		}
+		else if (!pick.meshes.empty())
+			pick.title = pick.meshes[0]->getPartName();
+		return pick;
+	}
+
+	Mesh* mesh = materialMeshAt(row.flatMesh);
+	if (mesh == nullptr)
+		return pick;
+	pick.meshes.push_back(mesh);
+	pick.title = mesh->getPartName();
+	if (sub != nullptr)
+	{
+		pick.hasSector = sub->hasSector;
+		pick.sectorX = sub->sectorX;
+		pick.sectorLayer = sub->sectorLayer;
+		pick.sectorZ = sub->sectorZ;
+		if (!sub->objectName.empty())
+			pick.title = sub->objectName;
+	}
+	if (mesh->hasLocalAabb())
+	{
+		pick.hasBounds = true;
+		pick.boundsMin = mesh->getLocalAabbMin();
+		pick.boundsMax = mesh->getLocalAabbMax();
+	}
+	return pick;
+}
+
+void Gui::selectLevelPartRow(const PartRow& row, bool sector, bool focus)
+{
+	if (selectedObjectIndex >= 0)
+	{
+		selectedObjectIndex = -1;
+		if (onLevelObjectSelected)
+			onLevelObjectSelected(-1);
+	}
+
+	LevelPartPick pick = makeLevelPartPick(row, sector);
+	partPickActive = !pick.meshes.empty();
+	partPickSector = sector && partPickActive;
+	partPickRoom = row.roomIndex;
+	partPickGroup = row.group;
+	partPickFlat = (row.kind == PartRowKind::Part && !sector) ? -1 : row.flatMesh;
+	partPickSectorX = pick.sectorX;
+	partPickSectorLayer = pick.sectorLayer;
+	partPickSectorZ = pick.sectorZ;
+	selectedMaterialIndex = row.flatMesh;
+	if (onLevelPartSelected)
+		onLevelPartSelected(pick);
+	if (focus && onLevelPartFocused)
+		onLevelPartFocused(pick.meshes);
+	layoutObjectList();
+}
+
+bool Gui::clickLevelPartRow(int itemIndex, float x, float y, float rowTop)
+{
+	if (itemIndex < 0 || itemIndex >= static_cast<int>(partRows.size()))
+		return false;
+	const PartRow row = partRows[static_cast<size_t>(itemIndex)];
+	if (row.kind == PartRowKind::Layer)
+		return true;
+
+	const bool isPart = row.kind == PartRowKind::Part;
+	if (isPart)
+	{
+		const GuiRect arrow = { materialListRect.x + 8.0f, rowTop + 9.0f, 12.0f, 12.0f };
+		if (arrow.contains(x, y))
+		{
+			const std::pair<int, int> key(row.roomIndex, row.group);
+			if (expandedParts.erase(key) == 0)
+				expandedParts.insert(key);
+			materialFilterDirty = true;
+			layoutMaterialList();
+			return true;
+		}
+	}
+
+	const float boxX = isPart ? materialListRect.x + 24.0f
+		: (row.kind == PartRowKind::Material ? materialListRect.x + 42.0f : materialListRect.x + 10.0f);
+	const GuiRect checkbox = { boxX, rowTop + 9.0f, 12.0f, 12.0f };
+	if (checkbox.contains(x, y))
+	{
+		if (isPart)
+		{
+			bool anyOff = false;
+			for (int flat : row.childFlats)
+			{
+				Mesh* mesh = materialMeshAt(flat);
+				if (mesh != nullptr && !mesh->isEnabled())
+					anyOff = true;
+			}
+			for (int flat : row.childFlats)
+			{
+				if (Mesh* mesh = materialMeshAt(flat))
+					mesh->setEnabled(anyOff);
+			}
+		}
+		else if (Mesh* mesh = materialMeshAt(row.flatMesh))
+			mesh->setEnabled(!mesh->isEnabled());
+		if (onPartVisibilityChanged)
+			onPartVisibilityChanged();
+		return true;
+	}
+
+	bool sectorClick = false;
+	const SubobjectPart* sub = nullptr;
+	if (row.roomIndex >= 0 && row.roomIndex < static_cast<int>(levelRooms.size()))
+	{
+		Model* model = levelRooms[static_cast<size_t>(row.roomIndex)].model;
+		if (model != nullptr && row.group >= 0 && row.group < static_cast<int>(model->subobjects.size()))
+			sub = &model->subobjects[static_cast<size_t>(row.group)];
+	}
+	if (isPart && sub != nullptr && sub->hasSector && sectorButtonRect(rowTop).contains(x, y))
+		sectorClick = true;
+
+	const long long clickKey = (static_cast<long long>(row.roomIndex) << 42)
+		^ (static_cast<long long>(row.group + 3) << 21)
+		^ static_cast<long long>(row.flatMesh + 3)
+		^ (sectorClick ? (1LL << 62) : 0);
+	const double now = glfwGetTime();
+	const bool doubleClick = clickKey == lastPartClickKey && (now - lastMaterialClickTime) <= 0.4;
+	lastPartClickKey = clickKey;
+	lastMaterialClickTime = now;
+
+	bool already = false;
+	if (partPickActive && sectorClick && sub != nullptr)
+		already = partPickSector && sub->sectorX == partPickSectorX && sub->sectorLayer == partPickSectorLayer && sub->sectorZ == partPickSectorZ;
+	else if (partPickActive && isPart)
+		already = !partPickSector && partPickRoom == row.roomIndex && partPickGroup == row.group && partPickFlat < 0;
+	else if (partPickActive)
+		already = !partPickSector && partPickFlat == row.flatMesh;
+
+	if (!doubleClick && already)
+	{
+		clearLevelPartSelection();
+		layoutObjectList();
+		return true;
+	}
+
+	selectLevelPartRow(row, sectorClick, doubleClick);
+	return true;
+}
+
+void Gui::renderLevelPartTree()
+{
+	const float kItemBoxHeight = 30.0f;
+	const float kNameLineY = 4.0f;
+	const float kTagsLineY = 16.0f;
+	const float bodyTop = materialListRect.y + kMeshPartHeaderHeight;
+	const float bodyBottom = materialListRect.y + materialListRect.height - 3.0f;
+	const float rowGutter = listRowGutter(maxMaterialListScroll);
+	float yOffset = bodyTop - materialListScroll;
+
+	auto bindRectShader = [&]()
+	{
+		glUseProgram(shaderProgram);
+		glm::mat4 projection = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
+		glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+	};
+
+	for (size_t rowIndex = 0; rowIndex < partRows.size(); ++rowIndex)
+	{
+		if (!rowFits(yOffset, bodyTop, bodyBottom, kItemBoxHeight))
+		{
+			yOffset += kMeshPartItemHeight;
+			continue;
+		}
+
+		const PartRow& row = partRows[rowIndex];
+		Model* model = nullptr;
+		const SubobjectPart* sub = nullptr;
+		if (row.roomIndex >= 0 && row.roomIndex < static_cast<int>(levelRooms.size()))
+		{
+			model = levelRooms[static_cast<size_t>(row.roomIndex)].model;
+			if (model != nullptr && row.group >= 0 && row.group < static_cast<int>(model->subobjects.size()))
+				sub = &model->subobjects[static_cast<size_t>(row.group)];
+		}
+
+		const bool hovered = hoveredMaterialItem == static_cast<int>(rowIndex);
+		bool selected = false;
+		if (partPickActive && partPickSector && sub != nullptr && sub->hasSector)
+			selected = sub->sectorX == partPickSectorX && sub->sectorLayer == partPickSectorLayer && sub->sectorZ == partPickSectorZ
+				&& row.kind != PartRowKind::Layer;
+		else if (partPickActive && !partPickSector && row.kind == PartRowKind::Part)
+			selected = partPickRoom == row.roomIndex && partPickGroup == row.group && partPickFlat < 0;
+		else if (partPickActive && !partPickSector && (row.kind == PartRowKind::Material || row.kind == PartRowKind::Loose))
+			selected = partPickFlat == row.flatMesh && partPickFlat >= 0;
+
+		glm::vec4 bgColor(0.18f, 0.18f, 0.18f, 1.0f);
+		if (row.kind == PartRowKind::Layer)
+			bgColor = glm::vec4(0.16f, 0.16f, 0.12f, 1.0f);
+		else if (selected)
+			bgColor = hovered ? glm::vec4(0.16f, 0.42f, 0.55f, 1.0f) : glm::vec4(0.10f, 0.32f, 0.44f, 1.0f);
+		else if (hovered)
+			bgColor = glm::vec4(0.25f, 0.25f, 0.25f, 1.0f);
+
+		bindRectShader();
+		drawRect(materialListRect.x + 5.0f, yOffset, materialListRect.width - 10.0f - rowGutter, kItemBoxHeight, bgColor);
+
+		if (row.kind == PartRowKind::Layer)
+		{
+			const std::string label = levelRooms[static_cast<size_t>(row.roomIndex)].layerLabel;
+			drawText(label, materialListRect.x + 10.0f, yOffset + 10.0f, glm::vec4(1.0f, 0.9f, 0.45f, 1.0f));
+			bindRectShader();
+			yOffset += kMeshPartItemHeight;
+			continue;
+		}
+
+		const bool isPart = row.kind == PartRowKind::Part;
+		const float boxX = isPart ? materialListRect.x + 24.0f
+			: (row.kind == PartRowKind::Material ? materialListRect.x + 42.0f : materialListRect.x + 10.0f);
+		const float textX = boxX + 18.0f;
+
+		int shown = 0;
+		int total = 0;
+		int triangles = 0;
+		auto countMesh = [&](Mesh* mesh)
+		{
+			if (mesh == nullptr)
+				return;
+			total++;
+			triangles += mesh->getTriangleCount();
+			if (mesh->isEnabled())
+				shown++;
+		};
+		if (isPart)
+		{
+			for (int flat : row.childFlats)
+				countMesh(materialMeshAt(flat));
+		}
+		else
+			countMesh(materialMeshAt(row.flatMesh));
+
+		glm::vec4 checkboxColor(0.7f, 0.3f, 0.3f, 1.0f);
+		if (total > 0 && shown == total)
+			checkboxColor = glm::vec4(0.3f, 0.7f, 0.3f, 1.0f);
+		else if (shown > 0)
+			checkboxColor = glm::vec4(0.75f, 0.65f, 0.2f, 1.0f);
+		drawRect(boxX, yOffset + 9.0f, 12.0f, 12.0f, checkboxColor);
+		if (shown == total && total > 0)
+			drawText("X", boxX + 1.0f, yOffset + 11.0f, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+		bindRectShader();
+
+		if (isPart)
+		{
+			drawText(row.open ? "-" : "+", materialListRect.x + 10.0f, yOffset + 11.0f, glm::vec4(0.85f, 0.85f, 0.85f, 1.0f));
+			bindRectShader();
+		}
+
+		std::string primary;
+		std::string secondary;
+		if (isPart)
+		{
+			const std::string objectName = (sub != nullptr && !sub->objectName.empty()) ? sub->objectName
+				: (sub != nullptr ? sub->name : "part");
+			if (sub != nullptr && sub->hasSector)
+			{
+				char sector[32];
+				std::snprintf(sector, sizeof(sector), "%03d %03d %03d  ", sub->sectorX, sub->sectorLayer, sub->sectorZ);
+				primary = std::string(sector) + objectName;
+			}
+			else
+				primary = objectName;
+			secondary = std::to_string(total) + (total == 1 ? " material  " : " materials  ") + std::to_string(triangles) + " tris";
+		}
+		else
+		{
+			Mesh* mesh = materialMeshAt(row.flatMesh);
+			primary = mesh != nullptr ? mesh->getMaterialName() : "unknown";
+			if (primary.empty())
+				primary = "unknown";
+			if (mesh != nullptr && !mesh->getMaterialNote().empty())
+				secondary = mesh->getMaterialNote();
+			if (row.kind == PartRowKind::Loose && mesh != nullptr)
+			{
+				primary = mesh->getPartName().empty() ? primary : mesh->getPartName();
+				secondary = mesh->getMaterialName();
+				if (!mesh->getMaterialNote().empty())
+					secondary += "  " + mesh->getMaterialNote();
+			}
+		}
+
+		const float reserved = (isPart && sub != nullptr && sub->hasSector) ? 64.0f : 8.0f;
+		const int nameMax = std::max(8, (int)((materialListRect.width - (textX - materialListRect.x) - rowGutter - reserved) / 8.0f));
+		if ((int)primary.length() > nameMax)
+			primary = primary.substr(0, std::max(1, nameMax - 3)) + "...";
+		const glm::vec4 textColor = (shown > 0) ? glm::vec4(0.9f, 0.9f, 0.9f, 1.0f) : glm::vec4(0.6f, 0.6f, 0.6f, 1.0f);
+		drawText(primary, textX, yOffset + kNameLineY, textColor);
+		if (!secondary.empty())
+		{
+			const int secondaryMax = std::max(8, (int)((materialListRect.width - (textX - materialListRect.x) - rowGutter - reserved) / 8.0f));
+			if ((int)secondary.length() > secondaryMax)
+				secondary = secondary.substr(0, std::max(1, secondaryMax - 3)) + "...";
+			const glm::vec4 secondaryColor = (shown > 0) ? glm::vec4(0.65f, 0.75f, 1.0f, 1.0f) : glm::vec4(0.45f, 0.5f, 0.6f, 1.0f);
+			drawText(secondary, textX, yOffset + kTagsLineY, secondaryColor);
+		}
+		bindRectShader();
+
+		if (isPart && sub != nullptr && sub->hasSector)
+		{
+			const GuiRect sector = sectorButtonRect(yOffset);
+			const bool sectorHot = sector.contains(mouseX, mouseY);
+			drawRect(sector.x, sector.y, sector.width, sector.height,
+				sectorHot ? glm::vec4(0.22f, 0.42f, 0.52f, 1.0f) : glm::vec4(0.16f, 0.28f, 0.36f, 1.0f));
+			drawText("SECTOR", sector.x + 4.0f, sector.y + 3.0f, glm::vec4(0.75f, 0.9f, 1.0f, 1.0f));
+			bindRectShader();
+		}
+
+		yOffset += kMeshPartItemHeight;
+	}
+	renderListScrollbar(materialListRect, kMeshPartHeaderHeight, materialListScroll, maxMaterialListScroll, listScrollDrag == ScrollDrag::Parts);
+}
+
 void Gui::renderMaterialList()
 {
 	if (!hasMaterialPanel()) return;
@@ -3449,6 +4115,14 @@ void Gui::renderMaterialList()
 		searchText = "..." + searchText.substr(searchText.size() - (maxChars - 3));
 	drawText(searchText, searchRect.x + 6.0f, searchRect.y + 6.0f, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
 	bindRectShader();
+
+	if (useLevelPartTree())
+	{
+		if (materialListScroll < 0.0f) materialListScroll = 0.0f;
+		if (materialListScroll > maxMaterialListScroll) materialListScroll = maxMaterialListScroll;
+		renderLevelPartTree();
+		return;
+	}
 	
 	// Clamp scroll in case panel was resized
 	if (materialListScroll < 0.0f) materialListScroll = 0.0f;

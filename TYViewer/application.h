@@ -129,9 +129,12 @@ private:
 	std::vector<glm::mat4> scratchInstanceMatrices;
 	int selectedLevelObject = -1;
 	int hoveredLevelObject = -1;
-	// Level-part list. Null when nothing is selected or the pointer is over the header.
-	Mesh* selectedLevelPart = nullptr;
-	Mesh* hoveredLevelPart = nullptr;
+	// Level-part list. Empty when nothing is selected or the pointer is over a header.
+	std::vector<Mesh*> selectedLevelParts;
+	std::vector<Mesh*> hoveredLevelParts;
+	bool sectorBoundsVisible = false;
+	glm::vec3 sectorBoundsCorner{ 0.0f, 0.0f, 0.0f };
+	glm::vec3 sectorBoundsSize{ 0.0f, 0.0f, 0.0f };
 	// Animation clock. Half of real time: TY1 presents at 30 Hz (lockTo30).
 	float ty1AnimTime = 0.0f;
 	// Critter fields for the open TY1 level. Their placeholder instances are not batched.
@@ -155,7 +158,10 @@ private:
 	void frameCameraOnModels(const std::vector<const Model*>& list, bool levelFraming);
 	void frameCameraOnInstance(int index);
 	void frameCameraOnMesh(const Mesh* mesh);
+	void frameCameraOnMeshes(const std::vector<Mesh*>& meshes);
+	void frameCameraOnMeshBounds(const glm::vec3& minCorner, const glm::vec3& maxCorner);
 	void refreshObjectInspector();
+	void refreshPartInspector(const LevelPartPick& pick);
 	// Drawn when the instance is visible, and not a companion object while extras are hidden.
 	bool levelInstanceShown(const Ty1Instance& instance) const;
 	void drawStencilOutline(Shader& shader, const glm::vec4& tint, float outlinePixels,

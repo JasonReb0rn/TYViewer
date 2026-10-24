@@ -29,12 +29,18 @@ public:
 	unsigned worldFramebuffer() const { return m_worldFbo; }
 	// Copies the world colour onto the window. The UI draws after this.
 	void presentWorldTarget();
+	// An R8 mask that shares the world depth buffer. Clears the mask to 0 and
+	// leaves depth and stencil alone. False when the world target is not ready.
+	bool beginOcclusionMask();
+	void endOcclusionMask();
+	unsigned occlusionMaskTexture() const { return m_maskColor; }
 	void draw(const Drawable& drawable, Shader& shader);
 	void render(GLFWwindow* window);
 
 private:
 	void ensureWorldTarget(int width, int height);
 	void destroyWorldTarget();
+	void destroyOcclusionMask();
 
 	unsigned int m_worldFbo = 0;
 	unsigned int m_worldColor = 0;
@@ -42,4 +48,9 @@ private:
 	int m_worldWidth = 0;
 	int m_worldHeight = 0;
 	bool m_worldTargetFailed = false;
+	unsigned int m_maskFbo = 0;
+	unsigned int m_maskColor = 0;
+	unsigned int m_maskDepth = 0;
+	int m_maskWidth = 0;
+	int m_maskHeight = 0;
 };

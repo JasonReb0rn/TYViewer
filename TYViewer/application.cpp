@@ -23,6 +23,7 @@
 #include "util/stringext.h"
 
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <sstream>
 
@@ -481,14 +482,15 @@ void Application::initialize()
 	gui->setOnLevelObjectHovered([this](int index) {
 		hoveredLevelObject = index;
 	});
-	gui->setOnLevelPartSelected([this](Mesh* mesh) {
-		selectedLevelPart = mesh;
+	gui->setOnLevelPartSelected([this](const LevelPartPick& pick) {
+		selectedLevelParts = pick.meshes;
+		refreshPartInspector(pick);
 	});
-	gui->setOnLevelPartHovered([this](Mesh* mesh) {
-		hoveredLevelPart = mesh;
+	gui->setOnLevelPartHovered([this](const std::vector<Mesh*>& meshes) {
+		hoveredLevelParts = meshes;
 	});
-	gui->setOnLevelPartFocused([this](Mesh* mesh) {
-		frameCameraOnMesh(mesh);
+	gui->setOnLevelPartFocused([this](const std::vector<Mesh*>& meshes) {
+		frameCameraOnMeshes(meshes);
 	});
 	gui->setOnCollisionToggle([this]() {
 		setCollisionMeshesVisible(!collisionMeshesVisible);
@@ -1023,9 +1025,65 @@ namespace
 		}
 	}
 
-	std::vector<std::string> roomModelsFromLv2(const std::string& text)
+	struct Ty1SetupRoom
 	{
-		std::vector<std::string> names;
+		std::string key;
+		std::string modelName;
+		std::string detail;
+	};
+
+	std::string ty1LayerLabel(const std::string& key, const std::string& detail)
+	{
+		std::string title;
+		if (key == "ground")
+			title = "Ground";
+		else if (key == "envcube")
+			title = "Sky";
+		else if (key == "overlay_water")
+			title = "Water";
+		else if (key.rfind("overlay_", 0) == 0)
+			title = "Overlay " + key.substr(8);
+		else
+			title = key;
+
+		std::string extra;
+		std::string token;
+		auto flush = [&]()
+		{
+			std::string word = lowerCopy(trimCopy(token));
+			token.clear();
+			if (word.empty() || word == "0" || word == "none")
+				return;
+			if (word.size() >= 4 && word.compare(word.size() - 4, 4, ".mdl") == 0)
+				return;
+			// Material names (Room_a3_water) are not layer flags. grasseffect is.
+			for (char ch : word)
+			{
+				if (ch == '_' || (ch >= '0' && ch <= '9'))
+					return;
+			}
+			if (word == "grasseffect")
+				word = "grass";
+			if (extra.empty())
+				extra = word;
+		};
+		for (char ch : detail)
+		{
+			if (ch == ',')
+				flush();
+			else
+				token.push_back(ch);
+		}
+		flush();
+		if (!extra.empty())
+			title += " - " + extra;
+		return title;
+	}
+
+	std::vector<Ty1SetupRoom> roomModelsFromLv2(const std::string& text)
+	{
+		std::vector<Ty1SetupRoom> rooms;
+		std::vector<std::string> seen;
 		std::istringstream stream(text);
 		std::string line;
 		while (std::getline(stream, line))
@@ -1046,9 +1104,13 @@ namespace
 			if (!take)
 				continue;
 
-			appendMdlNames(line.substr(eq + 1), names);
+			const std::string detail = line.substr(eq + 1);
+			const size_t before = seen.size();
+			appendMdlNames(detail, seen);
+			for (size_t i = before; i < seen.size(); ++i)
+				rooms.push_back({ key, seen[i], detail });
 		}
-		return names;
+		return rooms;
 	}
 
 	bool looksLikePropName(const std::string& name)
@@ -1179,6 +1241,119 @@ void Application::refreshObjectInspector()
 	gui->setObjectInfo(std::move(lines));
 }
 
+void Application::refreshPartInspector(const LevelPartPick& pick)
+{
+	if (!gui)
+		return;
+
+	sectorBoundsVisible = false;
+	if (pick.meshes.empty())
+	{
+		if (selectedLevelObject >= 0)
+			refreshObjectInspector();
+		else
+			gui->setObjectInfo({});
+		return;
+	}
+
+	if (pick.sectorGroup && pick.hasBounds)
+	{
+		sectorBoundsVisible = true;
+		sectorBoundsCorner = pick.boundsMin;
+		sectorBoundsSize = pick.boundsMax - pick.boundsMin;
+	}
+
+	std::vector<ObjectInfoLine> lines;
+	auto add = [&](const std::string& text, bool heading)
+	{
+		ObjectInfoLine line;
+		line.text = text;
+		line.heading = heading;
+		lines.push_back(std::move(line));
+	};
+
+	add(pick.title.empty() ? "Level part" : pick.title, true);
+	if (!pick.layerLabel.empty() && !pick.sectorGroup)
+		add("Layer  " + pick.layerLabel, false);
+	if (pick.hasSector)
+	{
+		char sector[40];
+		std::snprintf(sector, sizeof(sector), "Sector  %03d %03d %03d", pick.sectorX, pick.sectorLayer, pick.sectorZ);
+		add(sector, false);
+	}
+	else if (!pick.sectorGroup)
+		add("Sector  unsectioned", false);
+
+	if (pick.hasBounds)
+	{
+		char buf[96];
+		std::snprintf(buf, sizeof(buf), "Min  %.0f  %.0f  %.0f", pick.boundsMin.x, pick.boundsMin.y, pick.boundsMin.z);
+		add(buf, false);
+		const glm::vec3 size = pick.boundsMax - pick.boundsMin;
+		std::snprintf(buf, sizeof(buf), "Size  %.0f  %.0f  %.0f", size.x, size.y, size.z);
+		add(buf, false);
+	}
+
+	int triangles = 0;
+	for (const Mesh* mesh : pick.meshes)
+	{
+		if (mesh != nullptr)
+			triangles += mesh->getTriangleCount();
+	}
+	add("Triangles  " + std::to_string(triangles), false);
+
+	if (pick.sectorGroup)
+	{
+		add("Parts", true);
+		if (pick.partLines.empty())
+			add("No parts", false);
+		for (const std::string& partLine : pick.partLines)
+			add(partLine, false);
+	}
+	else
+	{
+		add("Materials", true);
+		for (const Mesh* mesh : pick.meshes)
+		{
+			if (mesh == nullptr)
+				continue;
+			std::string text = mesh->getMaterialName().empty() ? "unknown" : mesh->getMaterialName();
+			const Content::Ty1MaterialDraw draw = content.lookupTy1Material(mesh->getMaterialName());
+			if (!draw.textureAlias.empty() && lowerCopy(draw.textureAlias) != lowerCopy(mesh->getMaterialName()))
+				text += " -> " + draw.textureAlias;
+			if (!mesh->getMaterialNote().empty())
+				text += "  " + mesh->getMaterialNote();
+
+			bool anyUv = false;
+			float minU = 0.0f, maxU = 0.0f, minV = 0.0f, maxV = 0.0f;
+			for (const Vertex& vert : mesh->getVertices())
+			{
+				if (!anyUv)
+				{
+					minU = maxU = vert.texcoord.x;
+					minV = maxV = vert.texcoord.y;
+					anyUv = true;
+				}
+				else
+				{
+					minU = std::min(minU, vert.texcoord.x);
+					maxU = std::max(maxU, vert.texcoord.x);
+					minV = std::min(minV, vert.texcoord.y);
+					maxV = std::max(maxV, vert.texcoord.y);
+				}
+			}
+			if (anyUv)
+			{
+				char uv[64];
+				std::snprintf(uv, sizeof(uv), "  UV %.2f..%.2f, %.2f..%.2f", minU, maxU, minV, maxV);
+				text += uv;
+			}
+			add(text, false);
+		}
+	}
+	gui->setObjectInfo(std::move(lines));
+}
+
 void Application::loadTy1Level(const std::string& levelName)
 {
 	clearModels();
@@ -1223,19 +1398,25 @@ void Application::loadTy1Level(const std::string& levelName)
 		return;
 	}
 
-	const std::vector<std::string> roomNames = roomModelsFromLv2(text);
-	Debug::log("TY1 level " + roomFile + " room meshes: " + std::to_string(roomNames.size()));
+	const std::vector<Ty1SetupRoom> roomSetups = roomModelsFromLv2(text);
+	Debug::log("TY1 level " + roomFile + " room meshes: " + std::to_string(roomSetups.size()));
 
-	for (const std::string& roomName : roomNames)
+	std::vector<LevelRoom> levelRooms;
+	for (const Ty1SetupRoom& setup : roomSetups)
 	{
-		Model* loaded = content.load<Model>(roomName);
+		Model* loaded = content.load<Model>(setup.modelName);
 		if (loaded == nullptr)
 		{
-			Debug::log("Level room mesh missing: " + roomName);
+			Debug::log("Level room mesh missing: " + setup.modelName);
 			continue;
 		}
 		models.push_back(loaded);
-		Debug::log("Loaded level room mesh: " + roomName);
+		LevelRoom room;
+		room.model = loaded;
+		room.layerKey = setup.key;
+		room.layerLabel = ty1LayerLabel(setup.key, setup.detail);
+		levelRooms.push_back(room);
+		Debug::log("Loaded level room mesh: " + setup.modelName + " (" + room.layerLabel + ")");
 	}
 	// Hidden guides emit too, so this runs before collision meshes are disabled.
 	grassCards.build(models, content);
@@ -1267,6 +1448,11 @@ void Application::loadTy1Level(const std::string& levelName)
 			}
 		}
 		models.push_back(water);
+		LevelRoom waterRoom;
+		waterRoom.model = water;
+		waterRoom.layerKey = "water_surface";
+		waterRoom.layerLabel = "Water surface";
+		levelRooms.push_back(waterRoom);
 		Debug::log("TY1 water replaced " + std::to_string(hidden) + " room parts");
 	}
 
@@ -1311,7 +1497,7 @@ void Application::loadTy1Level(const std::string& levelName)
 					}
 				}
 			}
-			const std::vector<std::string> companionRooms = roomModelsFromLv2(companionText);
+			const std::vector<Ty1SetupRoom> companionRooms = roomModelsFromLv2(companionText);
 			std::vector<Ty1Instance> extras = parseTy1Instances(
 				companionText, globalModelText, modelNames, companionFile);
 			companionCount = extras.size();
@@ -1417,7 +1603,7 @@ void Application::loadTy1Level(const std::string& levelName)
 	frameCameraOnLoadedModels();
 	if (gui)
 	{
-		gui->setLevelModels(models, roomFile);
+		gui->setLevelModels(levelRooms, roomFile);
 		std::vector<LevelObjectItem> items;
 		items.reserve(levelObjects.size());
 		for (const Ty1Instance& instance : levelObjects)
@@ -1991,9 +2177,36 @@ void Application::frameCameraOnMesh(const Mesh* mesh)
 {
 	if (mesh == nullptr || !mesh->hasLocalAabb())
 		return;
+	frameCameraOnMeshBounds(mesh->getLocalAabbMin(), mesh->getLocalAabbMax());
+}
 
-	const glm::vec3 minCorner = mesh->getLocalAabbMin();
-	const glm::vec3 maxCorner = mesh->getLocalAabbMax();
+void Application::frameCameraOnMeshes(const std::vector<Mesh*>& meshes)
+{
+	bool any = false;
+	glm::vec3 minCorner(0.0f);
+	glm::vec3 maxCorner(0.0f);
+	for (const Mesh* mesh : meshes)
+	{
+		if (mesh == nullptr || !mesh->hasLocalAabb())
+			continue;
+		if (!any)
+		{
+			minCorner = mesh->getLocalAabbMin();
+			maxCorner = mesh->getLocalAabbMax();
+			any = true;
+		}
+		else
+		{
+			minCorner = glm::min(minCorner, mesh->getLocalAabbMin());
+			maxCorner = glm::max(maxCorner, mesh->getLocalAabbMax());
+		}
+	}
+	if (any)
+		frameCameraOnMeshBounds(minCorner, maxCorner);
+}
+
+void Application::frameCameraOnMeshBounds(const glm::vec3& minCorner, const glm::vec3& maxCorner)
+{
 	const glm::vec3 center = (minCorner + maxCorner) * 0.5f;
 	float radius = glm::length(maxCorner - center);
 	if (radius < 0.05f)
@@ -2371,8 +2584,9 @@ void Application::clearModels()
 	refreshCrittersToggle();
 	selectedLevelObject = -1;
 	hoveredLevelObject = -1;
-	selectedLevelPart = nullptr;
-	hoveredLevelPart = nullptr;
+	selectedLevelParts.clear();
+	hoveredLevelParts.clear();
+	sectorBoundsVisible = false;
 	// Note: Models are managed by the Content system, so we don't delete them here
 	
 	// Clear GUI model info
@@ -2612,6 +2826,63 @@ void Application::update(float dt)
 	}
 }
 
+// A 2px stroke on the pixels where the selection is behind something else.
+// The mask is 1 on those pixels. The interior stays the scene colour.
+static void drawOcclusionEdge(unsigned maskTexture, int width, int height, const glm::vec4& tint, float radius)
+{
+	if (maskTexture == 0 || width < 1 || height < 1 || radius <= 0.0f)
+		return;
+
+	static Shader* edgeShader = nullptr;
+	static unsigned edgeVao = 0;
+	if (edgeShader == nullptr)
+	{
+		edgeShader = new Shader(
+			"#version 330 core\n"
+			"void main() {\n"
+			"    vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);\n"
+			"    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
+			"}\n",
+			"#version 330 core\n"
+			"uniform sampler2D mask;\n"
+			"uniform vec4 tintColour;\n"
+			"uniform vec2 texel;\n"
+			"uniform float radius;\n"
+			"out vec4 color;\n"
+			"void main() {\n"
+			"    vec2 uv = gl_FragCoord.xy * texel;\n"
+			"    if (texture(mask, uv).r >= 0.5)\n"
+			"        discard;\n"
+			"    bool edge = false;\n"
+			"    for (int y = -3; y <= 3 && !edge; ++y) {\n"
+			"        for (int x = -3; x <= 3 && !edge; ++x) {\n"
+			"            float d2 = float(x * x + y * y);\n"
+			"            if (d2 < 0.01 || d2 > radius * radius)\n"
+			"                continue;\n"
+			"            if (texture(mask, uv + vec2(x, y) * texel).r >= 0.5)\n"
+			"                edge = true;\n"
+			"        }\n"
+			"    }\n"
+			"    if (!edge)\n"
+			"        discard;\n"
+			"    color = tintColour;\n"
+			"}\n");
+		glGenVertexArrays(1, &edgeVao);
+	}
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, maskTexture);
+	edgeShader->bind();
+	edgeShader->setUniform1i("mask", 0);
+	edgeShader->setUniform4f("tintColour", tint);
+	edgeShader->setUniform2f("texel", glm::vec2(1.0f / static_cast<float>(width), 1.0f / static_cast<float>(height)));
+	edgeShader->setUniform1f("radius", radius);
+	glBindVertexArray(edgeVao);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	glBindVertexArray(0);
+	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
 void Application::drawStencilOutline(Shader& shader, const glm::vec4& tint, float outlinePixels,
 	const std::function<void(const MeshDrawStyle&)>& drawParts)
 {
@@ -2639,8 +2910,8 @@ void Application::drawStencilOutline(Shader& shader, const glm::vec4& tint, floa
 	glStencilMask(0xFF);
 	glClear(GL_STENCIL_BUFFER_BIT);
 
-	// Equal depth marks the pixels the mesh already wrote. Reversed depth stores a
-	// closer wall as a greater value, so GEQUAL leaves that wall empty.
+	// Reversed depth: a closer wall is a greater value. GEQUAL marks the pixels
+	// this mesh already owns. A wall in front fails the test and stays unmarked.
 	glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
 	glDepthMask(GL_FALSE);
 	glDepthFunc(GL_GEQUAL);
@@ -2651,10 +2922,37 @@ void Application::drawStencilOutline(Shader& shader, const glm::vec4& tint, floa
 	mark.solid = true;
 	drawParts(mark);
 
+	// The hidden region is the mesh behind that wall. Bit 2 keeps the silhouette
+	// ring from painting it solid. The same region is stored in the mask, and a
+	// later pass strokes just outside it, on the wall, at the same thickness.
+	MeshDrawStyle cover;
+	cover.solid = true;
+	cover.tint = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+	const bool masked = renderer.beginOcclusionMask();
+	glDisable(GL_BLEND);
+	glEnable(GL_DEPTH_TEST);
+	glDepthMask(GL_FALSE);
+	glDepthFunc(GL_LESS);
+	glEnable(GL_STENCIL_TEST);
+	glStencilMask(0x02);
+	glStencilFunc(GL_ALWAYS, 2, 0xFF);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+	if (masked)
+		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	else
+		glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+	drawParts(cover);
+	if (masked)
+		renderer.endOcclusionMask();
+
 	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-	glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
+	glStencilMask(0xFF);
+	glStencilFunc(GL_EQUAL, 0, 0xFF);
 	glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
 	glDisable(GL_DEPTH_TEST);
+	glEnable(GL_BLEND);
+	glBlendEquation(GL_FUNC_ADD);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 	// Two pixels is 4/size in NDC. Eight shifts fill the ring, including the diagonals.
 	const float ax = (outlinePixels * 2.0f) / static_cast<float>(width);
@@ -2674,6 +2972,14 @@ void Application::drawStencilOutline(Shader& shader, const glm::vec4& tint, floa
 	{
 		rim.clipOffset = offset;
 		drawParts(rim);
+	}
+
+	if (masked)
+	{
+		glDisable(GL_STENCIL_TEST);
+		glDisable(GL_DEPTH_TEST);
+		glDepthMask(GL_FALSE);
+		drawOcclusionEdge(renderer.occlusionMaskTexture(), width, height, tint, outlinePixels);
 	}
 
 	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -3463,12 +3769,39 @@ void Application::render(Shader& shader)
 	};
 	if (hoveredLevelObject != selectedLevelObject && objectHasMesh(hoveredLevelObject))
 		drawSelectedObjectOutline(shader, levelObjects[static_cast<size_t>(hoveredLevelObject)], objectHoverColour, 1.5f);
-	if (hoveredLevelPart != nullptr && hoveredLevelPart != selectedLevelPart)
-		drawMeshOutline(shader, *hoveredLevelPart, partHoverColour, 1.5f);
+	auto drawPartOutlines = [&](const std::vector<Mesh*>& meshes, const glm::vec4& colour, float width, bool skipSelected)
+	{
+		bool any = false;
+		for (Mesh* mesh : meshes)
+		{
+			if (mesh == nullptr)
+				continue;
+			if (skipSelected && std::find(selectedLevelParts.begin(), selectedLevelParts.end(), mesh) != selectedLevelParts.end())
+				continue;
+			any = true;
+			break;
+		}
+		if (!any)
+			return;
+
+		drawStencilOutline(shader, colour, width, [&](const MeshDrawStyle& style)
+		{
+			for (Mesh* mesh : meshes)
+			{
+				if (mesh == nullptr)
+					continue;
+				if (skipSelected && std::find(selectedLevelParts.begin(), selectedLevelParts.end(), mesh) != selectedLevelParts.end())
+					continue;
+				MeshDrawStyle forced = style;
+				forced.drawHidden = true;
+				mesh->draw(shader, glm::mat4(1.0f), forced);
+			}
+		});
+	};
+	drawPartOutlines(hoveredLevelParts, partHoverColour, 1.5f, true);
 	if (selectedLevelObject >= 0 && selectedLevelObject < static_cast<int>(levelObjects.size()))
 		drawSelectedObjectOutline(shader, levelObjects[static_cast<size_t>(selectedLevelObject)], objectSelectColour, 2.0f);
-	if (selectedLevelPart != nullptr)
-		drawMeshOutline(shader, *selectedLevelPart, partSelectColour, 2.0f);
+	drawPartOutlines(selectedLevelParts, partSelectColour, 2.0f, false);
 
 	glBlendEquation(GL_FUNC_ADD);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -3565,6 +3898,12 @@ void Application::render(Shader& shader)
 				renderer.drawSphere(bone.defaultPosition, 2.0f, glm::vec4(1, 1, 1, 1));
 			}
 		}
+	}
+
+	if (sectorBoundsVisible)
+	{
+		basic->setUniform4f("tintColour", glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+		renderer.drawHollowBox(sectorBoundsCorner, sectorBoundsSize, glm::vec4(0.15f, 0.90f, 1.0f, 1.0f));
 	}
 
 	if (drawBounds)

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 #include <functional>
 #include <glm/glm.hpp>
@@ -50,6 +52,33 @@ struct LevelObjectItem
 	std::string kindLabel;
 	// Name from `ID = number,label` when it is not blank or none.
 	std::string idLabel;
+};
+
+// One room model in a loaded level, with the setup-block layer it came from.
+struct LevelRoom
+{
+	class Model* model = nullptr;
+	std::string layerKey;
+	std::string layerLabel;
+};
+
+// What the level-part list selected. An empty mesh list clears the selection.
+struct LevelPartPick
+{
+	std::vector<class Mesh*> meshes;
+	std::string title;
+	std::string layerLabel;
+	bool hasSector = false;
+	int sectorX = 0;
+	int sectorLayer = 0;
+	int sectorZ = 0;
+	// Every part that shares the sector address, across layers.
+	bool sectorGroup = false;
+	bool hasBounds = false;
+	glm::vec3 boundsMin{ 0.0f, 0.0f, 0.0f };
+	glm::vec3 boundsMax{ 0.0f, 0.0f, 0.0f };
+	// Sector selection: one already-formatted line per part.
+	std::vector<std::string> partLines;
 };
 
 // One inspector row. `link` selects another object, or -1.
@@ -122,8 +151,8 @@ public:
 	// Model debugging
 	void setCurrentModel(class Model* model, const std::string& modelName);
 	void clearCurrentModel();
-	// Level view: one row per mesh across every loaded room model.
-	void setLevelModels(const std::vector<class Model*>& models, const std::string& name);
+	// Level view: one collapsible row per subobject, grouped under setup layers.
+	void setLevelModels(const std::vector<LevelRoom>& rooms, const std::string& name);
 	// Placed objects for the current level. Separate from the room-mesh list.
 	void setLevelObjects(const std::vector<LevelObjectItem>& objects);
 	void setObjectInfo(std::vector<ObjectInfoLine> lines);
@@ -139,10 +168,10 @@ public:
 	void setOnLevelObjectFocused(std::function<void(int index)> callback);
 	// -1 when the pointer leaves the list. Objects with no mesh stay unhighlighted.
 	void setOnLevelObjectHovered(std::function<void(int index)> callback);
-	// Level-part row. Null clears the selection or the hover.
-	void setOnLevelPartSelected(std::function<void(class Mesh* mesh)> callback);
-	void setOnLevelPartHovered(std::function<void(class Mesh* mesh)> callback);
-	void setOnLevelPartFocused(std::function<void(class Mesh* mesh)> callback);
+	// Level-part row. An empty pick or an empty mesh list clears selection or hover.
+	void setOnLevelPartSelected(std::function<void(const LevelPartPick&)> callback);
+	void setOnLevelPartHovered(std::function<void(const std::vector<class Mesh*>&)> callback);
+	void setOnLevelPartFocused(std::function<void(const std::vector<class Mesh*>&)> callback);
 	// Level (or other multi-mesh) view: names the button without enabling model export.
 	// canRecenter turns the recenter button on when room meshes are in the scene.
 	void setSceneLabel(const std::string& name, bool canRecenter);
@@ -226,10 +255,35 @@ private:
 	void renderMaterialList();
 	void renderObjectList();
 	void renderObjectInfo();
+	enum class PartRowKind
+	{
+		Layer,
+		Part,
+		Material,
+		Loose
+	};
+
+	struct PartRow
+	{
+		PartRowKind kind = PartRowKind::Loose;
+		int roomIndex = -1;
+		int group = -1;
+		int flatMesh = -1;
+		bool open = false;
+		std::vector<int> childFlats;
+	};
+
 	bool hasMaterialPanel() const;
 	int materialMeshCount() const;
 	class Mesh* materialMeshAt(int flatIndex);
+	bool useLevelPartTree() const;
 	void rebuildMaterialFilter();
+	void renderLevelPartTree();
+	LevelPartPick makeLevelPartPick(const PartRow& row, bool sector);
+	void selectLevelPartRow(const PartRow& row, bool sector, bool focus);
+	bool clickLevelPartRow(int itemIndex, float x, float y, float rowTop);
+	GuiRect sectorButtonRect(float rowTop) const;
+	void reportHoveredParts(const std::vector<class Mesh*>& meshes);
 	void layoutMaterialList();
 	GuiRect materialSearchRect() const;
 	void clearObjectList();
@@ -312,9 +366,21 @@ private:
 	std::string currentModelName;
 	bool sceneLoaded = false;
 	
-	// Current model for debugging. A level uses levelModels instead.
+	// Current model for debugging. A level uses levelRooms instead.
 	class Model* currentModel;
 	std::vector<class Model*> levelModels;
+	std::vector<LevelRoom> levelRooms;
+	std::vector<PartRow> partRows;
+	std::set<std::pair<int, int>> expandedParts;
+	bool partPickActive = false;
+	bool partPickSector = false;
+	int partPickRoom = -1;
+	int partPickGroup = -1;
+	int partPickFlat = -1;
+	int partPickSectorX = 0;
+	int partPickSectorLayer = 0;
+	int partPickSectorZ = 0;
+	long long lastPartClickKey = 0;
 	std::string materialSearch;
 	bool materialSearchActive = false;
 	bool materialFilterDirty = true;
@@ -325,7 +391,7 @@ private:
 	int selectedMaterialIndex = -1;
 	int lastMaterialClickIndex = -1;
 	double lastMaterialClickTime = 0.0;
-	class Mesh* reportedHoveredPart = nullptr;
+	std::vector<class Mesh*> reportedHoveredParts;
 
 	std::vector<LevelObjectItem> levelObjectItems;
 	std::string objectSearch;
@@ -352,9 +418,9 @@ private:
 	std::function<void(int index, int preview)> onLevelObjectPreview;
 	std::function<void(int index)> onLevelObjectFocused;
 	std::function<void(int index)> onLevelObjectHovered;
-	std::function<void(class Mesh* mesh)> onLevelPartSelected;
-	std::function<void(class Mesh* mesh)> onLevelPartHovered;
-	std::function<void(class Mesh* mesh)> onLevelPartFocused;
+	std::function<void(const LevelPartPick&)> onLevelPartSelected;
+	std::function<void(const std::vector<class Mesh*>&)> onLevelPartHovered;
+	std::function<void(const std::vector<class Mesh*>&)> onLevelPartFocused;
 	ScrollDrag listScrollDrag = ScrollDrag::None;
 	bool listScrollDragging = false;
 	float listScrollDragOffset = 0.0f;

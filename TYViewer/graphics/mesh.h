@@ -95,6 +95,9 @@ public:
 	// "Material" here is the texture/material slot name as provided by the game formats.
 	// Multiple mesh parts can share the same material name.
 	std::string getMaterialName() const { return m_materialName; }
+	// Short global.mad flags for the part list ("grass 1", "clamp UV", "masked").
+	void setMaterialNote(const std::string& note) { m_materialNote = note; }
+	const std::string& getMaterialNote() const { return m_materialNote; }
 	// Human-facing "mesh part"/component/subobject name (when available).
 	std::string getPartName() const { return m_partName; }
 	// Part name Env_Sky, decided once. Reflections never distance-cull it.
@@ -177,6 +180,7 @@ private:
 	// times per draw call (uv matrix, wrap, water), each re-lowercasing the name.
 	std::string m_materialNameLower;
 	std::string m_partName;
+	std::string m_materialNote;
 	bool m_envSky = false;
 	std::string m_waterType;
 	bool m_hasWaterSurface = false;
