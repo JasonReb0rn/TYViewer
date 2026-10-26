@@ -50,7 +50,8 @@ public:
 	
 	// Get list of all .mdl files from a specific archive
 	std::vector<std::string> getModelList(int archiveIndex);
-	// TY1: .lv2 files. TY2: *.lv3.bni chunks (not other .bni files).
+	// TY1: .lv2 files. TY2: *.lv3.bni chunk files. The TY 2 level menu does not
+	// use this; it lists levels.ini levels through ty2ListLevels.
 	std::vector<std::string> getLevelList(int archiveIndex);
 	
 	// Set active archive for loading

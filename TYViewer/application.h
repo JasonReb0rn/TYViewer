@@ -51,7 +51,7 @@ public:
 	// Model management
 	void loadModel(const std::string& modelName, int archiveIndex);
 	void loadTy1Level(const std::string& levelName);
-	void inspectTy2Level(const std::string& levelName);
+	void loadTy2Level(const std::string& levelName);
 	void clearModels();
 	void exportCurrentModel();
 	void exportCurrentModelRaw();

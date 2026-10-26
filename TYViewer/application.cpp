@@ -1,5 +1,6 @@
 #include "application.h"
 #include "loader/ty1_water_mesh.h"
+#include "loader/ty2_level.h"
 
 #include <algorithm>
 #include <chrono>
@@ -253,6 +254,10 @@ Application::Application(GLFWwindow* window) :
 	gui(NULL)
 {}
 
+namespace
+{
+	std::string ty1LevelMenuLabel(const std::string& levelFile, const std::string& englishText);
+}
 
 void Application::initialize()
 {
@@ -410,9 +415,26 @@ void Application::initialize()
 		Debug::log("Found " + std::to_string(ty1Models.size()) + " models in TY1 archive");
 		addEntries(ty1Models, "TY1", 0, EntryKind::Model);
 
+		const int previousArchive = content.getActiveArchive();
+		content.setActiveArchive(0);
+		std::string english;
+		std::vector<char> textBytes;
+		if (content.getActiveFileData("Translations.English.txt", textBytes))
+			english.assign(textBytes.data(), textBytes.size());
+		content.setActiveArchive(previousArchive);
+
 		std::vector<std::string> ty1Levels = content.getLevelList(0);
 		Debug::log("Found " + std::to_string(ty1Levels.size()) + " levels in TY1 archive");
-		addEntries(ty1Levels, "TY1", 0, EntryKind::Level);
+		for (const std::string& levelFile : ty1Levels)
+		{
+			ModelEntry entry;
+			entry.name = levelFile;
+			entry.displayName = ty1LevelMenuLabel(levelFile, english);
+			entry.archiveName = "TY1";
+			entry.archiveIndex = 0;
+			entry.kind = EntryKind::Level;
+			modelEntries.push_back(entry);
+		}
 	}
 	
 	if (ty2Loaded)
@@ -421,9 +443,34 @@ void Application::initialize()
 		Debug::log("Found " + std::to_string(ty2Models.size()) + " models in TY2 archive");
 		addEntries(ty2Models, "TY2", 1, EntryKind::Model);
 
-		std::vector<std::string> ty2Levels = content.getLevelList(1);
-		Debug::log("Found " + std::to_string(ty2Levels.size()) + " levels in TY2 archive");
-		addEntries(ty2Levels, "TY2", 1, EntryKind::Level);
+		const int previousArchive = content.getActiveArchive();
+		content.setActiveArchive(1);
+		std::vector<char> iniBytes;
+		BniFile levelsIni;
+		if (content.getActiveFileData("levels.ini.bni", iniBytes)
+			&& loadBni(iniBytes.data(), iniBytes.size(), levelsIni))
+		{
+			std::string english;
+			std::vector<char> textBytes;
+			if (content.getActiveFileData("Translations.English.txt", textBytes))
+				english.assign(textBytes.data(), textBytes.size());
+			const std::vector<Ty2LevelEntry> ty2Levels = ty2ListLevels(levelsIni, english);
+			Debug::log("Found " + std::to_string(ty2Levels.size()) + " levels in TY2 archive");
+			for (const Ty2LevelEntry& level : ty2Levels)
+			{
+				ModelEntry entry;
+				entry.name = level.id;
+				if (!level.title.empty())
+					entry.displayName = ty2LevelLabel(level.id, level.title);
+				entry.archiveName = "TY2";
+				entry.archiveIndex = 1;
+				entry.kind = EntryKind::Level;
+				modelEntries.push_back(entry);
+			}
+		}
+		else
+			Debug::log("Failed to read TY2 levels.ini.bni");
+		content.setActiveArchive(previousArchive);
 	}
 	
 	gui->setModelList(modelEntries);
@@ -436,7 +483,7 @@ void Application::initialize()
 			if (entry.archiveIndex == 0)
 				loadTy1Level(entry.name);
 			else
-				inspectTy2Level(entry.name);
+				loadTy2Level(entry.name);
 		}
 		else
 		{
@@ -588,6 +635,26 @@ namespace
 		return value;
 	}
 
+	// "a1  Two Up", or "a1ex  Two Up" for the companion file. Empty when the
+	// English file has no title, so the row stays the .lv2 name.
+	std::string ty1LevelMenuLabel(const std::string& levelFile, const std::string& englishText)
+	{
+		std::string stem = levelFile;
+		const size_t slash = stem.find_last_of("/\\");
+		if (slash != std::string::npos)
+			stem = stem.substr(slash + 1);
+		const size_t dot = stem.find_last_of('.');
+		if (dot != std::string::npos)
+			stem = stem.substr(0, dot);
+		std::string id = lowerCopy(stem);
+		if (id.size() > 2 && id.compare(id.size() - 2, 2, "ex") == 0)
+			id = id.substr(0, id.size() - 2);
+		const std::string title = ty2LevelTitle(englishText, id);
+		if (title.empty())
+			return {};
+		return ty2LevelLabel(stem, title);
+	}
+
 	bool isCollisionStem(const std::string& part)
 	{
 		// Collide / Collision / Colide / Collsion / collde.
@@ -620,6 +687,8 @@ namespace
 	{
 		if (mesh == nullptr)
 			return false;
+		if (mesh->isCollisionShell())
+			return true;
 
 		const std::string part = lowerCopy(mesh->getPartName());
 		const std::string material = mesh->getMaterialName();
@@ -1112,92 +1181,6 @@ namespace
 		}
 		return rooms;
 	}
-
-	bool looksLikePropName(const std::string& name)
-	{
-		if (name.size() < 4 || name.size() > 64)
-			return false;
-		if (name.find('_') == std::string::npos || name.find(' ') != std::string::npos)
-			return false;
-		if ((name[0] == 'P' || name[0] == 'p') && std::isdigit(static_cast<unsigned char>(name[1])))
-			return true;
-		return lowerCopy(name).rfind("prop", 0) == 0;
-	}
-
-	std::string versionStringIn(const char* data, size_t size)
-	{
-		const char needle[] = "Data File version";
-		const size_t needleLen = sizeof(needle) - 1;
-		for (size_t i = 0; i + needleLen <= size; i++)
-		{
-			if (std::memcmp(data + i, needle, needleLen) != 0)
-				continue;
-
-			size_t start = i;
-			while (start > 0)
-			{
-				const unsigned char prev = static_cast<unsigned char>(data[start - 1]);
-				if (prev < 32 || prev >= 127)
-					break;
-				start--;
-			}
-			size_t end = i + needleLen;
-			while (end < size)
-			{
-				const unsigned char next = static_cast<unsigned char>(data[end]);
-				if (next < 32 || next >= 127)
-					break;
-				end++;
-			}
-			return std::string(data + start, data + end);
-		}
-		return {};
-	}
-
-	std::vector<std::string> propNamesIn(const char* data, size_t size)
-	{
-		std::vector<std::string> names;
-		for (size_t i = 0; i < size; )
-		{
-			const unsigned char c = static_cast<unsigned char>(data[i]);
-			if (c < 32 || c >= 127)
-			{
-				i++;
-				continue;
-			}
-
-			size_t j = i;
-			while (j < size)
-			{
-				const unsigned char d = static_cast<unsigned char>(data[j]);
-				if (d < 32 || d >= 127)
-					break;
-				j++;
-			}
-
-			const bool terminated = (j == size) || data[j] == '\0';
-			if (terminated && j > i)
-			{
-				const std::string name(data + i, data + j);
-				if (looksLikePropName(name))
-				{
-					bool seen = false;
-					for (const std::string& existing : names)
-					{
-						if (sameName(existing, name))
-						{
-							seen = true;
-							break;
-						}
-					}
-					if (!seen)
-						names.push_back(name);
-				}
-			}
-			i = j + 1;
-		}
-		return names;
-	}
 }
 
 bool Application::levelInstanceShown(const Ty1Instance& instance) const
@@ -1373,6 +1356,11 @@ void Application::loadTy1Level(const std::string& levelName)
 		return true;
 	};
 
+	std::string english;
+	readText("Translations.English.txt", english);
+	const std::string pretty = ty1LevelMenuLabel(levelName, english);
+	const std::string label = pretty.empty() ? levelName : pretty;
+
 	// `a1.lv2` and `a1ex.lv2` both open the base rooms plus the companion objects.
 	// A base file that is missing keeps the single-file load of whatever was selected.
 	const Ty1LevelFiles pair = ty1LevelFiles(levelName);
@@ -1392,8 +1380,8 @@ void Application::loadTy1Level(const std::string& levelName)
 		Debug::log("Failed to read TY1 level: " + roomFile);
 		if (gui)
 		{
-			gui->setSceneLabel(roomFile, false);
-			gui->showNotification("Failed to read: " + roomFile, Gui::NotificationKind::Error, 4.0f);
+			gui->setSceneLabel(label, false);
+			gui->showNotification("Failed to read: " + label, Gui::NotificationKind::Error, 4.0f);
 		}
 		return;
 	}
@@ -1586,11 +1574,11 @@ void Application::loadTy1Level(const std::string& levelName)
 
 	if (models.empty() && levelObjects.empty())
 	{
-		Debug::log("No room meshes in " + roomFile);
+		Debug::log("No room meshes in " + label);
 		if (gui)
 		{
-			gui->setSceneLabel(roomFile, false);
-			gui->showNotification("No room meshes in " + roomFile, Gui::NotificationKind::Info, 4.0f);
+			gui->setSceneLabel(label, false);
+			gui->showNotification("No room meshes in " + label, Gui::NotificationKind::Info, 4.0f);
 		}
 		refreshCollisionToggle();
 		return;
@@ -1603,7 +1591,7 @@ void Application::loadTy1Level(const std::string& levelName)
 	frameCameraOnLoadedModels();
 	if (gui)
 	{
-		gui->setLevelModels(levelRooms, roomFile);
+		gui->setLevelModels(levelRooms, label);
 		std::vector<LevelObjectItem> items;
 		items.reserve(levelObjects.size());
 		for (const Ty1Instance& instance : levelObjects)
@@ -1627,65 +1615,250 @@ void Application::loadTy1Level(const std::string& levelName)
 			items.push_back(item);
 		}
 		gui->setLevelObjects(items);
-		const std::string notice = companionFile.empty()
+		std::string notice = companionFile.empty()
 			? ("Loaded " + std::to_string(models.size()) + " room meshes, " + std::to_string(propsWithMesh) + " props")
 			: (roomFile + " + " + std::to_string(companionCount) + " from " + companionFile);
+		if (label != levelName)
+			notice = label + ": " + notice;
 		gui->showNotification(notice, Gui::NotificationKind::Success, 3.0f);
 	}
 }
 
-void Application::inspectTy2Level(const std::string& levelName)
+void Application::loadTy2Level(const std::string& levelId)
 {
 	clearModels();
 	viewingLevel = false;
 	refreshWaterToggle();
 	drawGrid = false;
+	showLevelExtras = true;
 	content.setActiveArchive(1);
 	currentModelArchiveIndex = 1;
-	currentModelName = levelName;
+	currentModelName = levelId;
 
-	std::vector<char> data;
-	if (!content.getActiveFileData(levelName, data) || data.size() < 0x44)
+	auto readBni = [this](const std::string& name, BniFile& file) -> bool
 	{
-		Debug::log("Failed to read TY2 level chunk: " + levelName);
+		std::vector<char> bytes;
+		if (!content.getActiveFileData(name, bytes) || bytes.size() < 0x44)
+			return false;
+		return loadBni(bytes.data(), bytes.size(), file);
+	};
+	auto readText = [this](const std::string& name) -> std::string
+	{
+		std::vector<char> bytes;
+		if (!content.getActiveFileData(name, bytes))
+			return {};
+		return std::string(bytes.data(), bytes.size());
+	};
+
+	BniFile levelsIni;
+	if (!readBni("levels.ini.bni", levelsIni))
+	{
+		Debug::log("Failed to read TY2 levels.ini.bni");
 		if (gui)
 		{
-			gui->setSceneLabel(levelName, false);
-			gui->showNotification("Failed to read: " + levelName, Gui::NotificationKind::Error, 4.0f);
+			gui->setSceneLabel(levelId, false);
+			gui->showNotification("Failed to read levels.ini.bni", Gui::NotificationKind::Error, 4.0f);
 		}
 		return;
 	}
 
-	const std::string path = nts(data.data(), 0, 32);
-	const uint32_t constant = from_bytes<uint32_t>(data.data(), 0x20);
-	const uint32_t recordCount = from_bytes<uint32_t>(data.data(), 0x24);
-	const uint32_t payloadSize = from_bytes<uint32_t>(data.data(), 0x28);
-	const uint32_t stringOffset = from_bytes<uint32_t>(data.data(), 0x2C);
-	const uint32_t recordBytes = from_bytes<uint32_t>(data.data(), 0x30);
+	Ty2LevelInfo info;
+	if (!ty2DescribeLevel(levelsIni, levelId, info))
+	{
+		Debug::log("TY2 level is not in levels.ini: " + levelId);
+		if (gui)
+		{
+			gui->setSceneLabel(levelId, false);
+			gui->showNotification("Unknown TY2 level: " + levelId, Gui::NotificationKind::Error, 4.0f);
+		}
+		return;
+	}
 
-	const char* payload = data.data() + 0x44;
-	const size_t payloadLen = data.size() - 0x44;
-	const std::string version = versionStringIn(payload, payloadLen);
-	const std::vector<std::string> props = propNamesIn(payload, payloadLen);
+	const std::string label = ty2LevelLabel(info.levelId, ty2LevelTitle(readText("Translations.English.txt"), info.levelId));
 
-	Debug::log("TY2 level " + levelName + " (not drawn)");
-	Debug::log("  path: " + path);
-	Debug::log("  constant: " + std::to_string(constant));
-	Debug::log("  records: " + std::to_string(recordCount));
-	Debug::log("  payload bytes: " + std::to_string(payloadSize) + " (file payload " + std::to_string(payloadLen) + ")");
-	Debug::log("  string table offset: " + std::to_string(stringOffset));
-	Debug::log("  record bytes: " + std::to_string(recordBytes));
-	Debug::log("  version: " + (version.empty() ? std::string("(not found)") : version));
-	Debug::log("  prop names: " + std::to_string(props.size()));
+	std::unordered_map<std::string, std::string> catalog;
+	BniFile globalModel;
+	if (readBni("global.model.bni", globalModel))
+		catalog = ty2ModelCatalog(globalModel);
 
-	const size_t sampleCount = std::min<size_t>(props.size(), 8);
-	for (size_t i = 0; i < sampleCount; i++)
-		Debug::log("    " + props[i]);
+	auto layerTitle = [](const std::string& role) -> const char*
+	{
+		if (role == "ground")
+			return "Ground";
+		if (role == "water")
+			return "Water";
+		if (role == "dome")
+			return "Sky";
+		return "Overlay";
+	};
 
+	std::vector<LevelRoom> levelRooms;
+	std::vector<Model*> collisionModels;
+	std::unordered_set<Model*> drawnModels;
+	auto markShell = [](Model* model, bool shell)
+	{
+		if (model == nullptr)
+			return;
+		for (Mesh* mesh : model->getMeshes())
+		{
+			if (mesh == nullptr)
+				continue;
+			mesh->setCollisionShell(shell);
+			if (!shell)
+				mesh->setEnabled(true);
+		}
+	};
+	for (const Ty2RoomModel& room : info.rooms)
+	{
+		std::string file = room.modelName;
+		const std::string lowerFile = lowerCopy(file);
+		if (lowerFile.size() < 4 || lowerFile.compare(lowerFile.size() - 4, 4, ".mdl") != 0)
+			file += ".mdl";
+		if (!content.hasActiveFile(file))
+		{
+			Debug::log("TY2 room mesh missing: " + file);
+			continue;
+		}
+		Model* loaded = content.load<Model>(file);
+		if (loaded == nullptr)
+		{
+			Debug::log("TY2 room mesh failed: " + file);
+			continue;
+		}
+		models.push_back(loaded);
+		LevelRoom entry;
+		entry.model = loaded;
+		entry.layerKey = room.role;
+		entry.layerLabel = std::string(layerTitle(room.role)) + " - " + room.modelName;
+		levelRooms.push_back(std::move(entry));
+		if (room.collision)
+			collisionModels.push_back(loaded);
+		else
+		{
+			drawnModels.insert(loaded);
+			markShell(loaded, false);
+		}
+		Debug::log("Loaded TY2 room mesh: " + file + " (" + levelRooms.back().layerLabel + ")");
+	}
+
+	levelObjects.clear();
+	size_t loadedChunks = 0;
+	for (const std::string& chunkStem : info.chunks)
+	{
+		const std::string chunkFile = chunkStem + ".lv3.bni";
+		BniFile chunk;
+		if (!readBni(chunkFile, chunk))
+		{
+			Debug::log("Failed to read TY2 chunk: " + chunkFile);
+			continue;
+		}
+		loadedChunks++;
+		std::vector<Ty1Instance> placed = parseTy2Instances(chunk, chunkFile, catalog, [this](const std::string& file)
+		{
+			return content.hasActiveFile(file);
+		});
+		for (Ty1Instance& instance : placed)
+			levelObjects.push_back(std::move(instance));
+	}
+	levelObjectIds = ty1IdIndex(levelObjects);
+
+	propModels.clear();
+	std::unordered_set<Model*> seenProps;
+	size_t propsWithMesh = 0;
+	size_t connectorCount = 0;
+	for (Ty1Instance& instance : levelObjects)
+	{
+		if (ty2IsConnector(instance))
+		{
+			connectorCount++;
+			continue;
+		}
+		if (instance.modelFile.empty())
+			continue;
+		Model* loaded = content.load<Model>(instance.modelFile);
+		instance.model = loaded;
+		if (loaded == nullptr)
+		{
+			Debug::log("TY2 prop model missing: " + instance.modelFile + " (" + instance.typeName + ")");
+			continue;
+		}
+		propsWithMesh++;
+		if (seenProps.insert(loaded).second)
+			propModels.push_back(loaded);
+		drawnModels.insert(loaded);
+		markShell(loaded, false);
+	}
+
+	// Ground models are the collision shells. A mesh shared with a drawn overlay
+	// or a prop stays visible; the shell flag would hide that draw too.
+	for (Model* model : collisionModels)
+	{
+		if (drawnModels.count(model) != 0)
+			continue;
+		markShell(model, true);
+	}
+
+	Debug::log("TY2 level " + label
+		+ (info.hub ? " (hub)" : "")
+		+ " chunks: " + std::to_string(loadedChunks) + "/" + std::to_string(info.chunks.size())
+		+ ", rooms: " + std::to_string(levelRooms.size())
+		+ ", props: " + std::to_string(propsWithMesh)
+		+ ", connectors: " + std::to_string(connectorCount));
+
+	if (levelRooms.empty() && levelObjects.empty())
+	{
+		Debug::log("No TY2 geometry in " + label);
+		if (gui)
+		{
+			gui->setSceneLabel(label, false);
+			gui->showNotification("No geometry in " + label, Gui::NotificationKind::Info, 4.0f);
+		}
+		refreshCollisionToggle();
+		return;
+	}
+
+	viewingLevel = true;
+	refreshWaterToggle();
+	setCollisionMeshesVisible(false);
+	capturePartDefaults();
+	computeInstanceWorldBounds();
+	rebuildPropBatches();
+	frameCameraOnLoadedModels();
 	if (gui)
 	{
-		gui->setSceneLabel(levelName, false);
-		gui->showNotification("Listed, not drawn: " + levelName, Gui::NotificationKind::Info, 4.0f);
+		gui->setLevelModels(levelRooms, label);
+		std::vector<LevelObjectItem> items;
+		items.reserve(levelObjects.size());
+		for (const Ty1Instance& instance : levelObjects)
+		{
+			LevelObjectItem item;
+			item.typeName = instance.typeName;
+			item.modelFile = instance.modelFile;
+			if (!instance.variantLabel.empty())
+			{
+				item.modelFile = instance.variantLabel;
+				if (!instance.modelFile.empty())
+					item.modelFile += "  " + instance.modelFile;
+			}
+			item.visible = instance.visible;
+			item.defaultVisible = instance.visible;
+			item.idLabel = instance.objectLabel;
+			if (ty2IsConnector(instance))
+				item.kindLabel = "connector";
+			else
+			{
+				const char* kindName = ty1KindName(instance);
+				if (std::strcmp(kindName, "prop") != 0)
+					item.kindLabel = kindName;
+			}
+			items.push_back(std::move(item));
+		}
+		gui->setLevelObjects(items);
+		std::string notice = label + ": " + std::to_string(loadedChunks) + " chunks, "
+			+ std::to_string(levelRooms.size()) + " room meshes, "
+			+ std::to_string(propsWithMesh) + " props, "
+			+ std::to_string(connectorCount) + " connectors";
+		gui->showNotification(notice, Gui::NotificationKind::Success, 3.5f);
 	}
 }
 
@@ -3862,6 +4035,33 @@ void Application::render(Shader& shader)
 			basic->setUniform4f("tintColour", colour);
 			for (const Critter& critter : field->critters())
 				renderer.drawSphere(field->critterPosition(critter, alpha), firefly ? 4.0f : 3.0f, colour, 6);
+		}
+		if (started)
+		{
+			basic->setUniform1i("solidColour", 0);
+			basic->setUniform4f("tintColour", glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+			basic->setUniform1f("alphaRef", 0.01f);
+		}
+	}
+
+	// TY2 loading seams. The object list names the target chunk; the sphere is where it sits.
+	{
+		bool started = false;
+		const glm::vec4 colour = objectKindColour("connector");
+		for (const Ty1Instance& instance : levelObjects)
+		{
+			if (!ty2IsConnector(instance) || !levelInstanceShown(instance))
+				continue;
+			if (!started)
+			{
+				if (content.defaultTexture != nullptr)
+					content.defaultTexture->bind();
+				basic->setUniform1i("solidColour", 1);
+				basic->setUniform1f("alphaRef", 0.0f);
+				basic->setUniform4f("tintColour", colour);
+				started = true;
+			}
+			renderer.drawSphere(instance.position, 160.0f, colour, 10);
 		}
 		if (started)
 		{

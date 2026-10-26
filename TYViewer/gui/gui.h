@@ -34,6 +34,8 @@ enum class EntryKind
 struct ModelEntry
 {
 	std::string name;
+	// Menu row and search text when set. name stays the load key.
+	std::string displayName;
 	std::string archiveName; // "TY1" or "TY2"
 	int archiveIndex = 0; // 0 for TY1, 1 for TY2
 	EntryKind kind = EntryKind::Model;

@@ -107,6 +107,10 @@ public:
 	int getSubobjectGroup() const { return m_subobjectGroup; }
 	void setEnabled(bool enabled) { m_enabled = enabled; }
 	bool isEnabled() const { return m_enabled; }
+	// Whole-mesh collision shell, such as a TY2 ground model. The part name is
+	// not what decides it. The collision toggle hides these with the other shells.
+	void setCollisionShell(bool shell) { m_collisionShell = shell; }
+	bool isCollisionShell() const { return m_collisionShell; }
 	// Remember the visibility chosen when the model or level was opened.
 	void captureDefaultEnabled() { m_defaultEnabled = m_enabled; }
 	bool defaultEnabled() const { return m_defaultEnabled; }
@@ -190,6 +194,7 @@ private:
 	glm::vec3 m_localAabbMin{ 0.0f, 0.0f, 0.0f };
 	glm::vec3 m_localAabbMax{ 0.0f, 0.0f, 0.0f };
 	bool m_enabled;
+	bool m_collisionShell = false;
 	bool m_defaultEnabled = true;
 	MeshBlend m_blend = MeshBlend::Opaque;
 	float m_alphaRef = 0.01f;

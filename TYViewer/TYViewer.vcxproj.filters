@@ -84,6 +84,12 @@
     <ClCompile Include="loader\ty1_level.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="loader\bni.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="loader\ty2_level.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="loader\ty1_water_mesh.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -129,6 +135,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="loader\ty1_level.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="loader\bni.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="loader\ty2_level.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="graphics\vertex.h">

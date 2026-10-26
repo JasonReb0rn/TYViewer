@@ -133,6 +133,20 @@ namespace
 			return 0.0f;
 		return kScrollbarRight + kScrollbarWidth + 4.0f;
 	}
+
+	const std::string& menuLabel(const ModelEntry& entry)
+	{
+		return entry.displayName.empty() ? entry.name : entry.displayName;
+	}
+
+	bool menuEntrySelected(const ModelEntry& entry, const std::string& current)
+	{
+		if (current.empty())
+			return false;
+		if (current == entry.name)
+			return true;
+		return !entry.displayName.empty() && current == entry.displayName;
+	}
 }
 
 glm::vec4 objectKindColour(const std::string& kindLabel)
@@ -142,6 +156,8 @@ glm::vec4 objectKindColour(const std::string& kindLabel)
 		if (kindLabel == kKindChips[chip].label)
 			return kKindChips[chip].color;
 	}
+	if (kindLabel == "connector")
+		return glm::vec4(1.0f, 0.55f, 0.15f, 1.0f);
 	return glm::vec4(0.82f, 0.82f, 0.82f, 1.0f);
 }
 
@@ -1271,7 +1287,7 @@ void Gui::renderSubmenu()
 		glm::vec4 itemColor = glm::vec4(0.18f, 0.18f, 0.18f, 1.0f);
 		glm::vec4 textColor = glm::vec4(0.9f, 0.9f, 0.9f, 1.0f);
 
-		bool isSelected = (currentModelName == entry.name);
+		bool isSelected = menuEntrySelected(entry, currentModelName);
 		bool isHovered = (hoveredSubmenuItem == (int)pos);
 
 		if (isSelected)
@@ -1287,7 +1303,7 @@ void Gui::renderSubmenu()
 
 		drawRect(submenuRect.x + kSidePad, itemY, submenuRect.width - (kSidePad * 2.0f), kItemBoxHeight, itemColor);
 
-		std::string displayName = entry.name;
+		std::string displayName = menuLabel(entry);
 		if (displayName.length() > 40)
 			displayName = displayName.substr(0, 37) + "...";
 
@@ -1349,7 +1365,7 @@ void Gui::rebuildFilteredIndicesIfNeeded(int category)
 
 	for (int i = 0; i < (int)cat.entries.size(); i++)
 	{
-		if (containsCaseInsensitive(cat.entries[i].name, cat.search))
+		if (containsCaseInsensitive(menuLabel(cat.entries[i]), cat.search))
 			cat.filteredIndices.push_back(i);
 	}
 
@@ -1423,7 +1439,7 @@ void Gui::hoverCategory(int index)
 			for (size_t pos = 0; pos < filtered.size(); pos++)
 			{
 				int idx = filtered[pos];
-				if (categories[index].entries[idx].name == currentModelName)
+				if (menuEntrySelected(categories[index].entries[idx], currentModelName))
 				{
 					scrollOffset = (float)pos * kItemHeight;
 					updateSubmenuScrollBounds();
@@ -1592,7 +1608,7 @@ void Gui::onMouseButton(int button, int action, float x, float y)
 							if (model.name == entry.name)
 							{
 								selectedModel = &model;
-								currentModelName = model.name;
+								currentModelName = menuLabel(model);
 								break;
 							}
 						}
